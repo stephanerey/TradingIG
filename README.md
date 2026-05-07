@@ -92,6 +92,10 @@ Direct execution also launches the GUI, which is convenient from an IDE run conf
 python .\src\trading_ig_assistant\main.py
 ```
 
+Debug logs are written to `%USERPROFILE%\.trading_ig_assistant\logs\trading_ig_assistant.log`.
+The file rotates daily and keeps seven days of history. In the GUI, use `Help > View log` to open
+the current log file.
+
 The GUI includes a main window, menu bar, macro context ribbon placeholder, candlestick chart
 placeholder, product/ticket placeholder panel, and settings placeholder. It does not call IG
 directly and it cannot place trades.

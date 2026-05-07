@@ -37,10 +37,17 @@ def redact_value(value: Any) -> str:
 def redact_mapping(mapping: Mapping[str, Any]) -> dict[str, Any]:
     redacted: dict[str, Any] = {}
     for key, value in mapping.items():
-        if is_secret_key(str(key)):
+        key_text = str(key)
+        if is_secret_key(key_text):
             redacted[str(key)] = REDACTED
+        elif key_text.lower().replace("_", "-") in {"account-id", "accountid"}:
+            redacted[str(key)] = mask_identifier(str(value))
         elif isinstance(value, Mapping):
             redacted[str(key)] = redact_mapping(value)
+        elif isinstance(value, list):
+            redacted[str(key)] = [
+                redact_mapping(item) if isinstance(item, Mapping) else item for item in value
+            ]
         else:
             redacted[str(key)] = value
     return redacted

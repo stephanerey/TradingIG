@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -12,6 +13,7 @@ from trading_ig_assistant.domain.products import ProductDirection, ProductType, 
 from trading_ig_assistant.utils.redaction import REDACTED, is_secret_key, redact_mapping
 
 DEFAULT_WATCHLIST_SEARCH_TERMS = ["US Tech 100", "France 40", "Germany 40", "Gold"]
+LOGGER = logging.getLogger(__name__)
 
 
 class ProductDiscoveryAdapter(Protocol):
@@ -55,11 +57,17 @@ class ProductDiscoveryService:
         self._adapter = adapter
 
     def discover_products(self, search_term: str) -> ProductDiscoveryResult:
+        LOGGER.debug("Product discovery search start search_term=%r", search_term)
         errors: list[ProductDiscoveryError] = []
         products: list[TradableProduct] = []
         try:
             summaries = self._adapter.search_markets(search_term)
         except Exception as exc:
+            LOGGER.debug(
+                "Product discovery search failed search_term=%r error=%s",
+                search_term,
+                exc,
+            )
             return ProductDiscoveryResult(
                 search_term=search_term,
                 candidates_count=0,
@@ -71,8 +79,21 @@ class ProductDiscoveryService:
                 details = self._adapter.get_market_details(summary.epic)
                 products.append(self.classify_product(summary, details))
             except Exception as exc:
+                LOGGER.debug(
+                    "Product discovery details failed search_term=%r epic=%s error=%s",
+                    search_term,
+                    summary.epic,
+                    exc,
+                )
                 errors.append(ProductDiscoveryError(epic=summary.epic, message=str(exc)))
 
+        LOGGER.debug(
+            "Product discovery search complete search_term=%r candidates=%s products=%s errors=%s",
+            search_term,
+            len(summaries),
+            len(products),
+            len(errors),
+        )
         return ProductDiscoveryResult(
             search_term=search_term,
             candidates_count=len(summaries),
@@ -99,6 +120,11 @@ class ProductDiscoveryService:
         creates a large burst of `/markets/{epic}` calls and IG may reject the session token.
         """
 
+        LOGGER.debug(
+            "Product discovery navigation start max_nodes=%s max_details=%s",
+            max_nodes,
+            max_details,
+        )
         errors: list[ProductDiscoveryError] = []
         products: list[TradableProduct] = []
         summaries_by_epic: dict[str, MarketSummary] = {}
@@ -114,6 +140,11 @@ class ProductDiscoveryService:
             try:
                 navigation = self._adapter.get_market_navigation(node_id)
             except Exception as exc:
+                LOGGER.debug(
+                    "Product discovery navigation node failed node_id=%s error=%s",
+                    node_id or "<root>",
+                    exc,
+                )
                 errors.append(ProductDiscoveryError(epic=node_id, message=str(exc)))
                 continue
 
@@ -121,6 +152,15 @@ class ProductDiscoveryService:
             for summary in navigation.markets:
                 if summary.epic:
                     summaries_by_epic.setdefault(summary.epic, summary)
+            LOGGER.debug(
+                "Product discovery navigation node complete node_id=%s visited=%s pending=%s "
+                "unique_markets=%s errors=%s",
+                node_id or "<root>",
+                len(visited_node_ids),
+                len(pending_node_ids),
+                len(summaries_by_epic),
+                len(errors),
+            )
 
         for index, summary in enumerate(summaries_by_epic.values()):
             details = None
@@ -128,9 +168,20 @@ class ProductDiscoveryService:
                 try:
                     details = self._adapter.get_market_details(summary.epic)
                 except Exception as exc:
+                    LOGGER.debug(
+                        "Product discovery navigation details failed epic=%s error=%s",
+                        summary.epic,
+                        exc,
+                    )
                     errors.append(ProductDiscoveryError(epic=summary.epic, message=str(exc)))
             products.append(self.classify_product(summary, details))
 
+        LOGGER.debug(
+            "Product discovery navigation complete candidates=%s products=%s errors=%s",
+            len(summaries_by_epic),
+            len(products),
+            len(errors),
+        )
         return ProductDiscoveryResult(
             search_term="market-navigation",
             candidates_count=len(summaries_by_epic),

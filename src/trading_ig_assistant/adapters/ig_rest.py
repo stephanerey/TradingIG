@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -19,10 +20,11 @@ from trading_ig_assistant.domain.instruments import (
     MarketSummary,
 )
 from trading_ig_assistant.domain.market_data import PriceSeries
-from trading_ig_assistant.utils.redaction import redact_mapping
+from trading_ig_assistant.utils.redaction import mask_identifier, redact_mapping
 
 IG_DEMO_BASE_URL = "https://demo-api.ig.com/gateway/deal"
 IG_LIVE_BASE_URL = "https://api.ig.com/gateway/deal"
+LOGGER = logging.getLogger(__name__)
 
 
 class IGAPIError(RuntimeError):
@@ -84,9 +86,23 @@ class UrllibHttpClient:
         )
 
         try:
+            LOGGER.debug(
+                "HTTP request start method=%s url=%s headers=%s has_body=%s timeout=%s",
+                method.upper(),
+                _safe_url_for_log(url),
+                redact_mapping(headers),
+                json_body is not None,
+                timeout,
+            )
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 raw_body = response.read().decode("utf-8")
                 parsed_body = json.loads(raw_body) if raw_body else {}
+                LOGGER.debug(
+                    "HTTP request success method=%s url=%s status=%s",
+                    method.upper(),
+                    _safe_url_for_log(url),
+                    response.status,
+                )
                 return HttpResponse(
                     status_code=response.status,
                     headers=dict(response.headers.items()),
@@ -98,10 +114,23 @@ class UrllibHttpClient:
                 parsed_body = json.loads(raw_body) if raw_body else {}
             except json.JSONDecodeError:
                 parsed_body = {"error": raw_body}
+            LOGGER.debug(
+                "HTTP request HTTPError method=%s url=%s status=%s body=%s",
+                method.upper(),
+                _safe_url_for_log(url),
+                exc.code,
+                redact_mapping(parsed_body),
+            )
             raise IGAPIError(
                 f"IG REST request failed with HTTP {exc.code}: {redact_mapping(parsed_body)}"
             ) from exc
         except urllib.error.URLError as exc:
+            LOGGER.debug(
+                "HTTP request URLError method=%s url=%s reason=%s",
+                method.upper(),
+                _safe_url_for_log(url),
+                exc.reason,
+            )
             raise IGAPIError(f"IG REST request failed: {exc.reason}") from exc
 
 
@@ -137,6 +166,11 @@ class IGRestAdapter:
         return self._session
 
     def login(self, credentials: IGCredentials) -> IGSession:
+        LOGGER.debug(
+            "IG login start environment=%s identifier=%s",
+            self.environment.value,
+            credentials.username,
+        )
         self._api_key = credentials.api_key.reveal()
         response = self._request(
             "POST",
@@ -159,16 +193,29 @@ class IGRestAdapter:
             current_account_id=response.body.get("currentAccountId"),
             lightstreamer_endpoint=response.body.get("lightstreamerEndpoint"),
         )
+        LOGGER.debug(
+            "IG login success environment=%s current_account=%s lightstreamer=%s",
+            self.environment.value,
+            mask_identifier(self._session.current_account_id),
+            bool(self._session.lightstreamer_endpoint),
+        )
         return self._session
 
     def logout(self) -> None:
+        LOGGER.debug(
+            "IG logout start environment=%s has_session=%s",
+            self.environment.value,
+            self._session is not None,
+        )
         if self._session is not None:
             try:
                 self._request("DELETE", "/session", version="1", include_session=True)
             except IGAPIError as exc:
                 if not is_invalid_security_token_error(exc):
                     raise
+                LOGGER.debug("IG logout ignored invalid security token")
         self._session = None
+        LOGGER.debug("IG logout complete environment=%s", self.environment.value)
 
     def switch_account(self, account_id: str, *, set_default: bool = False) -> IGSession:
         """Switch the active IG account for subsequent read-only calls.
@@ -179,6 +226,12 @@ class IGRestAdapter:
 
         if self._session is None:
             raise IGAPIError("IG REST session is not authenticated.")
+        LOGGER.debug(
+            "IG switch account start environment=%s account=%s set_default=%s",
+            self.environment.value,
+            mask_identifier(account_id),
+            set_default,
+        )
         response = self._request(
             "PUT",
             "/session",
@@ -197,12 +250,19 @@ class IGRestAdapter:
             current_account_id=account_id,
             lightstreamer_endpoint=self._session.lightstreamer_endpoint,
         )
+        LOGGER.debug(
+            "IG switch account success environment=%s account=%s token_refreshed=%s",
+            self.environment.value,
+            mask_identifier(account_id),
+            bool(_case_insensitive_header(response.headers, "X-SECURITY-TOKEN")),
+        )
         return self._session
 
     def get_accounts(self) -> list[Account]:
+        LOGGER.debug("IG get accounts start environment=%s", self.environment.value)
         response = self._request("GET", "/accounts", version="1")
         accounts = response.body.get("accounts", [])
-        return [
+        parsed_accounts = [
             Account(
                 account_id=str(item.get("accountId", "")),
                 account_name=str(item.get("accountName", "")),
@@ -217,14 +277,20 @@ class IGRestAdapter:
             )
             for item in accounts
         ]
+        LOGGER.debug("IG get accounts success count=%s", len(parsed_accounts))
+        return parsed_accounts
 
     def search_markets(self, query: str) -> list[MarketSummary]:
+        LOGGER.debug("IG search markets start query=%r", query)
         encoded_query = urllib.parse.urlencode({"searchTerm": query})
         response = self._request("GET", f"/markets?{encoded_query}", version="1")
         markets = response.body.get("markets", [])
-        return [_market_summary_from_mapping(item) for item in markets]
+        parsed_markets = [_market_summary_from_mapping(item) for item in markets]
+        LOGGER.debug("IG search markets success query=%r count=%s", query, len(parsed_markets))
+        return parsed_markets
 
     def get_market_navigation(self, node_id: str | None = None) -> MarketNavigation:
+        LOGGER.debug("IG market navigation start node_id=%s", node_id or "<root>")
         path = "/market-navigation"
         if node_id:
             path = f"{path}/{urllib.parse.quote(node_id, safe='')}"
@@ -238,17 +304,26 @@ class IGRestAdapter:
             for item in response.body.get("nodes", [])
         ]
         markets = [_market_summary_from_mapping(item) for item in response.body.get("markets", [])]
+        LOGGER.debug(
+            "IG market navigation success node_id=%s nodes=%s markets=%s",
+            node_id or "<root>",
+            len(nodes),
+            len(markets),
+        )
         return MarketNavigation(nodes=nodes, markets=markets, raw=response.body)
 
     def get_market_details(self, epic: str) -> MarketDetails:
+        LOGGER.debug("IG market details start epic=%s", epic)
         encoded_epic = urllib.parse.quote(epic, safe="")
         response = self._request("GET", f"/markets/{encoded_epic}", version="3")
         instrument = response.body.get("instrument", {})
-        return MarketDetails(
+        details = MarketDetails(
             epic=str(instrument.get("epic") or response.body.get("epic") or epic),
             instrument_name=str(instrument.get("name") or instrument.get("instrumentName") or ""),
             raw=response.body,
         )
+        LOGGER.debug("IG market details success epic=%s name=%r", epic, details.instrument_name)
+        return details
 
     def get_prices(
         self,
@@ -257,17 +332,25 @@ class IGRestAdapter:
         resolution: str = "MINUTE",
         max_points: int = 10,
     ) -> PriceSeries:
+        LOGGER.debug(
+            "IG prices start epic=%s resolution=%s max_points=%s",
+            epic,
+            resolution,
+            max_points,
+        )
         encoded_epic = urllib.parse.quote(epic, safe="")
         response = self._request(
             "GET",
             f"/prices/{encoded_epic}/{resolution}/{max_points}",
             version="3",
         )
-        return PriceSeries(
+        series = PriceSeries(
             epic=epic,
             prices=list(response.body.get("prices", [])),
             raw=response.body,
         )
+        LOGGER.debug("IG prices success epic=%s count=%s", epic, len(series.prices))
+        return series
 
     def create_otc_position(self, *_args: Any, **_kwargs: Any) -> None:
         raise LiveTradingDisabledError("Live order execution is not implemented in P00.")
@@ -331,6 +414,11 @@ def is_invalid_security_token_error(error: Exception | str) -> bool:
         or "client-token-invalid" in message
         or "invalid security token" in message
     )
+
+
+def _safe_url_for_log(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
 
 
 def _optional_float(value: Any) -> float | None:

@@ -30,12 +30,14 @@ def test_redact_mapping_masks_known_secret_keys() -> None:
         {
             "password": "fake-password",
             "X-SECURITY-TOKEN": "fake-token",
+            "accountId": "ABCDEF123456",
             "nested": {"api_key": "fake-api-key", "safe": "value"},
         }
     )
 
     assert redacted["password"] == REDACTED
     assert redacted["X-SECURITY-TOKEN"] == REDACTED
+    assert redacted["accountId"] == "AB...56"
     assert redacted["nested"]["api_key"] == REDACTED
     assert redacted["nested"]["safe"] == "value"
 

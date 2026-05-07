@@ -2,6 +2,7 @@ def test_gui_modules_import_without_ig_connectivity() -> None:
     import trading_ig_assistant.ui.about_dialog as about_dialog
     import trading_ig_assistant.ui.account_status_widget as account_status_widget
     import trading_ig_assistant.ui.chart_view as chart_view
+    import trading_ig_assistant.ui.log_view_dialog as log_view_dialog
     import trading_ig_assistant.ui.macro_ribbon_widget as macro_ribbon_widget
     import trading_ig_assistant.ui.main_window as main_window
     import trading_ig_assistant.ui.product_selector as product_selector
@@ -10,6 +11,7 @@ def test_gui_modules_import_without_ig_connectivity() -> None:
     assert about_dialog.AboutDialog is not None
     assert account_status_widget.AccountStatusRibbonWidget is not None
     assert chart_view.ChartView is not None
+    assert log_view_dialog.LogViewDialog is not None
     assert macro_ribbon_widget.MacroRibbonWidget is not None
     assert main_window.MainWindow is not None
     assert product_selector.ProductSelectorWidget is not None

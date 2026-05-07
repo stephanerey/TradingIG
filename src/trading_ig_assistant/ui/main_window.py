@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 
 from PyQt5 import QtCore, QtWidgets
@@ -30,9 +31,14 @@ from trading_ig_assistant.services.product_discovery_service import (
 from trading_ig_assistant.ui.about_dialog import AboutDialog
 from trading_ig_assistant.ui.account_status_widget import AccountStatusRibbonWidget
 from trading_ig_assistant.ui.chart_view import ChartView
+from trading_ig_assistant.ui.log_view_dialog import LogViewDialog
 from trading_ig_assistant.ui.macro_ribbon_widget import MacroRibbonWidget
 from trading_ig_assistant.ui.product_selector import ProductSelectorWidget
 from trading_ig_assistant.ui.settings_dialog import SettingsDialog
+from trading_ig_assistant.utils.logging_config import configure_logging
+from trading_ig_assistant.utils.redaction import mask_identifier
+
+LOGGER = logging.getLogger(__name__)
 
 
 class ConnectionWorker(QtCore.QObject):
@@ -47,12 +53,27 @@ class ConnectionWorker(QtCore.QObject):
 
     @QtCore.pyqtSlot()
     def run(self) -> None:
+        LOGGER.debug("Connection worker start environment=%s", self._request.environment.value)
         try:
             result = self._service.validate_read_only_connection(self._request)
+            LOGGER.debug(
+                "Connection worker success environment=%s accounts=%s",
+                result.environment.value,
+                len(result.accounts),
+            )
             self.succeeded.emit(result)
         except Exception as exc:
+            LOGGER.debug(
+                "Connection worker failed environment=%s error=%s",
+                self._request.environment.value,
+                exc,
+            )
             self.failed.emit(str(exc))
         finally:
+            LOGGER.debug(
+                "Connection worker finished environment=%s",
+                self._request.environment.value,
+            )
             self.finished.emit()
 
 
@@ -75,6 +96,12 @@ class ProductDiscoveryWorker(QtCore.QObject):
         try:
             last_error: Exception | None = None
             for attempt in range(2):
+                LOGGER.debug(
+                    "Product discovery worker attempt start environment=%s attempt=%s account=%s",
+                    self._request.environment.value,
+                    attempt + 1,
+                    mask_identifier(self._request.selected_account_id),
+                )
                 adapter = IGRestAdapter(environment=self._request.environment, read_only=True)
                 try:
                     credentials = _credentials_from_request(self._request)
@@ -87,10 +114,24 @@ class ProductDiscoveryWorker(QtCore.QObject):
                         raise IGAPIError(
                             "invalid-security-token: IG rejected the discovery session token."
                         )
+                    LOGGER.debug(
+                        "Product discovery worker success environment=%s attempt=%s products=%s",
+                        self._request.environment.value,
+                        attempt + 1,
+                        sum(len(result.products) for result in results),
+                    )
                     self.succeeded.emit(results)
                     return
                 except Exception as exc:
                     last_error = exc
+                    LOGGER.debug(
+                        "Product discovery worker attempt failed environment=%s attempt=%s "
+                        "retryable=%s error=%s",
+                        self._request.environment.value,
+                        attempt + 1,
+                        is_invalid_security_token_error(exc),
+                        exc,
+                    )
                     if attempt == 0 and is_invalid_security_token_error(exc):
                         continue
                     self.failed.emit(str(exc))
@@ -104,12 +145,17 @@ class ProductDiscoveryWorker(QtCore.QObject):
             if last_error is not None:
                 self.failed.emit(str(last_error))
         finally:
+            LOGGER.debug(
+                "Product discovery worker finished environment=%s",
+                self._request.environment.value,
+            )
             self.finished.emit()
 
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
+        LOGGER.debug("MainWindow initialization start")
         self.setWindowTitle("Trading IG Assistant - P01 read-only shell")
         self.resize(1280, 820)
         self._config_path = default_config_path()
@@ -122,6 +168,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._discovery_worker: ProductDiscoveryWorker | None = None
         self._build_menu()
         self._build_layout()
+        LOGGER.debug("MainWindow initialization complete")
 
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
@@ -137,6 +184,8 @@ class MainWindow(QtWidgets.QMainWindow):
         help_menu = self.menuBar().addMenu("&Help")
         help_action = help_menu.addAction("Help")
         help_action.triggered.connect(self._show_help)
+        log_action = help_menu.addAction("View log")
+        log_action.triggered.connect(self._show_log)
         about_action = help_menu.addAction("About TradingIG")
         about_action.triggered.connect(self._show_about)
 
@@ -176,18 +225,21 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def _open_settings(self) -> None:
+        LOGGER.debug("Settings dialog open")
         dialog = SettingsDialog(self._config, self._credential_store, self)
         dialog.config_applied.connect(self._apply_config)
         dialog.exec()
 
     @QtCore.pyqtSlot(object)
     def _apply_config(self, config: AppConfig) -> None:
+        LOGGER.debug("Settings applied environment=%s", config.environment.value)
         self._config = config
         save_config(self._config, self._config_path)
         self.statusBar().showMessage("Settings saved.", 5000)
 
     @QtCore.pyqtSlot(object)
     def _connect_environment(self, environment: IGEnvironment) -> None:
+        LOGGER.debug("Connect requested environment=%s", environment.value)
         request = self._build_request_for_environment(environment)
         if request is None:
             return
@@ -200,6 +252,10 @@ class MainWindow(QtWidgets.QMainWindow):
     ) -> IGConnectionRequest | None:
         profile = self._config.connection_profiles[environment]
         if not profile.identifier:
+            LOGGER.debug(
+                "Request build failed missing identifier environment=%s",
+                environment.value,
+            )
             self.statusBar().showMessage(
                 f"Configure {environment.value} API identifier first.",
                 7000,
@@ -207,10 +263,18 @@ class MainWindow(QtWidgets.QMainWindow):
             self._open_settings()
             return None
         if self._credential_store is None:
+            LOGGER.debug(
+                "Request build failed missing credential store environment=%s",
+                environment.value,
+            )
             self.statusBar().showMessage("OS keyring credential store is unavailable.", 7000)
             return None
         credentials = self._credential_store.load_profile(environment.value, profile.identifier)
         if credentials is None:
+            LOGGER.debug(
+                "Request build failed missing credentials environment=%s",
+                environment.value,
+            )
             self.statusBar().showMessage(
                 f"Configure {environment.value} password and API key first.",
                 7000,
@@ -227,6 +291,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def _disconnect(self) -> None:
+        LOGGER.debug("Disconnect requested")
         if self._connection_thread is not None:
             self.statusBar().showMessage("Connection is busy; wait before disconnecting.", 5000)
             return
@@ -235,7 +300,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(object)
     def _connect_read_only(self, request: IGConnectionRequest) -> None:
+        LOGGER.debug("Connect read-only start environment=%s", request.environment.value)
         if self._connection_thread is not None:
+            LOGGER.debug("Connect read-only ignored because worker is already running")
             return
         self.statusBar().showMessage(
             f"Connecting to IG {request.environment.value} in read-only mode...",
@@ -255,6 +322,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(object)
     def _on_connection_success(self, result: IGConnectionResult) -> None:
+        LOGGER.debug(
+            "Connection success environment=%s accounts=%s current_account=%s",
+            result.environment.value,
+            len(result.accounts),
+            mask_identifier(result.current_account_id),
+        )
         configured_account_id = self._config.connection_profiles[
             result.environment
         ].selected_account_id
@@ -281,6 +354,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(str)
     def _on_connection_failure(self, message: str) -> None:
+        LOGGER.debug("Connection failure message=%s", message)
         self.statusBar().showMessage(f"Connection failed: {humanize_ig_error(message)}", 12000)
 
     @QtCore.pyqtSlot()
@@ -290,7 +364,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(object)
     def _discover_products(self, search_terms: object) -> None:
+        LOGGER.debug("Product discovery requested")
         if self._discovery_thread is not None:
+            LOGGER.debug("Product discovery ignored because worker is already running")
             return
         request = self._build_request_for_environment(self._config.environment)
         if request is None:
@@ -314,12 +390,19 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(object)
     def _on_discovery_success(self, results: list[ProductDiscoveryResult]) -> None:
+        LOGGER.debug(
+            "Product discovery success result_count=%s products=%s errors=%s",
+            len(results),
+            sum(len(result.products) for result in results),
+            sum(len(result.errors) for result in results),
+        )
         self.product_selector.set_results(results)
         product_count = sum(len(result.products) for result in results)
         self.statusBar().showMessage(f"Product discovery complete: {product_count} products.", 7000)
 
     @QtCore.pyqtSlot(str)
     def _on_discovery_failure(self, message: str) -> None:
+        LOGGER.debug("Product discovery failure message=%s", message)
         self.statusBar().showMessage(
             f"Product discovery failed: {humanize_ig_error(message)}",
             12000,
@@ -327,17 +410,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def _clear_discovery_worker(self) -> None:
+        LOGGER.debug("Product discovery worker cleared")
         self._discovery_thread = None
         self._discovery_worker = None
         self.product_selector.set_busy(False)
 
     @QtCore.pyqtSlot(object)
     def _export_discovery_report(self, output_path: object) -> None:
+        LOGGER.debug("Product discovery export output_path=%s", output_path)
         write_discovery_report(self.product_selector.results(), output_path)
         self.statusBar().showMessage(f"Sanitized report written to {output_path}", 7000)
 
     @QtCore.pyqtSlot(object)
     def _select_account(self, account_id: object) -> None:
+        LOGGER.debug("Account selected account=%s", mask_identifier(str(account_id or "")))
         self._set_profile_account(self._config.environment, str(account_id) if account_id else None)
 
     def _set_profile_account(self, environment: IGEnvironment, account_id: str | None) -> None:
@@ -348,6 +434,11 @@ class MainWindow(QtWidgets.QMainWindow):
             selected_account_id=account_id,
         )
         save_config(self._config, self._config_path)
+        LOGGER.debug(
+            "Profile account saved environment=%s account=%s",
+            environment.value,
+            mask_identifier(account_id),
+        )
 
     @QtCore.pyqtSlot()
     def _show_help(self) -> None:
@@ -358,11 +449,18 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     @QtCore.pyqtSlot()
+    def _show_log(self) -> None:
+        LOGGER.debug("Log viewer open")
+        LogViewDialog(parent=self).exec()
+
+    @QtCore.pyqtSlot()
     def _show_about(self) -> None:
         AboutDialog(self).exec()
 
 
 def run_gui() -> int:
+    configure_logging()
+    LOGGER.debug("GUI launch start")
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
     window = MainWindow()
     window.show()

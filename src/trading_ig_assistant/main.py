@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 from pathlib import Path
@@ -16,9 +17,18 @@ from trading_ig_assistant.services.product_discovery_service import (
     ProductDiscoveryService,
     write_discovery_report,
 )
+from trading_ig_assistant.utils.logging_config import configure_logging
+
+LOGGER = logging.getLogger(__name__)
 
 
 def main(argv: list[str] | None = None) -> int:
+    log_path = configure_logging()
+    LOGGER.debug(
+        "Application entry start argv=%s log_path=%s",
+        argv if argv is not None else sys.argv[1:],
+        log_path,
+    )
     effective_argv = sys.argv[1:] if argv is None else argv
     if not effective_argv:
         return launch_gui(argparse.Namespace())
@@ -83,6 +93,7 @@ def add_credential_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def check_ig_connectivity(args: argparse.Namespace) -> int:
+    LOGGER.debug("CLI check connectivity start environment=%s", args.environment or "<config>")
     loaded = load_read_only_runtime(args)
     if loaded is None:
         print(
@@ -129,6 +140,7 @@ def check_ig_connectivity(args: argparse.Namespace) -> int:
 
         return 0
     except IGAPIError as exc:
+        LOGGER.debug("CLI check connectivity failed error=%s", exc)
         print(f"IG connectivity check failed: {exc}", file=sys.stderr)
         return 1
     finally:
@@ -139,6 +151,7 @@ def check_ig_connectivity(args: argparse.Namespace) -> int:
 
 
 def discover_products(args: argparse.Namespace) -> int:
+    LOGGER.debug("CLI discover products start environment=%s", args.environment or "<config>")
     loaded = load_read_only_runtime(args)
     if loaded is None:
         print(
@@ -162,6 +175,7 @@ def discover_products(args: argparse.Namespace) -> int:
             print(f"Sanitized discovery report written to {args.output}")
         return 0
     except IGAPIError as exc:
+        LOGGER.debug("CLI discover products failed error=%s", exc)
         print(f"IG product discovery failed: {exc}", file=sys.stderr)
         return 1
     finally:
@@ -172,6 +186,7 @@ def discover_products(args: argparse.Namespace) -> int:
 
 
 def launch_gui(_args: argparse.Namespace) -> int:
+    LOGGER.debug("CLI launch GUI")
     try:
         from trading_ig_assistant.ui.main_window import run_gui
     except ImportError as exc:
