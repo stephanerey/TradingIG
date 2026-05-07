@@ -31,6 +31,13 @@ class MarketSummary:
 
 
 @dataclass(frozen=True)
+class MarketCategory:
+    category_id: str
+    name: str
+    raw: dict[str, Any] = field(default_factory=dict, repr=False)
+
+
+@dataclass(frozen=True)
 class MarketDetails:
     epic: str
     instrument_name: str

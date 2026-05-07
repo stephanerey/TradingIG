@@ -8,7 +8,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from trading_ig_assistant.domain.instruments import MarketDetails, MarketNavigation, MarketSummary
+from trading_ig_assistant.domain.instruments import (
+    MarketCategory,
+    MarketDetails,
+    MarketNavigation,
+    MarketSummary,
+)
 from trading_ig_assistant.domain.products import (
     AssetClass,
     ProductDirection,
@@ -119,6 +124,12 @@ class ProductDiscoveryAdapter(Protocol):
     def get_market_details(self, epic: str) -> MarketDetails:
         """Fetch broker market details."""
 
+    def get_categories(self) -> list[MarketCategory]:
+        """Fetch market categories enabled for the active account."""
+
+    def get_category_instruments(self, category_id: str) -> list[MarketSummary]:
+        """Fetch instruments for an enabled category."""
+
     def get_market_navigation(self, node_id: str | None = None) -> MarketNavigation:
         """Browse broker market navigation."""
 
@@ -217,13 +228,111 @@ class ProductDiscoveryService:
         """
 
         LOGGER.debug(
-            "Product discovery navigation start max_nodes=%s max_details=%s",
+            "Product discovery all start max_nodes=%s max_details=%s",
             max_nodes,
             max_details,
         )
         errors: list[ProductDiscoveryError] = []
         products: list[TradableProduct] = []
         summaries_by_epic: dict[str, MarketSummary] = {}
+        category_errors = self._discover_category_summaries(summaries_by_epic)
+        errors.extend(category_errors)
+        category_product_count = len(summaries_by_epic)
+
+        navigation_was_used = False
+        if not summaries_by_epic:
+            navigation_was_used = True
+            self._discover_navigation_summaries(summaries_by_epic, errors, max_nodes=max_nodes)
+
+        fallback_was_used = False
+        if not summaries_by_epic:
+            fallback_was_used = True
+            LOGGER.debug(
+                "Product discovery navigation empty; starting search fallback terms=%s",
+                DEFAULT_DISCOVERY_FALLBACK_SEARCH_TERMS,
+            )
+            summaries_by_epic.update(
+                self._fallback_search_summaries(DEFAULT_DISCOVERY_FALLBACK_SEARCH_TERMS, errors)
+            )
+
+        for index, summary in enumerate(summaries_by_epic.values()):
+            details = None
+            if max_details > 0 and index < max_details:
+                try:
+                    details = self._adapter.get_market_details(summary.epic)
+                except Exception as exc:
+                    LOGGER.debug(
+                        "Product discovery navigation details failed epic=%s error=%s",
+                        summary.epic,
+                        exc,
+                    )
+                    errors.append(ProductDiscoveryError(epic=summary.epic, message=str(exc)))
+            products.append(self.classify_product(summary, details))
+
+        LOGGER.debug(
+            "Product discovery all complete candidates=%s products=%s errors=%s",
+            len(summaries_by_epic),
+            len(products),
+            len(errors),
+        )
+        source_parts: list[str] = []
+        if category_product_count:
+            source_parts.append("categories")
+        if navigation_was_used:
+            source_parts.append("market-navigation")
+        if fallback_was_used:
+            source_parts.append("search-fallback")
+        source = "+".join(source_parts) or "categories"
+        return ProductDiscoveryResult(
+            search_term=source,
+            candidates_count=len(summaries_by_epic),
+            products=products,
+            errors=errors,
+        )
+
+    def _discover_category_summaries(
+        self,
+        summaries_by_epic: dict[str, MarketSummary],
+    ) -> list[ProductDiscoveryError]:
+        errors: list[ProductDiscoveryError] = []
+        try:
+            categories = self._adapter.get_categories()
+        except Exception as exc:
+            LOGGER.debug("Product discovery categories failed error=%s", exc)
+            return [ProductDiscoveryError(epic=None, message=str(exc))]
+
+        LOGGER.debug("Product discovery categories complete count=%s", len(categories))
+        for category in categories:
+            if not category.category_id:
+                continue
+            try:
+                summaries = self._adapter.get_category_instruments(category.category_id)
+            except Exception as exc:
+                LOGGER.debug(
+                    "Product discovery category instruments failed category=%s error=%s",
+                    category.category_id,
+                    exc,
+                )
+                errors.append(ProductDiscoveryError(epic=category.category_id, message=str(exc)))
+                continue
+            LOGGER.debug(
+                "Product discovery category instruments complete category=%s name=%r count=%s",
+                category.category_id,
+                category.name,
+                len(summaries),
+            )
+            for summary in summaries:
+                if summary.epic:
+                    summaries_by_epic.setdefault(summary.epic, summary)
+        return errors
+
+    def _discover_navigation_summaries(
+        self,
+        summaries_by_epic: dict[str, MarketSummary],
+        errors: list[ProductDiscoveryError],
+        *,
+        max_nodes: int,
+    ) -> None:
         pending_node_ids: list[str | None] = [None]
         visited_node_ids: set[str] = set()
 
@@ -257,42 +366,6 @@ class ProductDiscoveryService:
                 len(summaries_by_epic),
                 len(errors),
             )
-
-        if not summaries_by_epic:
-            LOGGER.debug(
-                "Product discovery navigation empty; starting search fallback terms=%s",
-                DEFAULT_DISCOVERY_FALLBACK_SEARCH_TERMS,
-            )
-            summaries_by_epic.update(
-                self._fallback_search_summaries(DEFAULT_DISCOVERY_FALLBACK_SEARCH_TERMS, errors)
-            )
-
-        for index, summary in enumerate(summaries_by_epic.values()):
-            details = None
-            if max_details > 0 and index < max_details:
-                try:
-                    details = self._adapter.get_market_details(summary.epic)
-                except Exception as exc:
-                    LOGGER.debug(
-                        "Product discovery navigation details failed epic=%s error=%s",
-                        summary.epic,
-                        exc,
-                    )
-                    errors.append(ProductDiscoveryError(epic=summary.epic, message=str(exc)))
-            products.append(self.classify_product(summary, details))
-
-        LOGGER.debug(
-            "Product discovery navigation complete candidates=%s products=%s errors=%s",
-            len(summaries_by_epic),
-            len(products),
-            len(errors),
-        )
-        return ProductDiscoveryResult(
-            search_term="market-navigation+search-fallback" if errors else "market-navigation",
-            candidates_count=len(summaries_by_epic),
-            products=products,
-            errors=errors,
-        )
 
     def _fallback_search_summaries(
         self,

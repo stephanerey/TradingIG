@@ -14,6 +14,7 @@ from trading_ig_assistant.adapters.credentials import IGCredentials
 from trading_ig_assistant.app.config import IGEnvironment
 from trading_ig_assistant.domain.instruments import (
     Account,
+    MarketCategory,
     MarketDetails,
     MarketNavigation,
     MarketNavigationNode,
@@ -289,6 +290,39 @@ class IGRestAdapter:
         LOGGER.debug("IG search markets success query=%r count=%s", query, len(parsed_markets))
         return parsed_markets
 
+    def get_categories(self) -> list[MarketCategory]:
+        LOGGER.debug("IG categories start environment=%s", self.environment.value)
+        response = self._request("GET", "/categories", version="1")
+        categories = response.body.get("categories", [])
+        parsed_categories = [
+            MarketCategory(
+                category_id=str(item.get("id") or item.get("categoryId") or ""),
+                name=str(item.get("name") or item.get("categoryName") or ""),
+                raw=item,
+            )
+            for item in categories
+        ]
+        LOGGER.debug("IG categories success count=%s", len(parsed_categories))
+        return parsed_categories
+
+    def get_category_instruments(self, category_id: str) -> list[MarketSummary]:
+        LOGGER.debug("IG category instruments start category_id=%s", category_id)
+        encoded_id = urllib.parse.quote(category_id, safe="")
+        response = self._request("GET", f"/categories/{encoded_id}/instruments", version="1")
+        instruments = (
+            response.body.get("instruments")
+            or response.body.get("markets")
+            or response.body.get("marketDetails")
+            or []
+        )
+        parsed_instruments = [_market_summary_from_mapping(item) for item in instruments]
+        LOGGER.debug(
+            "IG category instruments success category_id=%s count=%s",
+            category_id,
+            len(parsed_instruments),
+        )
+        return parsed_instruments
+
     def get_market_navigation(self, node_id: str | None = None) -> MarketNavigation:
         LOGGER.debug("IG market navigation start node_id=%s", node_id or "<root>")
         response = self._request_market_navigation(node_id)
@@ -444,7 +478,9 @@ def _optional_float(value: Any) -> float | None:
 def _market_summary_from_mapping(item: dict[str, Any]) -> MarketSummary:
     return MarketSummary(
         epic=str(item.get("epic", "")),
-        instrument_name=str(item.get("instrumentName", "")),
+        instrument_name=str(
+            item.get("instrumentName") or item.get("name") or item.get("instrument") or ""
+        ),
         instrument_type=item.get("instrumentType"),
         expiry=item.get("expiry"),
         market_status=item.get("marketStatus"),

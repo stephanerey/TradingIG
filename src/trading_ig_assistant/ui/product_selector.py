@@ -61,12 +61,15 @@ class ProductSelectorWidget(QtWidgets.QWidget):
         self.filter_box = QtWidgets.QLineEdit()
         self.filter_box.setPlaceholderText("Filter displayed products")
         self.filter_box.textChanged.connect(self._apply_filter)
+        self.tradeable_only_box = QtWidgets.QCheckBox("Tradeable only")
+        self.tradeable_only_box.toggled.connect(lambda _checked: self._render_table())
         self.discover_button = QtWidgets.QPushButton("Discover all products")
         self.export_button = QtWidgets.QPushButton("Export report")
         self.export_button.setEnabled(False)
         self.discover_button.clicked.connect(self._emit_discover_requested)
         self.export_button.clicked.connect(self._emit_export_requested)
         controls.addWidget(self.filter_box, stretch=1)
+        controls.addWidget(self.tradeable_only_box)
         controls.addWidget(self.discover_button)
         controls.addWidget(self.export_button)
 
@@ -148,7 +151,7 @@ class ProductSelectorWidget(QtWidgets.QWidget):
 
     def _matches_filter(self, product: object) -> bool:
         if not self._filter_text:
-            return True
+            return self._matches_status_filter(product)
         fields = [
             getattr(product, "name", ""),
             getattr(product, "epic", ""),
@@ -163,7 +166,15 @@ class ProductSelectorWidget(QtWidgets.QWidget):
             getattr(product, "net_change", ""),
             getattr(product, "percent_change", ""),
         ]
-        return self._filter_text in " ".join(str(field).lower() for field in fields)
+        return (
+            self._filter_text in " ".join(str(field).lower() for field in fields)
+            and self._matches_status_filter(product)
+        )
+
+    def _matches_status_filter(self, product: object) -> bool:
+        if not self.tradeable_only_box.isChecked():
+            return True
+        return str(getattr(product, "status", "")).upper() == "TRADEABLE"
 
     def _build_product_tabs(self) -> QtWidgets.QTableWidget:
         first_table: QtWidgets.QTableWidget | None = None

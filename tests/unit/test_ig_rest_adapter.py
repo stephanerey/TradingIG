@@ -59,6 +59,27 @@ class FakeHttpClient:
                     ]
                 },
             )
+        if url.endswith("/categories"):
+            return HttpResponse(
+                status_code=200,
+                headers={},
+                body={"categories": [{"id": "shares", "name": "Shares"}]},
+            )
+        if url.endswith("/categories/shares/instruments"):
+            return HttpResponse(
+                status_code=200,
+                headers={},
+                body={
+                    "instruments": [
+                        {
+                            "epic": "KA.D.CARR.CASH.IP",
+                            "name": "Carrefour SA",
+                            "instrumentType": "SHARES",
+                            "marketStatus": "TRADEABLE",
+                        }
+                    ]
+                },
+            )
         if "/markets?searchTerm=US+Tech" in url:
             return HttpResponse(
                 status_code=200,
@@ -166,6 +187,19 @@ def test_market_navigation_uses_hyphenated_endpoint() -> None:
     assert navigation.nodes[0].node_id == "indices"
     assert navigation.markets[0].epic == "IX.D.NASDAQ.IFD.IP"
     assert http_client.requests[-1]["url"].endswith("/market-navigation")
+
+
+def test_categories_and_category_instruments_are_read_only() -> None:
+    http_client = FakeHttpClient()
+    adapter = IGRestAdapter(environment=IGEnvironment.DEMO, http_client=http_client)
+    adapter.login(IGCredentials("demo-user", "fake-password", "fake-api-key"))
+
+    categories = adapter.get_categories()
+    instruments = adapter.get_category_instruments(categories[0].category_id)
+
+    assert categories[0].category_id == "shares"
+    assert instruments[0].epic == "KA.D.CARR.CASH.IP"
+    assert instruments[0].instrument_name == "Carrefour SA"
 
 
 def test_logout_ignores_invalid_security_token() -> None:

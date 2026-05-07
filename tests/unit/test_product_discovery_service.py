@@ -1,6 +1,7 @@
 import json
 
 from trading_ig_assistant.domain.instruments import (
+    MarketCategory,
     MarketDetails,
     MarketNavigation,
     MarketNavigationNode,
@@ -82,6 +83,12 @@ class FakeDiscoveryAdapter:
             },
         )
 
+    def get_categories(self) -> list[MarketCategory]:
+        raise RuntimeError("categories unavailable")
+
+    def get_category_instruments(self, category_id: str) -> list[MarketSummary]:
+        raise RuntimeError(f"category {category_id} unavailable")
+
     def get_market_navigation(self, node_id: str | None = None) -> MarketNavigation:
         if node_id is None:
             return MarketNavigation(
@@ -112,6 +119,23 @@ class FakeDiscoveryAdapter:
 class EmptyNavigationAdapter(FakeDiscoveryAdapter):
     def get_market_navigation(self, node_id: str | None = None) -> MarketNavigation:
         raise RuntimeError("navigation unavailable")
+
+
+class CategoryDiscoveryAdapter(FakeDiscoveryAdapter):
+    def get_categories(self) -> list[MarketCategory]:
+        return [MarketCategory(category_id="shares", name="Shares")]
+
+    def get_category_instruments(self, category_id: str) -> list[MarketSummary]:
+        assert category_id == "shares"
+        return [
+            MarketSummary(
+                epic="CARREFOUR.EPIC",
+                instrument_name="Carrefour SA Barrier Call",
+                instrument_type="SHARES",
+                market_status="TRADEABLE",
+                raw={"bid": 1708.5, "offer": 1709.5},
+            )
+        ]
 
 
 def test_classification_heuristics_identify_barrier_and_option() -> None:
@@ -167,6 +191,20 @@ def test_discover_all_products_uses_market_navigation() -> None:
     assert adapter.detail_calls == []
 
 
+def test_discover_all_products_prefers_enabled_categories() -> None:
+    adapter = CategoryDiscoveryAdapter()
+    service = ProductDiscoveryService(adapter)
+
+    result = service.discover_all_products()
+
+    assert result.search_term == "categories"
+    assert result.candidates_count == 1
+    assert result.products[0].epic == "CARREFOUR.EPIC"
+    assert result.products[0].asset_class.value == "shares"
+    assert result.products[0].bid == 1708.5
+    assert adapter.detail_calls == []
+
+
 def test_discover_all_products_falls_back_to_search_when_navigation_unavailable() -> None:
     adapter = EmptyNavigationAdapter()
     service = ProductDiscoveryService(adapter)
@@ -181,4 +219,4 @@ def test_discover_all_products_falls_back_to_search_when_navigation_unavailable(
         "BROKEN.EPIC",
     }
     assert adapter.detail_calls == []
-    assert len(result.errors) == 1
+    assert len(result.errors) == 2
