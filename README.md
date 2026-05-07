@@ -98,12 +98,13 @@ directly and it cannot place trades.
 
 In the Settings tab:
 
-- `Test read-only IG connection` authenticates, fetches account metadata, then logs out.
-- `Save non-secret settings` writes only safe settings to the local user config file.
-- Password and API key are not saved by this button.
-- Account IDs are displayed masked in the combo box.
-- After a successful read-only connection, the top account ribbon displays the selected account,
-  currency, balance, available funds, deposit, P/L, and account count.
+- Open `Tools > Settings` or the top `Settings` button to configure credentials.
+- The settings dialog is a tab widget. Its first tab stores live and demo API identifiers.
+- `Apply` or `Save` writes all non-secret settings to the local user config file.
+- Passwords and API keys are stored in the OS keyring, never in the JSON config file.
+- The top account ribbon has `Connect live`, `Connect demo`, `Settings`, and an account dropdown.
+- After a successful read-only connection, the top account ribbon displays only the selected
+  account value, available funds, gain/loss, and coverage/deposit.
 - For `demo`, use the demo API key and the demo API identifier/password chosen in the IG demo API
   keys page, not the email address of the web account.
 - For `live`, use the live API key and matching live API login identifier/password.

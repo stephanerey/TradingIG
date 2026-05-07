@@ -52,3 +52,11 @@ def redact_text(text: str, secrets: list[str] | tuple[str, ...]) -> str:
         if secret:
             safe = safe.replace(secret, REDACTED)
     return safe
+
+
+def mask_identifier(value: str | None) -> str:
+    if not value:
+        return "unknown"
+    if len(value) <= 4:
+        return "****"
+    return f"{value[:2]}...{value[-2:]}"

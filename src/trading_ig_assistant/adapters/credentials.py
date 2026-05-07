@@ -104,6 +104,13 @@ class KeyringCredentialStore:
             return None
         return IGCredentials(username=username, password=password, api_key=api_key)
 
+    def load_profile(self, profile_key: str, username: str) -> IGCredentials | None:
+        password = self._keyring.get_password(self._service_name, f"{profile_key}:password")
+        api_key = self._keyring.get_password(self._service_name, f"{profile_key}:api_key")
+        if not password or not api_key:
+            return None
+        return IGCredentials(username=username, password=password, api_key=api_key)
+
     def save(self, credentials: IGCredentials) -> None:
         self._keyring.set_password(
             self._service_name,
@@ -113,6 +120,18 @@ class KeyringCredentialStore:
         self._keyring.set_password(
             self._service_name,
             f"{credentials.username}:api_key",
+            credentials.api_key.reveal(),
+        )
+
+    def save_profile(self, profile_key: str, credentials: IGCredentials) -> None:
+        self._keyring.set_password(
+            self._service_name,
+            f"{profile_key}:password",
+            credentials.password.reveal(),
+        )
+        self._keyring.set_password(
+            self._service_name,
+            f"{profile_key}:api_key",
             credentials.api_key.reveal(),
         )
 

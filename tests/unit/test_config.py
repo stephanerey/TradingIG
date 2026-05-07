@@ -1,7 +1,13 @@
 from pathlib import Path
 
 from trading_ig_assistant.adapters.credentials import SecretValue
-from trading_ig_assistant.app.config import AppConfig, IGEnvironment, load_config, save_config
+from trading_ig_assistant.app.config import (
+    AppConfig,
+    IGConnectionProfileConfig,
+    IGEnvironment,
+    load_config,
+    save_config,
+)
 
 
 def test_default_config_is_demo_read_only() -> None:
@@ -50,3 +56,31 @@ def test_config_file_cannot_enable_live_trading_without_explicit_flag(tmp_path: 
     assert config.environment == IGEnvironment.LIVE
     assert config.read_only is True
     assert config.enable_live_trading is False
+
+
+def test_profile_config_saves_non_secret_identifiers_only(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config = AppConfig(
+        environment=IGEnvironment.LIVE,
+        connection_profiles={
+            IGEnvironment.LIVE: IGConnectionProfileConfig(
+                environment=IGEnvironment.LIVE,
+                identifier="liveuser",
+                selected_account_id="LIVE123",
+            ),
+            IGEnvironment.DEMO: IGConnectionProfileConfig(
+                environment=IGEnvironment.DEMO,
+                identifier="demouser",
+                selected_account_id="DEMO123",
+            ),
+        },
+    )
+
+    save_config(config, config_path)
+    saved_text = config_path.read_text(encoding="utf-8")
+    loaded = load_config(config_path)
+
+    assert "password" not in saved_text.lower()
+    assert "api_key" not in saved_text.lower()
+    assert loaded.connection_profiles[IGEnvironment.LIVE].identifier == "liveuser"
+    assert loaded.connection_profiles[IGEnvironment.DEMO].selected_account_id == "DEMO123"

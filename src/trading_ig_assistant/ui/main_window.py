@@ -6,7 +6,15 @@ import sys
 
 from PyQt5 import QtCore, QtWidgets
 
-from trading_ig_assistant.app.config import default_config_path, save_config
+from trading_ig_assistant.adapters.credentials import KeyringCredentialStore
+from trading_ig_assistant.app.config import (
+    AppConfig,
+    IGConnectionProfileConfig,
+    IGEnvironment,
+    default_config_path,
+    load_config,
+    save_config,
+)
 from trading_ig_assistant.services.ig_connection_service import (
     IGConnectionRequest,
     IGConnectionResult,
@@ -16,7 +24,7 @@ from trading_ig_assistant.ui.account_status_widget import AccountStatusRibbonWid
 from trading_ig_assistant.ui.chart_view import ChartView
 from trading_ig_assistant.ui.macro_ribbon_widget import MacroRibbonWidget
 from trading_ig_assistant.ui.product_selector import ProductSelectorWidget
-from trading_ig_assistant.ui.settings_view import SettingsView
+from trading_ig_assistant.ui.settings_dialog import SettingsDialog
 
 
 class ConnectionWorker(QtCore.QObject):
@@ -45,6 +53,9 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.setWindowTitle("Trading IG Assistant - P01 read-only shell")
         self.resize(1280, 820)
+        self._config_path = default_config_path()
+        self._config = load_config(self._config_path)
+        self._credential_store = self._build_credential_store()
         self._connection_service = IGConnectionService()
         self._connection_thread: QtCore.QThread | None = None
         self._connection_worker: ConnectionWorker | None = None
@@ -57,6 +68,8 @@ class MainWindow(QtWidgets.QMainWindow):
         quit_action.triggered.connect(self.close)
 
         tools_menu = self.menuBar().addMenu("&Tools")
+        settings_action = tools_menu.addAction("Settings")
+        settings_action.triggered.connect(self._open_settings)
         disabled_action = tools_menu.addAction("Live trading disabled")
         disabled_action.setEnabled(False)
 
@@ -67,6 +80,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         root_layout.addWidget(MacroRibbonWidget())
         self.account_status = AccountStatusRibbonWidget()
+        self.account_status.connect_requested.connect(self._connect_environment)
+        self.account_status.settings_requested.connect(self._open_settings)
+        self.account_status.account_selected.connect(self._select_account)
         root_layout.addWidget(self.account_status)
 
         body = QtWidgets.QSplitter()
@@ -75,10 +91,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         right_tabs = QtWidgets.QTabWidget()
         right_tabs.addTab(ProductSelectorWidget(), "Products / Ticket")
-        self.settings_view = SettingsView()
-        self.settings_view.connection_requested.connect(self._connect_read_only)
-        self.settings_view.save_requested.connect(self._save_non_secret_settings)
-        right_tabs.addTab(self.settings_view, "Settings")
         right_tabs.setMinimumWidth(360)
         body.addWidget(right_tabs)
         body.setStretchFactor(0, 4)
@@ -87,11 +99,64 @@ class MainWindow(QtWidgets.QMainWindow):
         root_layout.addWidget(body, stretch=1)
         self.setCentralWidget(root)
 
+    @staticmethod
+    def _build_credential_store() -> object | None:
+        try:
+            return KeyringCredentialStore()
+        except RuntimeError:
+            return None
+
+    @QtCore.pyqtSlot()
+    def _open_settings(self) -> None:
+        dialog = SettingsDialog(self._config, self._credential_store, self)
+        dialog.config_applied.connect(self._apply_config)
+        dialog.exec()
+
+    @QtCore.pyqtSlot(object)
+    def _apply_config(self, config: AppConfig) -> None:
+        self._config = config
+        save_config(self._config, self._config_path)
+        self.statusBar().showMessage("Settings saved.", 5000)
+
+    @QtCore.pyqtSlot(object)
+    def _connect_environment(self, environment: IGEnvironment) -> None:
+        profile = self._config.connection_profiles[environment]
+        if not profile.identifier:
+            self.statusBar().showMessage(
+                f"Configure {environment.value} API identifier first.",
+                7000,
+            )
+            self._open_settings()
+            return
+        if self._credential_store is None:
+            self.statusBar().showMessage("OS keyring credential store is unavailable.", 7000)
+            return
+        credentials = self._credential_store.load_profile(environment.value, profile.identifier)
+        if credentials is None:
+            self.statusBar().showMessage(
+                f"Configure {environment.value} password and API key first.",
+                7000,
+            )
+            self._open_settings()
+            return
+        self._config.environment = environment
+        self._connect_read_only(
+            IGConnectionRequest(
+                environment=environment,
+                username=credentials.username,
+                password=credentials.password.reveal(),
+                api_key=credentials.api_key.reveal(),
+            )
+        )
+
     @QtCore.pyqtSlot(object)
     def _connect_read_only(self, request: IGConnectionRequest) -> None:
         if self._connection_thread is not None:
             return
-        self.settings_view.set_busy(True)
+        self.statusBar().showMessage(
+            f"Connecting to IG {request.environment.value} in read-only mode...",
+            0,
+        )
         self._connection_thread = QtCore.QThread(self)
         self._connection_worker = ConnectionWorker(self._connection_service, request)
         self._connection_worker.moveToThread(self._connection_thread)
@@ -106,28 +171,38 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(object)
     def _on_connection_success(self, result: IGConnectionResult) -> None:
-        self.settings_view.set_accounts(result.accounts, result.current_account_id)
         self.account_status.set_accounts(result.accounts, result.current_account_id)
-        self.settings_view.show_connection_success(len(result.accounts))
+        self._set_profile_account(result.environment, result.current_account_id)
+        message = (
+            f"Connected to IG {result.environment.value}. "
+            f"Accounts fetched: {len(result.accounts)}."
+        )
+        self.statusBar().showMessage(
+            message,
+            7000,
+        )
 
     @QtCore.pyqtSlot(str)
     def _on_connection_failure(self, message: str) -> None:
-        self.settings_view.show_message(f"Connection failed: {humanize_ig_error(message)}")
+        self.statusBar().showMessage(f"Connection failed: {humanize_ig_error(message)}", 12000)
 
     @QtCore.pyqtSlot()
     def _clear_connection_worker(self) -> None:
         self._connection_thread = None
         self._connection_worker = None
-        self.settings_view.set_busy(False)
 
     @QtCore.pyqtSlot(object)
-    def _save_non_secret_settings(self, config: object) -> None:
-        try:
-            path = default_config_path()
-            save_config(config, path)
-            self.settings_view.show_message(f"Non-secret settings saved to {path}")
-        except Exception as exc:
-            self.settings_view.show_message(f"Settings save failed: {exc}")
+    def _select_account(self, account_id: object) -> None:
+        self._set_profile_account(self._config.environment, str(account_id) if account_id else None)
+
+    def _set_profile_account(self, environment: IGEnvironment, account_id: str | None) -> None:
+        profile = self._config.connection_profiles[environment]
+        self._config.connection_profiles[environment] = IGConnectionProfileConfig(
+            environment=environment,
+            identifier=profile.identifier,
+            selected_account_id=account_id,
+        )
+        save_config(self._config, self._config_path)
 
 
 def run_gui() -> int:
