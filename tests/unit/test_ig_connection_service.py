@@ -49,3 +49,24 @@ def test_connection_service_fetches_accounts_and_logs_out() -> None:
     assert adapter.logged_out is True
     assert adapter.credentials is not None
     assert "fake-password" not in repr(adapter.credentials)
+
+
+def test_connection_service_rejects_email_identifier_before_http() -> None:
+    adapter = FakeAccountAdapter()
+    service = IGConnectionService(adapter_factory=lambda _environment: adapter)
+
+    try:
+        service.validate_read_only_connection(
+            IGConnectionRequest(
+                environment=IGEnvironment.DEMO,
+                username="demo@example.com",
+                password="fake-password",
+                api_key="fake-api-key",
+            )
+        )
+    except ValueError as exc:
+        assert "not an email address" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError")
+
+    assert adapter.credentials is None

@@ -108,7 +108,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(str)
     def _on_connection_failure(self, message: str) -> None:
-        self.settings_view.show_message(f"Connection failed: {message}")
+        self.settings_view.show_message(f"Connection failed: {humanize_ig_error(message)}")
 
     @QtCore.pyqtSlot()
     def _clear_connection_worker(self) -> None:
@@ -131,3 +131,32 @@ def run_gui() -> int:
     window = MainWindow()
     window.show()
     return app.exec()
+
+
+def humanize_ig_error(message: str) -> str:
+    if "api-key-invalid" in message:
+        return (
+            "API key invalid for this request. Check that the environment matches the key: "
+            "demo key with demo, live key with live. If this key was exposed, revoke it and "
+            "generate a new one."
+        )
+    if "api-key-restricted" in message:
+        return "API key restricted to another account/environment."
+    if "api-key-disabled" in message:
+        return "API key disabled in IG settings."
+    if "api-key-revoked" in message:
+        return "API key revoked. Generate a new key in IG settings."
+    if "validation.pattern.invalid.auth.identifier" in message:
+        return (
+            "Invalid API identifier format. For demo, use the demo API identifier you chose "
+            "in the IG demo API tab, not your email address."
+        )
+    if (
+        "authentication.timeout" in message
+        or "get.session.timeout" in message
+        or "timed out" in message
+    ):
+        return "IG authentication timed out. Retry once, then verify environment and credentials."
+    if "invalid-details" in message:
+        return "Invalid API identifier/password for the selected IG environment."
+    return message

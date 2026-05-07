@@ -32,14 +32,21 @@ class SettingsView(QtWidgets.QWidget):
         self.environment.setCurrentText("demo")
 
         self.username = QtWidgets.QLineEdit()
-        self.username.setPlaceholderText("IG username")
+        self.username.setPlaceholderText("API identifier, not email for demo")
+
+        identifier_help = QtWidgets.QLabel(
+            "Demo: use the demo API identifier chosen in IG API Keys.\n"
+            "Live: use the live API login identifier matching the selected environment/key."
+        )
+        identifier_help.setWordWrap(True)
+        identifier_help.setStyleSheet("QLabel { color: #4f5965; font-size: 11px; }")
 
         self.password = QtWidgets.QLineEdit()
         self.password.setPlaceholderText("Used in memory only for read-only validation")
         self.password.setEchoMode(QtWidgets.QLineEdit.Password)
 
         self.api_key = QtWidgets.QLineEdit()
-        self.api_key.setPlaceholderText("Used in memory only for read-only validation")
+        self.api_key.setPlaceholderText("Use demo key with demo env; live key with live env")
         self.api_key.setEchoMode(QtWidgets.QLineEdit.Password)
 
         self.selected_account = QtWidgets.QComboBox()
@@ -64,7 +71,8 @@ class SettingsView(QtWidgets.QWidget):
         self.save_button.clicked.connect(self._emit_save_requested)
 
         form.addRow("Environment", self.environment)
-        form.addRow("Username", self.username)
+        form.addRow("API identifier", self.username)
+        form.addRow("", identifier_help)
         form.addRow("Password", self.password)
         form.addRow("API key", self.api_key)
         form.addRow("Selected account", self.selected_account)
@@ -81,7 +89,7 @@ class SettingsView(QtWidgets.QWidget):
             environment=IGEnvironment(self.environment.currentText()),
             username=self.username.text().strip(),
             password=self.password.text(),
-            api_key=self.api_key.text(),
+            api_key=self.api_key.text().strip(),
         )
 
     def safe_config(self) -> AppConfig:
@@ -127,7 +135,7 @@ class SettingsView(QtWidgets.QWidget):
     def _emit_connection_requested(self) -> None:
         request = self.connection_request()
         if not request.username or not request.password or not request.api_key:
-            self.show_message("Username, password, and API key are required.")
+            self.show_message("API identifier, password, and API key are required.")
             return
         self.connection_requested.emit(request)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -39,6 +40,7 @@ class IGConnectionResult:
 
 
 AdapterFactory = Callable[[IGEnvironment], IGAccountAdapter]
+IG_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,30}$")
 
 
 class IGConnectionService:
@@ -51,10 +53,15 @@ class IGConnectionService:
         self._adapter_factory = adapter_factory or self._default_adapter_factory
 
     def validate_read_only_connection(self, request: IGConnectionRequest) -> IGConnectionResult:
+        if not IG_IDENTIFIER_PATTERN.fullmatch(request.username):
+            raise ValueError(
+                "Invalid IG API identifier. Use the API identifier, not an email address. "
+                "It must contain only letters, digits, '-' or '_' and be 1-30 characters."
+            )
         credentials = IGCredentials(
             username=request.username,
             password=request.password,
-            api_key=request.api_key,
+            api_key=request.api_key.strip(),
         )
         adapter = self._adapter_factory(request.environment)
         try:
