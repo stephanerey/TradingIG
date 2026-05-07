@@ -6,7 +6,7 @@ import sys
 
 from PyQt5 import QtCore, QtWidgets
 
-from trading_ig_assistant.adapters.credentials import KeyringCredentialStore
+from trading_ig_assistant.adapters.credentials import build_default_credential_store
 from trading_ig_assistant.app.config import (
     AppConfig,
     IGConnectionProfileConfig,
@@ -101,10 +101,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @staticmethod
     def _build_credential_store() -> object | None:
-        try:
-            return KeyringCredentialStore()
-        except RuntimeError:
-            return None
+        return build_default_credential_store()
 
     @QtCore.pyqtSlot()
     def _open_settings(self) -> None:

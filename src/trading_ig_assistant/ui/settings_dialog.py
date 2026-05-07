@@ -95,7 +95,10 @@ class SettingsDialog(QtWidgets.QDialog):
     def _save_credentials(self, config: AppConfig) -> None:
         if self._credential_store is None:
             if any(editor.has_secret_values() for editor in self._profile_tabs.values()):
-                raise RuntimeError("No OS keyring credential store is available.")
+                raise RuntimeError(
+                    "No secure credential store is available. Install keyring in this venv "
+                    "or run on Windows with Credential Manager available."
+                )
             return
 
         for environment, editor in self._profile_tabs.items():
