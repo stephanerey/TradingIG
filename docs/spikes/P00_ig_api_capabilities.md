@@ -78,3 +78,85 @@ validated before any live or semi-automated trading feature is designed.
 Record each tested endpoint, environment, account type, epic, sanitized request shape, sanitized
 response shape, and observed IG error code. Do not paste credentials, tokens, account IDs, or raw
 auth headers into this document.
+
+## P01 Product Discovery Findings
+
+**Status:** Implementation foundation complete; manual IG demo validation still required.
+
+### Tested search terms
+
+The P01 CLI defaults to:
+
+- `US Tech 100`
+- `France 40`
+- `Germany 40`
+- `Gold`
+
+Manual run results should be recorded here after using:
+
+```powershell
+trading-ig-assistant discover-products --watchlist --output .\watchlist.local.json
+```
+
+### Candidate counts
+
+No live/demo discovery output has been pasted into this repository. Record sanitized counts only:
+
+| Search term | Candidates returned | Classified products | Errors |
+|---|---:|---:|---:|
+| US Tech 100 | TODO | TODO | TODO |
+| France 40 | TODO | TODO | TODO |
+| Germany 40 | TODO | TODO | TODO |
+| Gold | TODO | TODO | TODO |
+
+### Suspected product types found
+
+The service can classify candidates as:
+
+- `barrier`: based on conservative text matches such as barrier or knock-out wording.
+- `option`: based on option, call, put, or vanilla wording.
+- `cash_or_dfb`: based on DFB/cash markers or common IG instrument types.
+- `unknown`: fallback when classification is uncertain.
+
+### Barrier visibility
+
+TODO after manual demo API testing:
+
+- Were Barrier products visible through market search?
+- Did they appear as distinct EPICs?
+- Did market details expose KO-related metadata?
+
+### Option visibility
+
+TODO after manual demo API testing:
+
+- Were Option products visible through market search?
+- Did they appear as distinct EPICs?
+- Did market details expose strike, expiry, and call/put metadata?
+
+### Useful fields to inspect
+
+The P01 extractor looks for the following fields, but IG payload shape must be confirmed:
+
+- KO level: `koLevel`, `knockoutLevel`, `knockOutLevel`, `barrierLevel`, `barrier`.
+- Strike: `strike`, `strikePrice`, `exercisePrice`.
+- Expiry: summary `expiry` or detail `expiry`.
+- Direction: conservative text parsing for buy/sell/long/short/bull/bear/call/put.
+- Min deal size: `minDealSize`, `minimumDealSize`, `minSize`.
+- Currency: `currency`, `currencies`, `baseCurrency`, `quoteCurrency`.
+- Market status: summary `marketStatus` or detail `marketStatus`/`status`.
+
+### Unresolved questions
+
+- Whether IG exposes Barrier and Option product metadata consistently across demo and live.
+- Whether KO levels and strikes require a separate endpoint beyond market details.
+- Whether any product constraints are account-specific.
+- Whether dealing rules are sufficient to validate min/max/lot size locally.
+
+### Next manual tests needed
+
+- Run `discover-products --watchlist` against IG demo and record sanitized counts.
+- Inspect whether Barrier/Option products are found for each watchlist instrument.
+- Compare market summary versus market details payload shape.
+- Confirm which fields identify KO level, strike, expiry, direction, min size, currency, and status.
+- Keep order-related API testing out of P01; no order endpoints should be called.

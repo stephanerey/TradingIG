@@ -2,15 +2,15 @@
 
 Python desktop application skeleton for assisted trading with IG.
 
-This repository is currently in **P00 Bootstrap**. It contains only the safe foundation:
-configuration, credential redaction, read-only IG REST adapter scaffolding, and tests.
+This repository is currently in **P01 Product Discovery + GUI Shell**. It contains the safe
+foundation, read-only IG product discovery, a minimal GUI shell, and a candlestick chart placeholder.
 
 ## Safety status
 
 Live trading is **not implemented**.
 
-The P00 adapter contains no functional order execution path. Any create/update/close order
-method currently raises a live-trading-disabled error. Use demo/read-only mode first.
+The adapter contains no functional order execution path. Any create/update/close order or
+working-order method currently raises a live-trading-disabled error. Use demo/read-only mode first.
 
 ## Setup
 
@@ -56,8 +56,52 @@ trading-ig-assistant check-ig-connectivity `
 The command authenticates, fetches accounts, and can optionally perform read-only market search,
 market details, and historical prices calls.
 
+## Read-only product discovery
+
+Run discovery for one or more search terms:
+
+```powershell
+trading-ig-assistant discover-products `
+  --environment demo `
+  --username-env TRADING_IG_USERNAME `
+  --password-env TRADING_IG_PASSWORD `
+  --api-key-env TRADING_IG_API_KEY `
+  --search "US Tech 100" `
+  --output .\product_discovery.local.json
+```
+
+Run discovery for the initial watchlist:
+
+```powershell
+trading-ig-assistant discover-products --watchlist --output .\watchlist.local.json
+```
+
+Discovery output is sanitized and intended for analysis. Do not commit local discovery reports.
+
+## GUI shell
+
+Launch the minimal P01 GUI:
+
+```powershell
+trading-ig-assistant gui
+```
+
+The GUI includes a main window, menu bar, macro context ribbon placeholder, candlestick chart
+placeholder, product/ticket placeholder panel, and settings placeholder. It does not call IG
+directly and it cannot place trades.
+
+## P01 status
+
+- Read-only product discovery service and CLI are available.
+- Product classification is heuristic and conservative.
+- GUI shell and chart foundation are available.
+- IG streaming is not implemented yet.
+- Real-time chart updates are not implemented yet.
+- Ticket execution, trade manager, pending orders, risk automation, macro/news APIs, and database
+  persistence are not implemented yet.
+
 ## Project layout
 
 The package follows `docs/prd/10_architecture/package_layout.md`. Broker-facing code is isolated
 under `src/trading_ig_assistant/adapters/`, UI modules stay thin placeholders, and core/domain
-modules remain importable without Qt or IG connectivity.
+modules remain independent from Qt and IG connectivity.

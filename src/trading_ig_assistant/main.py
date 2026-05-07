@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -10,6 +11,11 @@ from pathlib import Path
 from trading_ig_assistant.adapters.credentials import IGCredentials
 from trading_ig_assistant.adapters.ig_rest import IGAPIError, IGRestAdapter
 from trading_ig_assistant.app.config import AppConfig, IGEnvironment, load_config
+from trading_ig_assistant.services.product_discovery_service import (
+    DEFAULT_WATCHLIST_SEARCH_TERMS,
+    ProductDiscoveryResult,
+    ProductDiscoveryService,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -24,7 +30,7 @@ def main(argv: list[str] | None = None) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="trading-ig-assistant",
-        description="Trading IG Assistant P00 command line tools.",
+        description="Trading IG Assistant command line tools.",
     )
     subparsers = parser.add_subparsers()
 
@@ -43,26 +49,47 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--prices", action="store_true", help="Fetch recent prices for --epic.")
     check.set_defaults(func=check_ig_connectivity)
 
+    discover = subparsers.add_parser(
+        "discover-products",
+        help="Run read-only IG product discovery.",
+    )
+    add_credential_arguments(discover)
+    discover.add_argument("--search", action="append", help="Market search term. Can be repeated.")
+    discover.add_argument(
+        "--watchlist",
+        action="store_true",
+        help="Use the initial P01 watchlist search terms.",
+    )
+    discover.add_argument("--output", type=Path, help="Optional sanitized JSON report path.")
+    discover.set_defaults(func=discover_products)
+
+    gui = subparsers.add_parser("gui", help="Launch the minimal GUI shell.")
+    gui.set_defaults(func=launch_gui)
+
     return parser
 
 
-def check_ig_connectivity(args: argparse.Namespace) -> int:
-    config = load_config(args.config) if args.config else AppConfig()
-    environment = IGEnvironment(args.environment) if args.environment else config.environment
-    username = args.username or os.environ.get(args.username_env) or config.ig_username
-    password = os.environ.get(args.password_env)
-    api_key = os.environ.get(args.api_key_env)
+def add_credential_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--config", type=Path, help="Optional non-secret JSON config path.")
+    parser.add_argument("--environment", choices=[item.value for item in IGEnvironment])
+    parser.add_argument("--username")
+    parser.add_argument("--username-env", default="TRADING_IG_USERNAME")
+    parser.add_argument("--password-env", default="TRADING_IG_PASSWORD")
+    parser.add_argument("--api-key-env", default="TRADING_IG_API_KEY")
 
-    if not username or not password or not api_key:
+
+def check_ig_connectivity(args: argparse.Namespace) -> int:
+    loaded = load_read_only_runtime(args)
+    if loaded is None:
         print(
             "Missing IG credentials. Provide username and set password/API key environment "
             "variables. No secrets should be placed in config files.",
             file=sys.stderr,
         )
         return 2
+    environment, credentials = loaded
 
     adapter = IGRestAdapter(environment=environment, read_only=True)
-    credentials = IGCredentials(username=username, password=password, api_key=api_key)
 
     try:
         session = adapter.login(credentials)
@@ -105,6 +132,99 @@ def check_ig_connectivity(args: argparse.Namespace) -> int:
             adapter.logout()
         except IGAPIError:
             pass
+
+
+def discover_products(args: argparse.Namespace) -> int:
+    loaded = load_read_only_runtime(args)
+    if loaded is None:
+        print(
+            "Missing IG credentials. Provide username and set password/API key environment "
+            "variables. No secrets should be placed in config files.",
+            file=sys.stderr,
+        )
+        return 2
+    environment, credentials = loaded
+    search_terms = build_search_terms(args)
+
+    adapter = IGRestAdapter(environment=environment, read_only=True)
+    service = ProductDiscoveryService(adapter)
+
+    try:
+        adapter.login(credentials)
+        results = [service.discover_products(search_term) for search_term in search_terms]
+        print_discovery_results(results)
+        if args.output:
+            write_discovery_report(results, args.output)
+            print(f"Sanitized discovery report written to {args.output}")
+        return 0
+    except IGAPIError as exc:
+        print(f"IG product discovery failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        try:
+            adapter.logout()
+        except IGAPIError:
+            pass
+
+
+def launch_gui(_args: argparse.Namespace) -> int:
+    try:
+        from trading_ig_assistant.ui.main_window import run_gui
+    except ImportError as exc:
+        print(
+            "GUI dependencies are missing. Install them with: "
+            "python -m pip install -e .[gui,dev]",
+            file=sys.stderr,
+        )
+        print(str(exc), file=sys.stderr)
+        return 2
+    return run_gui()
+
+
+def load_read_only_runtime(args: argparse.Namespace) -> tuple[IGEnvironment, IGCredentials] | None:
+    config = load_config(args.config) if getattr(args, "config", None) else AppConfig()
+    environment = IGEnvironment(args.environment) if args.environment else config.environment
+    username = args.username or os.environ.get(args.username_env) or config.ig_username
+    password = os.environ.get(args.password_env)
+    api_key = os.environ.get(args.api_key_env)
+    if not username or not password or not api_key:
+        return None
+    return environment, IGCredentials(username=username, password=password, api_key=api_key)
+
+
+def build_search_terms(args: argparse.Namespace) -> list[str]:
+    terms: list[str] = []
+    if args.watchlist:
+        terms.extend(DEFAULT_WATCHLIST_SEARCH_TERMS)
+    terms.extend(args.search or [])
+    return terms or DEFAULT_WATCHLIST_SEARCH_TERMS
+
+
+def print_discovery_results(results: list[ProductDiscoveryResult]) -> None:
+    for result in results:
+        print(
+            f"Search {result.search_term!r}: "
+            f"{result.candidates_count} candidates, "
+            f"{len(result.products)} classified, "
+            f"{len(result.errors)} errors"
+        )
+        for product in result.products[:10]:
+            print(
+                f"- {product.name or product.epic} | epic={product.epic} | "
+                f"type={product.product_type.value} | direction={product.direction.value} | "
+                f"expiry={product.expiry or 'unknown'} | status={product.status or 'unknown'}"
+            )
+        for error in result.errors[:5]:
+            print(f"- discovery error epic={error.epic or 'unknown'}: {error.message}")
+
+
+def write_discovery_report(results: list[ProductDiscoveryResult], output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    report = {
+        "schema": "trading_ig_assistant.product_discovery.v1",
+        "results": [result.to_sanitized_dict() for result in results],
+    }
+    output_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

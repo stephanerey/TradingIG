@@ -1,0 +1,101 @@
+import json
+
+from trading_ig_assistant.domain.instruments import MarketDetails, MarketSummary
+from trading_ig_assistant.domain.products import ProductDirection, ProductType
+from trading_ig_assistant.main import write_discovery_report
+from trading_ig_assistant.services.product_discovery_service import ProductDiscoveryService
+
+
+class FakeDiscoveryAdapter:
+    def search_markets(self, query: str) -> list[MarketSummary]:
+        if query == "US Tech 100":
+            return [
+                MarketSummary(
+                    epic="BARRIER.EPIC",
+                    instrument_name="US Tech 100 Barrier Long",
+                    instrument_type="INDICES",
+                    expiry="DFB",
+                    market_status="TRADEABLE",
+                    raw={"epic": "BARRIER.EPIC", "accountId": "ABCDEF123456"},
+                ),
+                MarketSummary(
+                    epic="OPTION.EPIC",
+                    instrument_name="US Tech 100 Call Option",
+                    instrument_type="OPTION",
+                    expiry="JUN-26",
+                    market_status="TRADEABLE",
+                    raw={"epic": "OPTION.EPIC"},
+                ),
+                MarketSummary(
+                    epic="BROKEN.EPIC",
+                    instrument_name="Broken candidate",
+                    raw={},
+                ),
+            ]
+        return []
+
+    def get_market_details(self, epic: str) -> MarketDetails:
+        if epic == "BROKEN.EPIC":
+            raise RuntimeError("details unavailable")
+        if epic == "BARRIER.EPIC":
+            return MarketDetails(
+                epic=epic,
+                instrument_name="US Tech 100 Barrier Long",
+                raw={
+                    "instrument": {
+                        "name": "US Tech 100 Barrier Long",
+                        "currency": "EUR",
+                        "knockoutLevel": {"value": "18000"},
+                    },
+                    "dealingRules": {"minDealSize": {"value": "0.5"}},
+                    "secretToken": "fake-token",
+                },
+            )
+        return MarketDetails(
+            epic=epic,
+            instrument_name="US Tech 100 Call Option",
+            raw={
+                "instrument": {
+                    "name": "US Tech 100 Call Option",
+                    "currency": "EUR",
+                    "strikePrice": "19000",
+                },
+                "dealingRules": {"minDealSize": {"value": "1"}},
+            },
+        )
+
+
+def test_classification_heuristics_identify_barrier_and_option() -> None:
+    service = ProductDiscoveryService(FakeDiscoveryAdapter())
+
+    result = service.discover_products("US Tech 100")
+
+    assert result.candidates_count == 3
+    assert len(result.products) == 2
+    assert len(result.errors) == 1
+
+    barrier = result.products[0]
+    assert barrier.product_type == ProductType.BARRIER
+    assert barrier.direction == ProductDirection.BUY
+    assert barrier.ko_level == 18000.0
+    assert barrier.min_size == 0.5
+
+    option = result.products[1]
+    assert option.product_type == ProductType.OPTION
+    assert option.direction == ProductDirection.CALL
+    assert option.strike == 19000.0
+
+
+def test_sanitized_report_excludes_sensitive_values(tmp_path) -> None:
+    service = ProductDiscoveryService(FakeDiscoveryAdapter())
+    result = service.discover_products("US Tech 100")
+    output_path = tmp_path / "product_discovery.json"
+
+    write_discovery_report([result], output_path)
+
+    report_text = output_path.read_text(encoding="utf-8")
+    report = json.loads(report_text)
+    assert "fake-token" not in report_text
+    assert "ABCDEF123456" not in report_text
+    assert report["schema"] == "trading_ig_assistant.product_discovery.v1"
+    assert report["results"][0]["products"][0]["raw"]["summary"]["accountId"] == "AB...56"

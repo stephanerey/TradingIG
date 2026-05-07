@@ -9,11 +9,15 @@ description = "Safe MVP skeleton for an assisted IG trading desktop application.
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [{ name = "Stephane Rey" }]
-dependencies = []
+dependencies = [
+  "PyQt5>=5.15",
+  "pyqtgraph>=0.13",
+]
 
 [project.optional-dependencies]
 secure-store = ["keyring>=25"]
 dev = ["pytest>=8", "ruff>=0.6"]
+gui = ["PyQt5>=5.15", "pyqtgraph>=0.13"]
 
 [project.scripts]
 trading-ig-assistant = "trading_ig_assistant.main:main"
