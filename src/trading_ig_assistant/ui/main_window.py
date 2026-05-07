@@ -14,6 +14,7 @@ from trading_ig_assistant.adapters.ig_rest import (
     IGRestAdapter,
     is_invalid_security_token_error,
 )
+from trading_ig_assistant.adapters.ig_streaming import IGStreamingAdapter
 from trading_ig_assistant.app.config import (
     AppConfig,
     IGConnectionProfileConfig,
@@ -22,7 +23,10 @@ from trading_ig_assistant.app.config import (
     load_config,
     save_config,
 )
+from trading_ig_assistant.app.streaming_bridge import StreamingEventBridge
 from trading_ig_assistant.domain.instruments import Account
+from trading_ig_assistant.domain.market_data import Quote
+from trading_ig_assistant.domain.products import TradableProduct
 from trading_ig_assistant.services.ig_connection_service import IGConnectionRequest
 from trading_ig_assistant.services.product_discovery_service import (
     ProductDiscoveryResult,
@@ -167,8 +171,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self._connection_worker: ConnectionWorker | None = None
         self._discovery_thread: QtCore.QThread | None = None
         self._discovery_worker: ProductDiscoveryWorker | None = None
+        self._selected_product: TradableProduct | None = None
+        self._streaming_adapter: IGStreamingAdapter | None = None
+        self._streaming_bridge = StreamingEventBridge()
         self._build_menu()
         self._build_layout()
+        self._streaming_bridge.quote_received.connect(self._on_stream_quote)
+        self._streaming_bridge.status_changed.connect(self._on_stream_status)
+        self._streaming_bridge.error_received.connect(self._on_stream_error)
         LOGGER.debug("MainWindow initialization complete")
 
     def _build_menu(self) -> None:
@@ -205,12 +215,14 @@ class MainWindow(QtWidgets.QMainWindow):
 
         body = QtWidgets.QSplitter()
         body.setOrientation(QtCore.Qt.Horizontal)
-        body.addWidget(ChartView())
+        self.chart_view = ChartView()
+        body.addWidget(self.chart_view)
 
         right_tabs = QtWidgets.QTabWidget()
         self.product_selector = ProductSelectorWidget()
         self.product_selector.discover_requested.connect(self._discover_products)
         self.product_selector.export_requested.connect(self._export_discovery_report)
+        self.product_selector.product_selected.connect(self._on_product_selected)
         right_tabs.addTab(self.product_selector, "Products / Ticket")
         right_tabs.setMinimumWidth(760)
         body.addWidget(right_tabs)
@@ -299,8 +311,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._discovery_thread is not None:
             self.statusBar().showMessage("Discovery is running; wait before disconnecting.", 5000)
             return
+        self._stop_streaming()
         self._logout_active_connection()
         self.account_status.set_disconnected()
+        self.chart_view.set_stream_status("DISCONNECTED")
+        self.chart_view.set_live_quote(None)
         self.statusBar().showMessage("Disconnected from IG.", 5000)
 
     @QtCore.pyqtSlot(object)
@@ -352,6 +367,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._active_connection = result
         self._active_connection.current_account_id = selected_account_id
         self._set_profile_account(result.environment, selected_account_id)
+        self.chart_view.set_stream_status("CONNECTED")
+        self._restart_streaming()
         message = (
             f"Connected to IG {result.environment.value}. "
             f"Accounts fetched: {len(result.accounts)}."
@@ -411,6 +428,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.product_selector.set_results(results)
         product_count = sum(len(result.products) for result in results)
         self.statusBar().showMessage(f"Product discovery complete: {product_count} products.", 7000)
+        if self._selected_product is None:
+            first_product = _first_discovered_product(results)
+            if first_product is not None:
+                self._on_product_selected(first_product)
 
     @QtCore.pyqtSlot(str)
     def _on_discovery_failure(self, message: str) -> None:
@@ -437,19 +458,20 @@ class MainWindow(QtWidgets.QMainWindow):
     def _select_account(self, account_id: object) -> None:
         selected_account_id = str(account_id) if account_id else None
         LOGGER.debug("Account selected account=%s", mask_identifier(selected_account_id))
-        if selected_account_id:
-            self._switch_active_account(selected_account_id)
+        if selected_account_id and self._switch_active_account(selected_account_id):
+            self._restart_streaming()
         self._set_profile_account(self._config.environment, selected_account_id)
 
-    def _switch_active_account(self, account_id: str) -> None:
+    def _switch_active_account(self, account_id: str) -> bool:
         if self._active_connection is None:
-            return
+            return False
         if self._active_connection.current_account_id == account_id:
-            return
+            return True
         try:
             session = self._active_connection.adapter.switch_account(account_id)
             self._active_connection.current_account_id = session.current_account_id
             LOGGER.debug("Active IG account switched account=%s", mask_identifier(account_id))
+            return True
         except IGAPIError as exc:
             LOGGER.debug(
                 "Active IG account switch failed account=%s error=%s",
@@ -460,6 +482,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"Account switch failed: {humanize_ig_error(str(exc))}",
                 10000,
             )
+            return False
 
     def _set_profile_account(self, environment: IGEnvironment, account_id: str | None) -> None:
         profile = self._config.connection_profiles[environment]
@@ -490,6 +513,73 @@ class MainWindow(QtWidgets.QMainWindow):
         self._active_connection = None
         LOGGER.debug("Active IG logout complete")
 
+    @QtCore.pyqtSlot(object)
+    def _on_product_selected(self, product: object) -> None:
+        if not isinstance(product, TradableProduct):
+            return
+        self._selected_product = product
+        LOGGER.debug("Product selected epic=%s name=%r", product.epic, product.name)
+        self.chart_view.set_selected_product(product)
+        self._restart_streaming()
+
+    @QtCore.pyqtSlot(object)
+    def _on_stream_quote(self, quote: object) -> None:
+        if isinstance(quote, Quote):
+            self.chart_view.set_live_quote(quote)
+
+    @QtCore.pyqtSlot(str)
+    def _on_stream_status(self, status: str) -> None:
+        self.chart_view.set_stream_status(status)
+        LOGGER.debug("Streaming status update status=%s", status)
+
+    @QtCore.pyqtSlot(str)
+    def _on_stream_error(self, message: str) -> None:
+        LOGGER.debug("Streaming error message=%s", message)
+        self.statusBar().showMessage(f"Streaming: {message}", 12000)
+
+    def _restart_streaming(self) -> None:
+        self._stop_streaming()
+        if self._active_connection is None or self._selected_product is None:
+            return
+        session = self._active_connection.adapter.session
+        if session is None:
+            return
+        if not session.lightstreamer_endpoint:
+            self.chart_view.set_stream_status("STREAMING UNAVAILABLE")
+            return
+        if not self._active_connection.current_account_id:
+            self.chart_view.set_stream_status("NO ACTIVE ACCOUNT")
+            return
+        try:
+            adapter = IGStreamingAdapter(
+                session=session,
+                account_id=self._active_connection.current_account_id,
+                event_sink=self._streaming_bridge,
+            )
+            adapter.start()
+            adapter.subscribe_market(self._selected_product.epic)
+            self._streaming_adapter = adapter
+            self.chart_view.set_stream_status("CONNECTING")
+            LOGGER.debug(
+                "Streaming restarted epic=%s account=%s",
+                self._selected_product.epic,
+                mask_identifier(self._active_connection.current_account_id),
+            )
+        except Exception as exc:
+            LOGGER.debug("Streaming restart failed error=%s", exc)
+            self.chart_view.set_stream_status("ERROR")
+            self.statusBar().showMessage(f"Streaming unavailable: {exc}", 10000)
+
+    def _stop_streaming(self) -> None:
+        if self._streaming_adapter is None:
+            return
+        try:
+            self._streaming_adapter.stop()
+        except Exception as exc:
+            LOGGER.debug("Streaming stop ignored error=%s", exc)
+        finally:
+            self._streaming_adapter = None
+
     @QtCore.pyqtSlot()
     def _show_help(self) -> None:
         QtWidgets.QMessageBox.information(
@@ -508,6 +598,7 @@ class MainWindow(QtWidgets.QMainWindow):
         AboutDialog(self).exec()
 
     def closeEvent(self, event: QtCore.QEvent) -> None:
+        self._stop_streaming()
         self._logout_active_connection()
         super().closeEvent(event)
 
@@ -605,3 +696,10 @@ def _results_contain_invalid_security_token(results: list[ProductDiscoveryResult
 
 def _account_id_exists(accounts: list[Account], account_id: str) -> bool:
     return any(account.account_id == account_id for account in accounts)
+
+
+def _first_discovered_product(results: list[ProductDiscoveryResult]) -> TradableProduct | None:
+    for result in results:
+        if result.products:
+            return result.products[0]
+    return None

@@ -2,8 +2,9 @@
 
 Python desktop application skeleton for assisted trading with IG.
 
-This repository is currently in **P01 Product Discovery + GUI Shell**. It contains the safe
-foundation, read-only IG product discovery, a minimal GUI shell, and a candlestick chart placeholder.
+This repository is currently in **P02 streaming foundation**. It contains the safe bootstrap,
+read-only IG product discovery, a minimal GUI shell, a candlestick chart placeholder, and a
+first Lightstreamer live-quote path for the selected product.
 
 ## Safety status
 
@@ -98,7 +99,8 @@ the current log file.
 
 The GUI includes a main window, menu bar, macro context ribbon placeholder, candlestick chart
 placeholder, product/ticket placeholder panel, and settings placeholder. It does not call IG
-directly and it cannot place trades.
+directly and it cannot place trades. When connected, selecting a discovered product subscribes to
+read-only live quotes and updates the chart header with bid, ask, variation, and percent change.
 
 In the Settings tab:
 
@@ -113,7 +115,7 @@ In the Settings tab:
   keys page, not the email address of the web account.
 - For `live`, use the live API key and matching live API login identifier/password.
 
-## P01 status
+## P02 status
 
 - Read-only product discovery service and CLI are available.
 - GUI product discovery is available from the `Products / Ticket` panel. It uses the selected
@@ -131,8 +133,8 @@ In the Settings tab:
   discovery query.
 - Product classification is heuristic and conservative.
 - GUI shell and chart foundation are available.
-- IG streaming is not implemented yet.
-- Real-time chart updates are not implemented yet.
+- IG streaming is available for selected-product read-only quotes, but no order path exists.
+- Real-time chart updates are limited to the live quote header and live price line.
 - Ticket execution, trade manager, pending orders, risk automation, macro/news APIs, and database
   persistence are not implemented yet.
 

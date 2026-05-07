@@ -46,6 +46,7 @@ ASSET_CLASS_TABS: list[tuple[str, str]] = [
 class ProductSelectorWidget(QtWidgets.QWidget):
     discover_requested = QtCore.pyqtSignal(object)
     export_requested = QtCore.pyqtSignal(object)
+    product_selected = QtCore.pyqtSignal(object)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -183,6 +184,9 @@ class ProductSelectorWidget(QtWidgets.QWidget):
             for asset_key, asset_label in ASSET_CLASS_TABS:
                 table = _create_product_table()
                 self._tables[(product_type_key, asset_key)] = table
+                table.itemSelectionChanged.connect(
+                    lambda table=table: self._emit_selected_product(table)
+                )
                 if first_table is None:
                     first_table = table
                 asset_tabs.addTab(table, asset_label)
@@ -215,6 +219,8 @@ class ProductSelectorWidget(QtWidgets.QWidget):
             ]
             for column_index, value in enumerate(values):
                 item = QtWidgets.QTableWidgetItem(value)
+                if column_index == 0:
+                    item.setData(QtCore.Qt.UserRole, product)
                 if column_index in {1, 2, 3, 4, 11, 12}:
                     item.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
                 table.setItem(row_index, column_index, item)
@@ -230,6 +236,17 @@ class ProductSelectorWidget(QtWidgets.QWidget):
         )
         if output_path:
             self.export_requested.emit(Path(output_path))
+
+    def _emit_selected_product(self, table: QtWidgets.QTableWidget) -> None:
+        current_row = table.currentRow()
+        if current_row < 0:
+            return
+        item = table.item(current_row, 0)
+        if item is None:
+            return
+        product = item.data(QtCore.Qt.UserRole)
+        if product is not None:
+            self.product_selected.emit(product)
 
 
 def _format_number(value: float | None) -> str:

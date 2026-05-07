@@ -33,6 +33,30 @@ def test_chart_model_accepts_sample_ohlc_data() -> None:
     assert len(ChartDataModel.sample().bars) > 0
 
 
+def test_chart_view_accepts_live_quote_update() -> None:
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.domain.market_data import Quote
+    from trading_ig_assistant.ui.chart_view import ChartView
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    view = ChartView()
+    view.set_live_quote(
+        Quote(
+            epic="EPIC.ONE",
+            bid=2311.9,
+            offer=2313.1,
+            net_change=-38.7,
+            percent_change=-1.64,
+            market_state="TRADEABLE",
+        )
+    )
+
+    assert "2311.9" in view.bid_label.text()
+    assert "2313.1" in view.offer_label.text()
+
+
 def test_account_status_widget_accepts_account_data(qtbot=None) -> None:
     from PyQt5 import QtWidgets
 
