@@ -166,9 +166,38 @@ class IGRestAdapter:
             try:
                 self._request("DELETE", "/session", version="1", include_session=True)
             except IGAPIError as exc:
-                if "invalid-security-token" not in str(exc):
+                if not is_invalid_security_token_error(exc):
                     raise
         self._session = None
+
+    def switch_account(self, account_id: str, *, set_default: bool = False) -> IGSession:
+        """Switch the active IG account for subsequent read-only calls.
+
+        IG may return a new security token when changing account context. Preserve and reuse it
+        immediately so later requests do not keep using a stale token.
+        """
+
+        if self._session is None:
+            raise IGAPIError("IG REST session is not authenticated.")
+        response = self._request(
+            "PUT",
+            "/session",
+            version="1",
+            json_body={"accountId": account_id, "defaultAccount": set_default},
+            include_session=True,
+        )
+        cst = _case_insensitive_header(response.headers, "CST") or self._session.cst
+        security_token = (
+            _case_insensitive_header(response.headers, "X-SECURITY-TOKEN")
+            or self._session.security_token
+        )
+        self._session = IGSession(
+            cst=cst,
+            security_token=security_token,
+            current_account_id=account_id,
+            lightstreamer_endpoint=self._session.lightstreamer_endpoint,
+        )
+        return self._session
 
     def get_accounts(self) -> list[Account]:
         response = self._request("GET", "/accounts", version="1")
@@ -293,6 +322,15 @@ def _case_insensitive_header(headers: dict[str, str], name: str) -> str | None:
         if key.lower() == name.lower():
             return value
     return None
+
+
+def is_invalid_security_token_error(error: Exception | str) -> bool:
+    message = str(error).lower()
+    return (
+        "invalid-security-token" in message
+        or "client-token-invalid" in message
+        or "invalid security token" in message
+    )
 
 
 def _optional_float(value: Any) -> float | None:

@@ -7,6 +7,7 @@ import sys
 from PyQt5 import QtCore, QtWidgets
 
 from trading_ig_assistant.adapters.credentials import build_default_credential_store
+from trading_ig_assistant.adapters.ig_rest import IGAPIError, is_invalid_security_token_error
 from trading_ig_assistant.app.config import (
     AppConfig,
     IGConnectionProfileConfig,
@@ -71,20 +72,39 @@ class ProductDiscoveryWorker(QtCore.QObject):
     def run(self) -> None:
         from trading_ig_assistant.adapters.ig_rest import IGRestAdapter
 
-        adapter = IGRestAdapter(environment=self._request.environment, read_only=True)
         try:
-            credentials = _credentials_from_request(self._request)
-            adapter.login(credentials)
-            service = ProductDiscoveryService(adapter)
-            results = [service.discover_all_products()]
-            self.succeeded.emit(results)
-        except Exception as exc:
-            self.failed.emit(str(exc))
+            last_error: Exception | None = None
+            for attempt in range(2):
+                adapter = IGRestAdapter(environment=self._request.environment, read_only=True)
+                try:
+                    credentials = _credentials_from_request(self._request)
+                    adapter.login(credentials)
+                    if self._request.selected_account_id:
+                        adapter.switch_account(self._request.selected_account_id)
+                    service = ProductDiscoveryService(adapter)
+                    results = [service.discover_all_products()]
+                    if _results_contain_invalid_security_token(results):
+                        raise IGAPIError(
+                            "invalid-security-token: IG rejected the discovery session token."
+                        )
+                    self.succeeded.emit(results)
+                    return
+                except Exception as exc:
+                    last_error = exc
+                    if attempt == 0 and is_invalid_security_token_error(exc):
+                        continue
+                    self.failed.emit(str(exc))
+                    return
+                finally:
+                    try:
+                        adapter.logout()
+                    except IGAPIError as exc:
+                        if not is_invalid_security_token_error(exc):
+                            last_error = exc
+            if last_error is not None:
+                self.failed.emit(str(last_error))
         finally:
-            try:
-                adapter.logout()
-            finally:
-                self.finished.emit()
+            self.finished.emit()
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -202,6 +222,7 @@ class MainWindow(QtWidgets.QMainWindow):
             username=credentials.username,
             password=credentials.password.reveal(),
             api_key=credentials.api_key.reveal(),
+            selected_account_id=profile.selected_account_id,
         )
 
     @QtCore.pyqtSlot()
@@ -396,6 +417,12 @@ def humanize_ig_error(message: str) -> str:
             "Too many failed IG login attempts. Wait before retrying and verify demo/live "
             "identifier, password, and API key."
         )
+    if "invalid-security-token" in message or "client-token-invalid" in message:
+        return (
+            "IG rejected the session security token. The app retried once automatically. "
+            "If it persists, disconnect/reconnect and verify that the selected account belongs "
+            "to the selected live/demo environment."
+        )
     return message
 
 
@@ -413,3 +440,11 @@ def _resolve_account_id(
         if account.preferred:
             return account.account_id
     return accounts[0].account_id if accounts else None
+
+
+def _results_contain_invalid_security_token(results: list[ProductDiscoveryResult]) -> bool:
+    return any(
+        is_invalid_security_token_error(error.message)
+        for result in results
+        for error in result.errors
+    )

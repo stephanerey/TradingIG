@@ -30,6 +30,13 @@ class FakeAccountAdapter:
             )
         ]
 
+    def switch_account(self, account_id: str, *, set_default: bool = False) -> IGSession:
+        return IGSession(
+            cst="fake-cst",
+            security_token="fake-token-switched",
+            current_account_id=account_id,
+        )
+
     def logout(self) -> None:
         self.logged_out = True
 
@@ -53,6 +60,23 @@ def test_connection_service_fetches_accounts_and_logs_out() -> None:
     assert adapter.logged_out is True
     assert adapter.credentials is not None
     assert "fake-password" not in repr(adapter.credentials)
+
+
+def test_connection_service_switches_to_selected_account() -> None:
+    adapter = FakeAccountAdapter()
+    service = IGConnectionService(adapter_factory=lambda _environment: adapter)
+
+    result = service.validate_read_only_connection(
+        IGConnectionRequest(
+            environment=IGEnvironment.DEMO,
+            username="demo-user",
+            password="fake-password",
+            api_key="fake-api-key",
+            selected_account_id="ACC123",
+        )
+    )
+
+    assert result.current_account_id == "ACC123"
 
 
 def test_connection_service_rejects_email_identifier_before_http() -> None:

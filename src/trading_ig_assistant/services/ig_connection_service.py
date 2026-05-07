@@ -20,6 +20,9 @@ class IGAccountAdapter(Protocol):
     def get_accounts(self) -> list[Account]:
         """Fetch accounts for the authenticated session."""
 
+    def switch_account(self, account_id: str, *, set_default: bool = False) -> IGSession:
+        """Switch active account context without placing any order."""
+
     def logout(self) -> None:
         """Close the authenticated session."""
 
@@ -30,6 +33,7 @@ class IGConnectionRequest:
     username: str
     password: str
     api_key: str
+    selected_account_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +71,8 @@ class IGConnectionService:
         try:
             session = adapter.login(credentials)
             accounts = adapter.get_accounts()
+            if _account_exists(accounts, request.selected_account_id):
+                session = adapter.switch_account(request.selected_account_id or "")
             return IGConnectionResult(
                 environment=request.environment,
                 current_account_id=session.current_account_id,
@@ -78,3 +84,9 @@ class IGConnectionService:
     @staticmethod
     def _default_adapter_factory(environment: IGEnvironment) -> IGAccountAdapter:
         return IGRestAdapter(environment=environment, read_only=True)
+
+
+def _account_exists(accounts: list[Account], account_id: str | None) -> bool:
+    if not account_id:
+        return False
+    return any(account.account_id == account_id for account in accounts)

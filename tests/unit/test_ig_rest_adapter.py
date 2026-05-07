@@ -29,6 +29,12 @@ class FakeHttpClient:
                 headers={"CST": "fake-cst", "X-SECURITY-TOKEN": "fake-security-token"},
                 body={"currentAccountId": "SANITIZED_ACCOUNT", "lightstreamerEndpoint": "demo"},
             )
+        if url.endswith("/session") and method == "PUT":
+            return HttpResponse(
+                status_code=200,
+                headers={"X-SECURITY-TOKEN": "fake-switched-security-token"},
+                body={},
+            )
         if url.endswith("/session") and method == "DELETE":
             return HttpResponse(status_code=200, headers={}, body={})
         if url.endswith("/accounts"):
@@ -119,6 +125,20 @@ def test_order_execution_methods_are_hard_blocked_in_p00() -> None:
         adapter.close_position("deal-id", {})
     with pytest.raises(LiveTradingDisabledError):
         adapter.create_working_order({})
+
+
+def test_switch_account_reuses_new_security_token() -> None:
+    http_client = FakeHttpClient()
+    adapter = IGRestAdapter(environment=IGEnvironment.DEMO, http_client=http_client)
+    adapter.login(IGCredentials("demo-user", "fake-password", "fake-api-key"))
+
+    session = adapter.switch_account("BARRIER_ACCOUNT")
+    adapter.get_accounts()
+
+    assert session.current_account_id == "BARRIER_ACCOUNT"
+    account_request = http_client.requests[-1]
+    assert account_request["headers"]["X-SECURITY-TOKEN"] == "fake-switched-security-token"
+    assert account_request["headers"]["CST"] == "fake-cst"
 
 
 def test_logout_ignores_invalid_security_token() -> None:
