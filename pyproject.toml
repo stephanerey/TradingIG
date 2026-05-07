@@ -7,7 +7,7 @@ name = "trading-ig-assistant"
 version = "0.1.0"
 description = "Safe MVP skeleton for an assisted IG trading desktop application."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 authors = [{ name = "Stephane Rey" }]
 dependencies = [
   "keyring>=25",
