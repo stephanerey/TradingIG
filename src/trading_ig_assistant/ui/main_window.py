@@ -159,4 +159,16 @@ def humanize_ig_error(message: str) -> str:
         return "IG authentication timed out. Retry once, then verify environment and credentials."
     if "invalid-details" in message:
         return "Invalid API identifier/password for the selected IG environment."
+    if "client-suspended" in message:
+        return (
+            "IG reports this API client is suspended. Stop retrying for now, verify that you can "
+            "log in to the IG web platform with the same demo API credentials, check whether IG "
+            "requires agreements/KYC/API activation, then contact IG support if the account "
+            "remains blocked."
+        )
+    if "too-many-failed-attempts" in message:
+        return (
+            "Too many failed IG login attempts. Wait before retrying and verify demo/live "
+            "identifier, password, and API key."
+        )
     return message
