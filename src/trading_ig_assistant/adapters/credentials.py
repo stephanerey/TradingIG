@@ -108,6 +108,11 @@ class KeyringCredentialStore:
     def load_profile(self, profile_key: str, username: str) -> IGCredentials | None:
         password = self._keyring.get_password(self._service_name, f"{profile_key}:password")
         api_key = self._keyring.get_password(self._service_name, f"{profile_key}:api_key")
+        if (not password or not api_key) and username:
+            legacy_password = self._keyring.get_password(self._service_name, f"{username}:password")
+            legacy_api_key = self._keyring.get_password(self._service_name, f"{username}:api_key")
+            password = password or legacy_password
+            api_key = api_key or legacy_api_key
         if not password or not api_key:
             return None
         return IGCredentials(username=username, password=password, api_key=api_key)
@@ -125,16 +130,17 @@ class KeyringCredentialStore:
         )
 
     def save_profile(self, profile_key: str, credentials: IGCredentials) -> None:
-        self._keyring.set_password(
-            self._service_name,
-            f"{profile_key}:password",
-            credentials.password.reveal(),
-        )
-        self._keyring.set_password(
-            self._service_name,
-            f"{profile_key}:api_key",
-            credentials.api_key.reveal(),
-        )
+        for key in {profile_key, credentials.username}:
+            self._keyring.set_password(
+                self._service_name,
+                f"{key}:password",
+                credentials.password.reveal(),
+            )
+            self._keyring.set_password(
+                self._service_name,
+                f"{key}:api_key",
+                credentials.api_key.reveal(),
+            )
 
     def delete(self, username: str) -> None:
         for suffix in ("password", "api_key"):
@@ -170,8 +176,9 @@ class WindowsCredentialStore:
         return IGCredentials(username=username, password=password, api_key=api_key)
 
     def save_profile(self, profile_key: str, credentials: IGCredentials) -> None:
-        self._write_secret(f"{profile_key}:password", credentials.password.reveal())
-        self._write_secret(f"{profile_key}:api_key", credentials.api_key.reveal())
+        for key in {profile_key, credentials.username}:
+            self._write_secret(f"{key}:password", credentials.password.reveal())
+            self._write_secret(f"{key}:api_key", credentials.api_key.reveal())
 
     def delete(self, username: str) -> None:
         self._delete_secret(f"{username}:password")
