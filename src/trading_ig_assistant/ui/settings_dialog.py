@@ -135,12 +135,13 @@ class ConnectionProfileWidget(QtWidgets.QGroupBox):
         self.api_key_field.setEchoMode(QtWidgets.QLineEdit.Password)
         self.api_key_field.setPlaceholderText("Leave blank to keep stored API key")
         self.selected_account_id = QtWidgets.QLineEdit(profile.selected_account_id or "")
-        self.selected_account_id.setPlaceholderText("Filled after account selection")
+        self.selected_account_id.setReadOnly(True)
+        self.selected_account_id.setPlaceholderText("Updated from the top account dropdown")
 
         form.addRow("API identifier", self.identifier)
         form.addRow("Password", self.password_field)
         form.addRow("API key", self.api_key_field)
-        form.addRow("Selected account ID", self.selected_account_id)
+        form.addRow("Last selected account", self.selected_account_id)
 
     def profile_config(self) -> IGConnectionProfileConfig:
         return IGConnectionProfileConfig(

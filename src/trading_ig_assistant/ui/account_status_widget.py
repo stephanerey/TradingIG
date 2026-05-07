@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PyQt5 import QtCore, QtWidgets
+from PyQt5 import QtCore, QtGui, QtWidgets
 
 from trading_ig_assistant.app.config import IGEnvironment
 from trading_ig_assistant.domain.instruments import Account
@@ -97,16 +97,25 @@ class AccountStatusRibbonWidget(QtWidgets.QWidget):
         self._environment = combo.currentData()
 
     def _build_connection_toggle(self) -> QtWidgets.QPushButton:
-        button = QtWidgets.QPushButton("■" if self._connected else "▶")
+        button = QtWidgets.QToolButton()
+        icon_type = (
+            QtWidgets.QStyle.SP_MediaStop
+            if self._connected
+            else QtWidgets.QStyle.SP_MediaPlay
+        )
+        button.setIcon(self.style().standardIcon(icon_type))
+        button.setIconSize(QtCore.QSize(20, 20))
         button.setToolTip("Disconnect" if self._connected else "Connect")
-        button.setFixedSize(28, 28)
+        button.setFixedSize(34, 34)
         button.clicked.connect(self._toggle_connection)
         return button
 
     def _build_settings_button(self) -> QtWidgets.QPushButton:
-        button = QtWidgets.QPushButton("⚙")
+        button = QtWidgets.QToolButton()
+        button.setIcon(_settings_icon())
+        button.setIconSize(QtCore.QSize(21, 21))
         button.setToolTip("Settings")
-        button.setFixedSize(28, 28)
+        button.setFixedSize(34, 34)
         button.clicked.connect(self.settings_requested.emit)
         return button
 
@@ -165,3 +174,25 @@ def _money(value: float | None, currency: str | None) -> str:
         return "unknown"
     suffix = f" {currency}" if currency else ""
     return f"{value:,.2f}{suffix}"
+
+
+def _settings_icon() -> QtGui.QIcon:
+    pixmap = QtGui.QPixmap(24, 24)
+    pixmap.fill(QtCore.Qt.transparent)
+    painter = QtGui.QPainter(pixmap)
+    painter.setRenderHint(QtGui.QPainter.Antialiasing)
+    pen = QtGui.QPen(QtGui.QColor("#203040"), 2)
+    painter.setPen(pen)
+    painter.setBrush(QtGui.QBrush(QtGui.QColor("#e9f0f7")))
+
+    center = QtCore.QPointF(12, 12)
+    for angle in range(0, 360, 45):
+        line = QtCore.QLineF(center, QtCore.QPointF(12, 3))
+        line.setAngle(angle)
+        painter.drawLine(line.pointAt(0.68), line.pointAt(1.0))
+
+    painter.drawEllipse(QtCore.QPointF(12, 12), 6.5, 6.5)
+    painter.setBrush(QtGui.QBrush(QtGui.QColor("#203040")))
+    painter.drawEllipse(QtCore.QPointF(12, 12), 2.2, 2.2)
+    painter.end()
+    return QtGui.QIcon(pixmap)

@@ -59,3 +59,17 @@ def test_account_status_widget_accepts_account_data(qtbot=None) -> None:
     )
 
     assert widget is not None
+
+
+def test_resolve_account_id_prefers_last_selected_account() -> None:
+    from trading_ig_assistant.domain.instruments import Account
+    from trading_ig_assistant.ui.main_window import _resolve_account_id
+
+    accounts = [
+        Account(account_id="CFD", account_name="CFD", preferred=True),
+        Account(account_id="BARRIER", account_name="Barrier"),
+    ]
+
+    assert _resolve_account_id(accounts, "BARRIER", "CFD") == "BARRIER"
+    assert _resolve_account_id(accounts, "MISSING", "CFD") == "CFD"
+    assert _resolve_account_id(accounts, "MISSING", "OTHER") == "CFD"

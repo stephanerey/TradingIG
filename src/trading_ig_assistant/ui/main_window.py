@@ -15,6 +15,7 @@ from trading_ig_assistant.app.config import (
     load_config,
     save_config,
 )
+from trading_ig_assistant.domain.instruments import Account
 from trading_ig_assistant.services.ig_connection_service import (
     IGConnectionRequest,
     IGConnectionResult,
@@ -184,12 +185,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(object)
     def _on_connection_success(self, result: IGConnectionResult) -> None:
+        configured_account_id = self._config.connection_profiles[
+            result.environment
+        ].selected_account_id
+        selected_account_id = _resolve_account_id(
+            result.accounts,
+            configured_account_id,
+            result.current_account_id,
+        )
         self.account_status.set_accounts(
             result.accounts,
-            result.current_account_id,
+            selected_account_id,
             result.environment,
         )
-        self._set_profile_account(result.environment, result.current_account_id)
+        self._set_profile_account(result.environment, selected_account_id)
         message = (
             f"Connected to IG {result.environment.value}. "
             f"Accounts fetched: {len(result.accounts)}."
@@ -280,3 +289,19 @@ def humanize_ig_error(message: str) -> str:
             "identifier, password, and API key."
         )
     return message
+
+
+def _resolve_account_id(
+    accounts: list[Account],
+    preferred_account_id: str | None,
+    fallback_account_id: str | None,
+) -> str | None:
+    known_ids = {account.account_id for account in accounts}
+    if preferred_account_id in known_ids:
+        return preferred_account_id
+    if fallback_account_id in known_ids:
+        return fallback_account_id
+    for account in accounts:
+        if account.preferred:
+            return account.account_id
+    return accounts[0].account_id if accounts else None
