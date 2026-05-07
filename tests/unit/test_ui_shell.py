@@ -104,3 +104,6 @@ def test_product_selector_displays_discovery_results() -> None:
 
     assert widget.product_table.rowCount() == 1
     assert widget.product_table.item(0, 1).text() == "US Tech 100"
+
+    widget.filter_box.setText("missing")
+    assert widget.product_table.rowCount() == 0

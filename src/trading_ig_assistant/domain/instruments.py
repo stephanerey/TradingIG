@@ -35,3 +35,17 @@ class MarketDetails:
     epic: str
     instrument_name: str
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
+
+
+@dataclass(frozen=True)
+class MarketNavigationNode:
+    node_id: str
+    name: str
+    raw: dict[str, Any] = field(default_factory=dict, repr=False)
+
+
+@dataclass(frozen=True)
+class MarketNavigation:
+    nodes: list[MarketNavigationNode] = field(default_factory=list)
+    markets: list[MarketSummary] = field(default_factory=list)
+    raw: dict[str, Any] = field(default_factory=dict, repr=False)

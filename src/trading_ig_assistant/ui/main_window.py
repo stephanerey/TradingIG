@@ -63,11 +63,9 @@ class ProductDiscoveryWorker(QtCore.QObject):
     def __init__(
         self,
         request: IGConnectionRequest,
-        search_terms: list[str],
     ) -> None:
         super().__init__()
         self._request = request
-        self._search_terms = search_terms
 
     @QtCore.pyqtSlot()
     def run(self) -> None:
@@ -78,7 +76,7 @@ class ProductDiscoveryWorker(QtCore.QObject):
             credentials = _credentials_from_request(self._request)
             adapter.login(credentials)
             service = ProductDiscoveryService(adapter)
-            results = [service.discover_products(term) for term in self._search_terms]
+            results = [service.discover_all_products()]
             self.succeeded.emit(results)
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -282,7 +280,7 @@ class MainWindow(QtWidgets.QMainWindow):
             0,
         )
         self._discovery_thread = QtCore.QThread(self)
-        self._discovery_worker = ProductDiscoveryWorker(request, list(search_terms))
+        self._discovery_worker = ProductDiscoveryWorker(request)
         self._discovery_worker.moveToThread(self._discovery_thread)
         self._discovery_thread.started.connect(self._discovery_worker.run)
         self._discovery_worker.succeeded.connect(self._on_discovery_success)

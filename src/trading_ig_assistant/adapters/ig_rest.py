@@ -11,7 +11,13 @@ from typing import Any, Protocol
 
 from trading_ig_assistant.adapters.credentials import IGCredentials
 from trading_ig_assistant.app.config import IGEnvironment
-from trading_ig_assistant.domain.instruments import Account, MarketDetails, MarketSummary
+from trading_ig_assistant.domain.instruments import (
+    Account,
+    MarketDetails,
+    MarketNavigation,
+    MarketNavigationNode,
+    MarketSummary,
+)
 from trading_ig_assistant.domain.market_data import PriceSeries
 from trading_ig_assistant.utils.redaction import redact_mapping
 
@@ -187,17 +193,23 @@ class IGRestAdapter:
         encoded_query = urllib.parse.urlencode({"searchTerm": query})
         response = self._request("GET", f"/markets?{encoded_query}", version="1")
         markets = response.body.get("markets", [])
-        return [
-            MarketSummary(
-                epic=str(item.get("epic", "")),
-                instrument_name=str(item.get("instrumentName", "")),
-                instrument_type=item.get("instrumentType"),
-                expiry=item.get("expiry"),
-                market_status=item.get("marketStatus"),
+        return [_market_summary_from_mapping(item) for item in markets]
+
+    def get_market_navigation(self, node_id: str | None = None) -> MarketNavigation:
+        path = "/market-navigation"
+        if node_id:
+            path = f"{path}/{urllib.parse.quote(node_id, safe='')}"
+        response = self._request("GET", path, version="1")
+        nodes = [
+            MarketNavigationNode(
+                node_id=str(item.get("id", "")),
+                name=str(item.get("name", "")),
                 raw=item,
             )
-            for item in markets
+            for item in response.body.get("nodes", [])
         ]
+        markets = [_market_summary_from_mapping(item) for item in response.body.get("markets", [])]
+        return MarketNavigation(nodes=nodes, markets=markets, raw=response.body)
 
     def get_market_details(self, epic: str) -> MarketDetails:
         encoded_epic = urllib.parse.quote(epic, safe="")
@@ -290,3 +302,14 @@ def _optional_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _market_summary_from_mapping(item: dict[str, Any]) -> MarketSummary:
+    return MarketSummary(
+        epic=str(item.get("epic", "")),
+        instrument_name=str(item.get("instrumentName", "")),
+        instrument_type=item.get("instrumentType"),
+        expiry=item.get("expiry"),
+        market_status=item.get("marketStatus"),
+        raw=item,
+    )

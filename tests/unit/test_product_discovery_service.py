@@ -1,6 +1,11 @@
 import json
 
-from trading_ig_assistant.domain.instruments import MarketDetails, MarketSummary
+from trading_ig_assistant.domain.instruments import (
+    MarketDetails,
+    MarketNavigation,
+    MarketNavigationNode,
+    MarketSummary,
+)
 from trading_ig_assistant.domain.products import ProductDirection, ProductType
 from trading_ig_assistant.services.product_discovery_service import (
     ProductDiscoveryService,
@@ -66,6 +71,32 @@ class FakeDiscoveryAdapter:
             },
         )
 
+    def get_market_navigation(self, node_id: str | None = None) -> MarketNavigation:
+        if node_id is None:
+            return MarketNavigation(
+                nodes=[MarketNavigationNode(node_id="indices", name="Indices")],
+                markets=[],
+            )
+        if node_id == "indices":
+            return MarketNavigation(
+                nodes=[],
+                markets=[
+                    MarketSummary(
+                        epic="BARRIER.EPIC",
+                        instrument_name="US Tech 100 Barrier Long",
+                        instrument_type="INDICES",
+                        raw={},
+                    ),
+                    MarketSummary(
+                        epic="OPTION.EPIC",
+                        instrument_name="US Tech 100 Call Option",
+                        instrument_type="OPTION",
+                        raw={},
+                    ),
+                ],
+            )
+        return MarketNavigation()
+
 
 def test_classification_heuristics_identify_barrier_and_option() -> None:
     service = ProductDiscoveryService(FakeDiscoveryAdapter())
@@ -101,3 +132,13 @@ def test_sanitized_report_excludes_sensitive_values(tmp_path) -> None:
     assert "ABCDEF123456" not in report_text
     assert report["schema"] == "trading_ig_assistant.product_discovery.v1"
     assert report["results"][0]["products"][0]["raw"]["summary"]["accountId"] == "AB...56"
+
+
+def test_discover_all_products_uses_market_navigation() -> None:
+    service = ProductDiscoveryService(FakeDiscoveryAdapter())
+
+    result = service.discover_all_products()
+
+    assert result.search_term == "market-navigation"
+    assert result.candidates_count == 2
+    assert {product.epic for product in result.products} == {"BARRIER.EPIC", "OPTION.EPIC"}

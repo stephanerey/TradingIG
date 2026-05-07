@@ -6,10 +6,7 @@ from pathlib import Path
 
 from PyQt5 import QtCore, QtWidgets
 
-from trading_ig_assistant.services.product_discovery_service import (
-    DEFAULT_WATCHLIST_SEARCH_TERMS,
-    ProductDiscoveryResult,
-)
+from trading_ig_assistant.services.product_discovery_service import ProductDiscoveryResult
 
 PRODUCT_COLUMNS = [
     "Search",
@@ -33,26 +30,26 @@ class ProductSelectorWidget(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._results: list[ProductDiscoveryResult] = []
+        self._filter_text = ""
         layout = QtWidgets.QVBoxLayout(self)
 
         title = QtWidgets.QLabel("Product discovery")
         title.setStyleSheet("font-weight: 700; font-size: 15px;")
 
         controls = QtWidgets.QHBoxLayout()
-        self.search_box = QtWidgets.QLineEdit()
-        self.search_box.setPlaceholderText("Optional comma-separated search terms")
-        self.discover_button = QtWidgets.QPushButton("Discover watchlist")
+        self.filter_box = QtWidgets.QLineEdit()
+        self.filter_box.setPlaceholderText("Filter displayed products")
+        self.filter_box.textChanged.connect(self._apply_filter)
+        self.discover_button = QtWidgets.QPushButton("Discover all products")
         self.export_button = QtWidgets.QPushButton("Export report")
         self.export_button.setEnabled(False)
         self.discover_button.clicked.connect(self._emit_discover_requested)
         self.export_button.clicked.connect(self._emit_export_requested)
-        controls.addWidget(self.search_box, stretch=1)
+        controls.addWidget(self.filter_box, stretch=1)
         controls.addWidget(self.discover_button)
         controls.addWidget(self.export_button)
 
-        self.summary_label = QtWidgets.QLabel(
-            "Watchlist: " + ", ".join(DEFAULT_WATCHLIST_SEARCH_TERMS)
-        )
+        self.summary_label = QtWidgets.QLabel("No product discovery run yet.")
         self.summary_label.setWordWrap(True)
 
         self.product_table = QtWidgets.QTableWidget(0, len(PRODUCT_COLUMNS))
@@ -86,14 +83,19 @@ class ProductSelectorWidget(QtWidgets.QWidget):
         self.discover_button.setEnabled(not busy)
         self.export_button.setEnabled(bool(self._results) and not busy)
         if busy:
-            self.summary_label.setText("Discovering IG products in read-only mode...")
+            self.summary_label.setText("Discovering all IG products in read-only mode...")
 
     def set_results(self, results: list[ProductDiscoveryResult]) -> None:
         self._results = list(results)
+        self._render_table()
+        self.export_button.setEnabled(bool(self._results))
+
+    def _render_table(self) -> None:
         rows = [
             (result.search_term, product)
             for result in self._results
             for product in result.products
+            if self._matches_filter(product)
         ]
         self.product_table.setRowCount(len(rows))
         for row_index, (search_term, product) in enumerate(rows):
@@ -115,25 +117,37 @@ class ProductSelectorWidget(QtWidgets.QWidget):
                 self.product_table.setItem(row_index, column_index, item)
         self.product_table.resizeColumnsToContents()
 
+        total_product_count = sum(len(result.products) for result in self._results)
         candidate_count = sum(result.candidates_count for result in self._results)
         error_count = sum(len(result.errors) for result in self._results)
         self.summary_label.setText(
             f"Discovery complete: {candidate_count} candidates, "
-            f"{len(rows)} products, {error_count} errors."
+            f"{total_product_count} products, {len(rows)} displayed, {error_count} errors."
         )
-        self.export_button.setEnabled(bool(self._results))
 
     def results(self) -> list[ProductDiscoveryResult]:
         return list(self._results)
 
-    def search_terms(self) -> list[str]:
-        raw = self.search_box.text().strip()
-        if not raw:
-            return DEFAULT_WATCHLIST_SEARCH_TERMS
-        return [term.strip() for term in raw.split(",") if term.strip()]
-
     def _emit_discover_requested(self) -> None:
-        self.discover_requested.emit(self.search_terms())
+        self.discover_requested.emit(None)
+
+    def _apply_filter(self, text: str) -> None:
+        self._filter_text = text.strip().lower()
+        self._render_table()
+
+    def _matches_filter(self, product: object) -> bool:
+        if not self._filter_text:
+            return True
+        fields = [
+            getattr(product, "name", ""),
+            getattr(product, "epic", ""),
+            getattr(getattr(product, "product_type", ""), "value", ""),
+            getattr(getattr(product, "direction", ""), "value", ""),
+            getattr(product, "expiry", ""),
+            getattr(product, "status", ""),
+            getattr(product, "currency", ""),
+        ]
+        return self._filter_text in " ".join(str(field).lower() for field in fields)
 
     def _emit_export_requested(self) -> None:
         default_path = str(Path.home() / "trading_ig_product_discovery.local.json")

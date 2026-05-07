@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from trading_ig_assistant.domain.instruments import MarketDetails, MarketSummary
+from trading_ig_assistant.domain.instruments import MarketDetails, MarketNavigation, MarketSummary
 from trading_ig_assistant.domain.products import ProductDirection, ProductType, TradableProduct
 from trading_ig_assistant.utils.redaction import REDACTED, is_secret_key, redact_mapping
 
@@ -20,6 +20,9 @@ class ProductDiscoveryAdapter(Protocol):
 
     def get_market_details(self, epic: str) -> MarketDetails:
         """Fetch broker market details."""
+
+    def get_market_navigation(self, node_id: str | None = None) -> MarketNavigation:
+        """Browse broker market navigation."""
 
 
 @dataclass(frozen=True)
@@ -83,6 +86,44 @@ class ProductDiscoveryService:
     ) -> list[ProductDiscoveryResult]:
         terms = search_terms or DEFAULT_WATCHLIST_SEARCH_TERMS
         return [self.discover_products(search_term) for search_term in terms]
+
+    def discover_all_products(self, *, max_nodes: int = 1000) -> ProductDiscoveryResult:
+        errors: list[ProductDiscoveryError] = []
+        products: list[TradableProduct] = []
+        summaries_by_epic: dict[str, MarketSummary] = {}
+        pending_node_ids: list[str | None] = [None]
+        visited_node_ids: set[str] = set()
+
+        while pending_node_ids and len(visited_node_ids) < max_nodes:
+            node_id = pending_node_ids.pop(0)
+            if node_id is not None:
+                if node_id in visited_node_ids:
+                    continue
+                visited_node_ids.add(node_id)
+            try:
+                navigation = self._adapter.get_market_navigation(node_id)
+            except Exception as exc:
+                errors.append(ProductDiscoveryError(epic=node_id, message=str(exc)))
+                continue
+
+            pending_node_ids.extend(node.node_id for node in navigation.nodes if node.node_id)
+            for summary in navigation.markets:
+                if summary.epic:
+                    summaries_by_epic.setdefault(summary.epic, summary)
+
+        for summary in summaries_by_epic.values():
+            try:
+                details = self._adapter.get_market_details(summary.epic)
+                products.append(self.classify_product(summary, details))
+            except Exception as exc:
+                errors.append(ProductDiscoveryError(epic=summary.epic, message=str(exc)))
+
+        return ProductDiscoveryResult(
+            search_term="market-navigation",
+            candidates_count=len(summaries_by_epic),
+            products=products,
+            errors=errors,
+        )
 
     def classify_product(
         self,
