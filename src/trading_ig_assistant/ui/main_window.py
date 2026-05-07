@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import logging
 import sys
+from dataclasses import dataclass
 
 from PyQt5 import QtCore, QtWidgets
 
 from trading_ig_assistant.adapters.credentials import build_default_credential_store
-from trading_ig_assistant.adapters.ig_rest import IGAPIError, is_invalid_security_token_error
+from trading_ig_assistant.adapters.ig_rest import (
+    IGAPIError,
+    IGRestAdapter,
+    is_invalid_security_token_error,
+)
 from trading_ig_assistant.app.config import (
     AppConfig,
     IGConnectionProfileConfig,
@@ -18,11 +23,7 @@ from trading_ig_assistant.app.config import (
     save_config,
 )
 from trading_ig_assistant.domain.instruments import Account
-from trading_ig_assistant.services.ig_connection_service import (
-    IGConnectionRequest,
-    IGConnectionResult,
-    IGConnectionService,
-)
+from trading_ig_assistant.services.ig_connection_service import IGConnectionRequest
 from trading_ig_assistant.services.product_discovery_service import (
     ProductDiscoveryResult,
     ProductDiscoveryService,
@@ -41,21 +42,42 @@ from trading_ig_assistant.utils.redaction import mask_identifier
 LOGGER = logging.getLogger(__name__)
 
 
+@dataclass
+class ActiveIGConnection:
+    environment: IGEnvironment
+    current_account_id: str | None
+    accounts: list[Account]
+    adapter: IGRestAdapter
+
+
 class ConnectionWorker(QtCore.QObject):
     succeeded = QtCore.pyqtSignal(object)
     failed = QtCore.pyqtSignal(str)
     finished = QtCore.pyqtSignal()
 
-    def __init__(self, service: IGConnectionService, request: IGConnectionRequest) -> None:
+    def __init__(self, request: IGConnectionRequest) -> None:
         super().__init__()
-        self._service = service
         self._request = request
 
     @QtCore.pyqtSlot()
     def run(self) -> None:
         LOGGER.debug("Connection worker start environment=%s", self._request.environment.value)
+        adapter = IGRestAdapter(environment=self._request.environment, read_only=True)
         try:
-            result = self._service.validate_read_only_connection(self._request)
+            credentials = _credentials_from_request(self._request)
+            session = adapter.login(credentials)
+            accounts = adapter.get_accounts()
+            if self._request.selected_account_id and _account_id_exists(
+                accounts,
+                self._request.selected_account_id,
+            ):
+                session = adapter.switch_account(self._request.selected_account_id)
+            result = ActiveIGConnection(
+                environment=self._request.environment,
+                current_account_id=session.current_account_id,
+                accounts=accounts,
+                adapter=adapter,
+            )
             LOGGER.debug(
                 "Connection worker success environment=%s accounts=%s",
                 result.environment.value,
@@ -63,6 +85,10 @@ class ConnectionWorker(QtCore.QObject):
             )
             self.succeeded.emit(result)
         except Exception as exc:
+            try:
+                adapter.logout()
+            except IGAPIError:
+                pass
             LOGGER.debug(
                 "Connection worker failed environment=%s error=%s",
                 self._request.environment.value,
@@ -84,80 +110,45 @@ class ProductDiscoveryWorker(QtCore.QObject):
 
     def __init__(
         self,
-        request: IGConnectionRequest,
+        adapter: IGRestAdapter,
+        environment: IGEnvironment,
     ) -> None:
         super().__init__()
-        self._request = request
+        self._adapter = adapter
+        self._environment = environment
 
     @QtCore.pyqtSlot()
     def run(self) -> None:
-        from trading_ig_assistant.adapters.ig_rest import IGRestAdapter
-
         try:
-            last_error: Exception | None = None
-            for attempt in range(2):
-                LOGGER.debug(
-                    "Product discovery worker attempt start environment=%s attempt=%s account=%s",
-                    self._request.environment.value,
-                    attempt + 1,
-                    mask_identifier(self._request.selected_account_id),
-                )
-                adapter = IGRestAdapter(environment=self._request.environment, read_only=True)
-                try:
-                    credentials = _credentials_from_request(self._request)
-                    adapter.login(credentials)
-                    if self._request.selected_account_id:
-                        accounts = adapter.get_accounts()
-                        if _account_id_exists(accounts, self._request.selected_account_id):
-                            adapter.switch_account(self._request.selected_account_id)
-                        else:
-                            LOGGER.debug(
-                                "Product discovery selected account not found environment=%s "
-                                "account=%s account_count=%s",
-                                self._request.environment.value,
-                                mask_identifier(self._request.selected_account_id),
-                                len(accounts),
-                            )
-                    service = ProductDiscoveryService(adapter)
-                    results = [service.discover_all_products(max_details=0)]
-                    if _results_contain_invalid_security_token(results):
-                        raise IGAPIError(
-                            "invalid-security-token: IG rejected the discovery session token."
-                        )
-                    LOGGER.debug(
-                        "Product discovery worker success environment=%s attempt=%s products=%s",
-                        self._request.environment.value,
-                        attempt + 1,
-                        sum(len(result.products) for result in results),
-                    )
-                    self.succeeded.emit(results)
-                    return
-                except Exception as exc:
-                    last_error = exc
-                    LOGGER.debug(
-                        "Product discovery worker attempt failed environment=%s attempt=%s "
-                        "retryable=%s error=%s",
-                        self._request.environment.value,
-                        attempt + 1,
-                        is_invalid_security_token_error(exc),
-                        exc,
-                    )
-                    if attempt == 0 and is_invalid_security_token_error(exc):
-                        continue
-                    self.failed.emit(str(exc))
-                    return
-                finally:
-                    try:
-                        adapter.logout()
-                    except IGAPIError as exc:
-                        if not is_invalid_security_token_error(exc):
-                            last_error = exc
-            if last_error is not None:
-                self.failed.emit(str(last_error))
+            LOGGER.debug(
+                "Product discovery worker start environment=%s active_account=%s",
+                self._environment.value,
+                mask_identifier(
+                    self._adapter.session.current_account_id if self._adapter.session else None
+                ),
+            )
+            service = ProductDiscoveryService(self._adapter)
+            results = [service.discover_all_products(max_details=0)]
+            if _results_contain_invalid_security_token(results):
+                raise IGAPIError("invalid-security-token: IG rejected the discovery session token.")
+            LOGGER.debug(
+                "Product discovery worker success environment=%s products=%s",
+                self._environment.value,
+                sum(len(result.products) for result in results),
+            )
+            self.succeeded.emit(results)
+        except Exception as exc:
+            LOGGER.debug(
+                "Product discovery worker failed environment=%s retryable=%s error=%s",
+                self._environment.value,
+                is_invalid_security_token_error(exc),
+                exc,
+            )
+            self.failed.emit(str(exc))
         finally:
             LOGGER.debug(
                 "Product discovery worker finished environment=%s",
-                self._request.environment.value,
+                self._environment.value,
             )
             self.finished.emit()
 
@@ -171,7 +162,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._config_path = default_config_path()
         self._config = load_config(self._config_path)
         self._credential_store = self._build_credential_store()
-        self._connection_service = IGConnectionService()
+        self._active_connection: ActiveIGConnection | None = None
         self._connection_thread: QtCore.QThread | None = None
         self._connection_worker: ConnectionWorker | None = None
         self._discovery_thread: QtCore.QThread | None = None
@@ -305,8 +296,12 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._connection_thread is not None:
             self.statusBar().showMessage("Connection is busy; wait before disconnecting.", 5000)
             return
+        if self._discovery_thread is not None:
+            self.statusBar().showMessage("Discovery is running; wait before disconnecting.", 5000)
+            return
+        self._logout_active_connection()
         self.account_status.set_disconnected()
-        self.statusBar().showMessage("Disconnected locally. No IG session is kept open.", 5000)
+        self.statusBar().showMessage("Disconnected from IG.", 5000)
 
     @QtCore.pyqtSlot(object)
     def _connect_read_only(self, request: IGConnectionRequest) -> None:
@@ -314,12 +309,14 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._connection_thread is not None:
             LOGGER.debug("Connect read-only ignored because worker is already running")
             return
+        if self._active_connection is not None:
+            self._logout_active_connection()
         self.statusBar().showMessage(
             f"Connecting to IG {request.environment.value} in read-only mode...",
             0,
         )
         self._connection_thread = QtCore.QThread(self)
-        self._connection_worker = ConnectionWorker(self._connection_service, request)
+        self._connection_worker = ConnectionWorker(request)
         self._connection_worker.moveToThread(self._connection_thread)
         self._connection_thread.started.connect(self._connection_worker.run)
         self._connection_worker.succeeded.connect(self._on_connection_success)
@@ -331,7 +328,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._connection_thread.start()
 
     @QtCore.pyqtSlot(object)
-    def _on_connection_success(self, result: IGConnectionResult) -> None:
+    def _on_connection_success(self, result: ActiveIGConnection) -> None:
         LOGGER.debug(
             "Connection success environment=%s accounts=%s current_account=%s",
             result.environment.value,
@@ -350,8 +347,10 @@ class MainWindow(QtWidgets.QMainWindow):
             result.accounts,
             selected_account_id,
             result.environment,
-            connected=False,
+            connected=True,
         )
+        self._active_connection = result
+        self._active_connection.current_account_id = selected_account_id
         self._set_profile_account(result.environment, selected_account_id)
         message = (
             f"Connected to IG {result.environment.value}. "
@@ -378,16 +377,19 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._discovery_thread is not None:
             LOGGER.debug("Product discovery ignored because worker is already running")
             return
-        request = self._build_request_for_environment(self._config.environment)
-        if request is None:
+        if self._active_connection is None or self._active_connection.adapter.session is None:
+            self.statusBar().showMessage("Connect to IG before running product discovery.", 7000)
             return
         self.product_selector.set_busy(True)
         self.statusBar().showMessage(
-            f"Discovering products on IG {request.environment.value}...",
+            f"Discovering products on IG {self._active_connection.environment.value}...",
             0,
         )
         self._discovery_thread = QtCore.QThread(self)
-        self._discovery_worker = ProductDiscoveryWorker(request)
+        self._discovery_worker = ProductDiscoveryWorker(
+            self._active_connection.adapter,
+            self._active_connection.environment,
+        )
         self._discovery_worker.moveToThread(self._discovery_thread)
         self._discovery_thread.started.connect(self._discovery_worker.run)
         self._discovery_worker.succeeded.connect(self._on_discovery_success)
@@ -433,8 +435,31 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(object)
     def _select_account(self, account_id: object) -> None:
-        LOGGER.debug("Account selected account=%s", mask_identifier(str(account_id or "")))
-        self._set_profile_account(self._config.environment, str(account_id) if account_id else None)
+        selected_account_id = str(account_id) if account_id else None
+        LOGGER.debug("Account selected account=%s", mask_identifier(selected_account_id))
+        if selected_account_id:
+            self._switch_active_account(selected_account_id)
+        self._set_profile_account(self._config.environment, selected_account_id)
+
+    def _switch_active_account(self, account_id: str) -> None:
+        if self._active_connection is None:
+            return
+        if self._active_connection.current_account_id == account_id:
+            return
+        try:
+            session = self._active_connection.adapter.switch_account(account_id)
+            self._active_connection.current_account_id = session.current_account_id
+            LOGGER.debug("Active IG account switched account=%s", mask_identifier(account_id))
+        except IGAPIError as exc:
+            LOGGER.debug(
+                "Active IG account switch failed account=%s error=%s",
+                mask_identifier(account_id),
+                exc,
+            )
+            self.statusBar().showMessage(
+                f"Account switch failed: {humanize_ig_error(str(exc))}",
+                10000,
+            )
 
     def _set_profile_account(self, environment: IGEnvironment, account_id: str | None) -> None:
         profile = self._config.connection_profiles[environment]
@@ -449,6 +474,21 @@ class MainWindow(QtWidgets.QMainWindow):
             environment.value,
             mask_identifier(account_id),
         )
+
+    def _logout_active_connection(self) -> None:
+        if self._active_connection is None:
+            return
+        LOGGER.debug(
+            "Active IG logout start environment=%s account=%s",
+            self._active_connection.environment.value,
+            mask_identifier(self._active_connection.current_account_id),
+        )
+        try:
+            self._active_connection.adapter.logout()
+        except IGAPIError as exc:
+            LOGGER.debug("Active IG logout failed ignored error=%s", exc)
+        self._active_connection = None
+        LOGGER.debug("Active IG logout complete")
 
     @QtCore.pyqtSlot()
     def _show_help(self) -> None:
@@ -466,6 +506,10 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot()
     def _show_about(self) -> None:
         AboutDialog(self).exec()
+
+    def closeEvent(self, event: QtCore.QEvent) -> None:
+        self._logout_active_connection()
+        super().closeEvent(event)
 
 
 def run_gui() -> int:
@@ -527,9 +571,8 @@ def humanize_ig_error(message: str) -> str:
         )
     if "invalid-security-token" in message or "client-token-invalid" in message:
         return (
-            "IG rejected the session security token. The app retried once automatically. "
-            "If it persists, disconnect/reconnect and verify that the selected account belongs "
-            "to the selected live/demo environment."
+            "IG rejected the session security token. Disconnect/reconnect and verify that the "
+            "selected account belongs to the selected live/demo environment."
         )
     return message
 
