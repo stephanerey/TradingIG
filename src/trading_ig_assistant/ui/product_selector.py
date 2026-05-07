@@ -6,20 +6,40 @@ from pathlib import Path
 
 from PyQt5 import QtCore, QtWidgets
 
+from trading_ig_assistant.domain.products import AssetClass, ProductType, TradableProduct
 from trading_ig_assistant.services.product_discovery_service import ProductDiscoveryResult
 
 PRODUCT_COLUMNS = [
-    "Search",
     "Name",
+    "Vente",
+    "Achat",
+    "Variation",
+    "% Variation",
+    "Direction",
     "Epic",
     "Type",
-    "Direction",
     "Expiry",
     "Status",
     "Currency",
-    "Min",
     "KO",
     "Strike",
+]
+
+PRODUCT_TYPE_TABS: list[tuple[str, str]] = [
+    ("all", "Tous"),
+    (ProductType.BARRIER.value, "Barrières"),
+    (ProductType.OPTION.value, "Options"),
+    ("other", "Autres"),
+]
+
+ASSET_CLASS_TABS: list[tuple[str, str]] = [
+    ("all", "Tous"),
+    (AssetClass.INDICES.value, "Indices"),
+    (AssetClass.FOREX.value, "Forex"),
+    (AssetClass.COMMODITIES.value, "Matières premières"),
+    (AssetClass.CRYPTO.value, "Crypto-monnaies"),
+    (AssetClass.SHARES.value, "Actions"),
+    (AssetClass.OTHER.value, "Autres"),
 ]
 
 
@@ -31,6 +51,7 @@ class ProductSelectorWidget(QtWidgets.QWidget):
         super().__init__(parent)
         self._results: list[ProductDiscoveryResult] = []
         self._filter_text = ""
+        self._tables: dict[tuple[str, str], QtWidgets.QTableWidget] = {}
         layout = QtWidgets.QVBoxLayout(self)
 
         title = QtWidgets.QLabel("Product discovery")
@@ -52,11 +73,8 @@ class ProductSelectorWidget(QtWidgets.QWidget):
         self.summary_label = QtWidgets.QLabel("No product discovery run yet.")
         self.summary_label.setWordWrap(True)
 
-        self.product_table = QtWidgets.QTableWidget(0, len(PRODUCT_COLUMNS))
-        self.product_table.setHorizontalHeaderLabels(PRODUCT_COLUMNS)
-        self.product_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        self.product_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
-        self.product_table.horizontalHeader().setStretchLastSection(True)
+        self.product_tabs = QtWidgets.QTabWidget()
+        self.product_table = self._build_product_tabs()
 
         ticket_title = QtWidgets.QLabel("Ticket placeholder")
         ticket_title.setStyleSheet("font-weight: 700; font-size: 15px; margin-top: 12px;")
@@ -74,7 +92,7 @@ class ProductSelectorWidget(QtWidgets.QWidget):
         layout.addWidget(title)
         layout.addLayout(controls)
         layout.addWidget(self.summary_label)
-        layout.addWidget(self.product_table, stretch=1)
+        layout.addWidget(self.product_tabs, stretch=1)
         layout.addWidget(ticket_title)
         layout.addWidget(self.ticket_summary)
         layout.addWidget(self.trade_button)
@@ -93,38 +111,27 @@ class ProductSelectorWidget(QtWidgets.QWidget):
         self.export_button.setEnabled(bool(self._results))
 
     def _render_table(self) -> None:
-        rows = [
+        all_rows = [
             (result.search_term, product)
             for result in self._results
             for product in result.products
             if self._matches_filter(product)
         ]
-        self.product_table.setRowCount(len(rows))
-        for row_index, (search_term, product) in enumerate(rows):
-            values = [
-                search_term,
-                product.name,
-                product.epic,
-                product.product_type.value,
-                product.direction.value,
-                product.expiry or "",
-                product.status or "",
-                product.currency or "",
-                _format_number(product.min_size),
-                _format_number(product.ko_level),
-                _format_number(product.strike),
+        for (product_type_filter, asset_class_filter), table in self._tables.items():
+            rows = [
+                row
+                for row in all_rows
+                if _matches_product_type(row[1], product_type_filter)
+                and _matches_asset_class(row[1], asset_class_filter)
             ]
-            for column_index, value in enumerate(values):
-                item = QtWidgets.QTableWidgetItem(value)
-                self.product_table.setItem(row_index, column_index, item)
-        self.product_table.resizeColumnsToContents()
+            self._fill_table(table, rows)
 
         total_product_count = sum(len(result.products) for result in self._results)
         candidate_count = sum(result.candidates_count for result in self._results)
         error_count = sum(len(result.errors) for result in self._results)
         self.summary_label.setText(
             f"Discovery complete: {candidate_count} candidates, "
-            f"{total_product_count} products, {len(rows)} displayed, {error_count} errors. "
+            f"{total_product_count} products, {len(all_rows)} displayed, {error_count} errors. "
             "If market navigation is unavailable, search fallback is used. Detailed EPIC metadata "
             "is not bulk-fetched to avoid IG token rejection."
         )
@@ -150,8 +157,57 @@ class ProductSelectorWidget(QtWidgets.QWidget):
             getattr(product, "expiry", ""),
             getattr(product, "status", ""),
             getattr(product, "currency", ""),
+            getattr(getattr(product, "asset_class", ""), "value", ""),
+            getattr(product, "bid", ""),
+            getattr(product, "offer", ""),
+            getattr(product, "net_change", ""),
+            getattr(product, "percent_change", ""),
         ]
         return self._filter_text in " ".join(str(field).lower() for field in fields)
+
+    def _build_product_tabs(self) -> QtWidgets.QTableWidget:
+        first_table: QtWidgets.QTableWidget | None = None
+        for product_type_key, product_type_label in PRODUCT_TYPE_TABS:
+            asset_tabs = QtWidgets.QTabWidget()
+            for asset_key, asset_label in ASSET_CLASS_TABS:
+                table = _create_product_table()
+                self._tables[(product_type_key, asset_key)] = table
+                if first_table is None:
+                    first_table = table
+                asset_tabs.addTab(table, asset_label)
+            self.product_tabs.addTab(asset_tabs, product_type_label)
+        if first_table is None:
+            raise RuntimeError("Product table initialization failed.")
+        return first_table
+
+    def _fill_table(
+        self,
+        table: QtWidgets.QTableWidget,
+        rows: list[tuple[str, TradableProduct]],
+    ) -> None:
+        table.setRowCount(len(rows))
+        for row_index, (_search_term, product) in enumerate(rows):
+            values = [
+                product.name,
+                _format_number(product.bid),
+                _format_number(product.offer),
+                _format_signed_number(product.net_change),
+                _format_signed_number(product.percent_change),
+                product.direction.value,
+                product.epic,
+                product.product_type.value,
+                product.expiry or "",
+                product.status or "",
+                product.currency or "",
+                _format_number(product.ko_level),
+                _format_number(product.strike),
+            ]
+            for column_index, value in enumerate(values):
+                item = QtWidgets.QTableWidgetItem(value)
+                if column_index in {1, 2, 3, 4, 11, 12}:
+                    item.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+                table.setItem(row_index, column_index, item)
+        table.resizeColumnsToContents()
 
     def _emit_export_requested(self) -> None:
         default_path = str(Path.home() / "trading_ig_product_discovery.local.json")
@@ -169,3 +225,32 @@ def _format_number(value: float | None) -> str:
     if value is None:
         return ""
     return f"{value:g}"
+
+
+def _format_signed_number(value: float | None) -> str:
+    if value is None:
+        return ""
+    return f"{value:g}"
+
+
+def _create_product_table() -> QtWidgets.QTableWidget:
+    table = QtWidgets.QTableWidget(0, len(PRODUCT_COLUMNS))
+    table.setHorizontalHeaderLabels(PRODUCT_COLUMNS)
+    table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+    table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+    table.horizontalHeader().setStretchLastSection(True)
+    return table
+
+
+def _matches_product_type(product: TradableProduct, product_type_filter: str) -> bool:
+    if product_type_filter == "all":
+        return True
+    if product_type_filter == "other":
+        return product.product_type not in {ProductType.BARRIER, ProductType.OPTION}
+    return product.product_type.value == product_type_filter
+
+
+def _matches_asset_class(product: TradableProduct, asset_class_filter: str) -> bool:
+    if asset_class_filter == "all":
+        return True
+    return product.asset_class.value == asset_class_filter

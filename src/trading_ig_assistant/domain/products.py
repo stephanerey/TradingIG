@@ -22,6 +22,15 @@ class ProductDirection(StrEnum):
     UNKNOWN = "unknown"
 
 
+class AssetClass(StrEnum):
+    INDICES = "indices"
+    FOREX = "forex"
+    COMMODITIES = "commodities"
+    CRYPTO = "crypto"
+    SHARES = "shares"
+    OTHER = "other"
+
+
 @dataclass(frozen=True)
 class TradableProduct:
     epic: str
@@ -37,6 +46,11 @@ class TradableProduct:
     status: str | None = None
     ko_level: float | None = None
     strike: float | None = None
+    asset_class: AssetClass = AssetClass.OTHER
+    bid: float | None = None
+    offer: float | None = None
+    net_change: float | None = None
+    percent_change: float | None = None
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
@@ -54,5 +68,10 @@ class TradableProduct:
             "status": self.status,
             "ko_level": self.ko_level,
             "strike": self.strike,
+            "asset_class": self.asset_class.value,
+            "bid": self.bid,
+            "offer": self.offer,
+            "net_change": self.net_change,
+            "percent_change": self.percent_change,
             "raw": self.raw,
         }

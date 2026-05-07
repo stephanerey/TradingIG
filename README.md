@@ -121,6 +121,9 @@ In the Settings tab:
   and can export a sanitized JSON report. It does not bulk-fetch details for every EPIC because IG
   can reject long read-only scans with an invalid security token. If IG returns no market
   navigation for the active account, the GUI falls back to conservative read-only market searches.
+- Product discovery results are grouped in GUI tabs by product family and asset class. Bid/offer
+  and variation columns are displayed when the IG search payload provides them; true real-time
+  updates are not implemented yet.
 - The product text field is a local filter on displayed results; it does not change the IG API
   discovery query.
 - Product classification is heuristic and conservative.

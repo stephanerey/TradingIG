@@ -26,7 +26,14 @@ class FakeDiscoveryAdapter:
                     instrument_type="INDICES",
                     expiry="DFB",
                     market_status="TRADEABLE",
-                    raw={"epic": "BARRIER.EPIC", "accountId": "ABCDEF123456"},
+                    raw={
+                        "epic": "BARRIER.EPIC",
+                        "accountId": "ABCDEF123456",
+                        "bid": 100.5,
+                        "offer": 101.0,
+                        "netChange": -1.5,
+                        "percentageChange": -0.3,
+                    },
                 ),
                 MarketSummary(
                     epic="OPTION.EPIC",
@@ -121,6 +128,11 @@ def test_classification_heuristics_identify_barrier_and_option() -> None:
     assert barrier.direction == ProductDirection.BUY
     assert barrier.ko_level == 18000.0
     assert barrier.min_size == 0.5
+    assert barrier.asset_class.value == "indices"
+    assert barrier.bid == 100.5
+    assert barrier.offer == 101.0
+    assert barrier.net_change == -1.5
+    assert barrier.percent_change == -0.3
 
     option = result.products[1]
     assert option.product_type == ProductType.OPTION

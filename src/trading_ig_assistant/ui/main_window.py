@@ -212,10 +212,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.product_selector.discover_requested.connect(self._discover_products)
         self.product_selector.export_requested.connect(self._export_discovery_report)
         right_tabs.addTab(self.product_selector, "Products / Ticket")
-        right_tabs.setMinimumWidth(360)
+        right_tabs.setMinimumWidth(760)
         body.addWidget(right_tabs)
-        body.setStretchFactor(0, 4)
-        body.setStretchFactor(1, 1)
+        body.setStretchFactor(0, 1)
+        body.setStretchFactor(1, 3)
 
         root_layout.addWidget(body, stretch=1)
         self.setCentralWidget(root)

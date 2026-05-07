@@ -9,19 +9,103 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from trading_ig_assistant.domain.instruments import MarketDetails, MarketNavigation, MarketSummary
-from trading_ig_assistant.domain.products import ProductDirection, ProductType, TradableProduct
+from trading_ig_assistant.domain.products import (
+    AssetClass,
+    ProductDirection,
+    ProductType,
+    TradableProduct,
+)
 from trading_ig_assistant.utils.redaction import REDACTED, is_secret_key, redact_mapping
 
 DEFAULT_WATCHLIST_SEARCH_TERMS = ["US Tech 100", "France 40", "Germany 40", "Gold"]
 DEFAULT_DISCOVERY_FALLBACK_SEARCH_TERMS = [
     "US Tech 100",
+    "US 500",
     "Wall Street",
-    "France 40",
     "Germany 40",
-    "Gold",
+    "France 40",
+    "FTSE 100",
+    "Japan 225",
     "EUR/USD",
     "GBP/USD",
+    "USD/JPY",
+    "EUR/GBP",
+    "Gold",
+    "Silver",
     "Crude",
+    "Oil",
+    "Bitcoin",
+    "Ethereum",
+    "Carrefour",
+    "Verallia",
+    "Capgemini",
+    "Cap Gemini",
+    "L'Oreal",
+    "LVMH",
+    "Air Liquide",
+    "TotalEnergies",
+    "Sanofi",
+    "Schneider",
+    "Dassault",
+    "EssilorLuxottica",
+    "Edenred",
+    "Eramet",
+    "Eutelsat",
+    "Forvia",
+    "Nexans",
+    "Orange",
+    "Renault",
+    "Stellantis",
+    "Thales",
+    "Vinci",
+    "Bouygues",
+    "AXA",
+    "BNP Paribas",
+    "Credit Agricole",
+    "Societe Generale",
+    "Hermes",
+    "Kering",
+    "Publicis",
+    "Saint Gobain",
+    "Pernod Ricard",
+    "Danone",
+    "Michelin",
+    "Safran",
+    "Engie",
+    "Veolia",
+    "Vivendi",
+    "Worldline",
+    "Alstom",
+    "Teleperformance",
+    "Accor",
+    "Sodexo",
+    "Ubisoft",
+    "Ipsen",
+    "Arkema",
+    "Bureau Veritas",
+    "Eiffage",
+    "Eurofins",
+    "Legrand",
+    "Sartorius",
+    "Sopra Steria",
+    "Valeo",
+    "AstraZeneca",
+    "Barclays",
+    "BP",
+    "HSBC",
+    "Rio Tinto",
+    "Shell",
+    "Unilever",
+    "Vodafone",
+    "Apple",
+    "Microsoft",
+    "Nvidia",
+    "Tesla",
+    "Amazon",
+    "Meta",
+    "Alphabet",
+    "Netflix",
+    "Wall Street",
     "Barrier",
     "Option",
 ]
@@ -264,7 +348,9 @@ class ProductDiscoveryService:
         )
         product_type = _classify_product_type(text, summary)
         direction = _classify_direction(text, product_type)
+        asset_class = _classify_asset_class(text, summary)
         details_raw = details.raw if details else {}
+        quote_payload = {"summary": summary.raw, "details": details_raw}
 
         return TradableProduct(
             epic=summary.epic or (details.epic if details else ""),
@@ -298,6 +384,17 @@ class ProductDiscoveryService:
             strike=_first_float(
                 {"summary": summary.raw, "details": details_raw},
                 ["strike", "strikePrice", "exercisePrice"],
+            ),
+            asset_class=asset_class,
+            bid=_first_float(quote_payload, ["bid", "bidPrice", "sell", "sellPrice"]),
+            offer=_first_float(quote_payload, ["offer", "offerPrice", "ask", "buy", "buyPrice"]),
+            net_change=_first_float(
+                quote_payload,
+                ["netChange", "change", "changeNet", "priceChange"],
+            ),
+            percent_change=_first_float(
+                quote_payload,
+                ["percentageChange", "percentChange", "changePct", "changePercent"],
             ),
             raw=raw_payload,
         )
@@ -371,6 +468,29 @@ def _classify_direction(text: str, product_type: ProductType) -> ProductDirectio
         if any(token in padded for token in (" sell ", " bear ", " short ", " down ")):
             return ProductDirection.SELL
     return ProductDirection.UNKNOWN
+
+
+def _classify_asset_class(text: str, summary: MarketSummary) -> AssetClass:
+    instrument_type = (summary.instrument_type or "").upper()
+    if instrument_type in {"CURRENCIES", "FOREX", "FX"}:
+        return AssetClass.FOREX
+    if instrument_type in {"COMMODITIES"}:
+        return AssetClass.COMMODITIES
+    if instrument_type in {"SHARES", "EQUITIES"}:
+        return AssetClass.SHARES
+    if instrument_type in {"INDICES", "BINARY"}:
+        return AssetClass.INDICES
+    if any(token in text for token in (" crypto", "bitcoin", "ethereum", "ether", "btc", "eth")):
+        return AssetClass.CRYPTO
+    if any(token in text for token in ("eur/usd", "gbp/usd", "usd/jpy", "eur/gbp", "forex")):
+        return AssetClass.FOREX
+    if any(token in text for token in ("gold", "silver", "oil", "crude", "copper", "commodity")):
+        return AssetClass.COMMODITIES
+    if any(token in text for token in ("share", " sa ", " plc ", " corp", " inc", "ltd")):
+        return AssetClass.SHARES
+    if any(token in text for token in ("index", "indice", "indices", "tech 100", "wall street")):
+        return AssetClass.INDICES
+    return AssetClass.OTHER
 
 
 def _flatten_text(values: list[Any]) -> str:
