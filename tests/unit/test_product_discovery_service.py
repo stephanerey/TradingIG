@@ -14,6 +14,9 @@ from trading_ig_assistant.services.product_discovery_service import (
 
 
 class FakeDiscoveryAdapter:
+    def __init__(self) -> None:
+        self.detail_calls: list[str] = []
+
     def search_markets(self, query: str) -> list[MarketSummary]:
         if query == "US Tech 100":
             return [
@@ -42,6 +45,7 @@ class FakeDiscoveryAdapter:
         return []
 
     def get_market_details(self, epic: str) -> MarketDetails:
+        self.detail_calls.append(epic)
         if epic == "BROKEN.EPIC":
             raise RuntimeError("details unavailable")
         if epic == "BARRIER.EPIC":
@@ -135,10 +139,12 @@ def test_sanitized_report_excludes_sensitive_values(tmp_path) -> None:
 
 
 def test_discover_all_products_uses_market_navigation() -> None:
-    service = ProductDiscoveryService(FakeDiscoveryAdapter())
+    adapter = FakeDiscoveryAdapter()
+    service = ProductDiscoveryService(adapter)
 
     result = service.discover_all_products()
 
     assert result.search_term == "market-navigation"
     assert result.candidates_count == 2
     assert {product.epic for product in result.products} == {"BARRIER.EPIC", "OPTION.EPIC"}
+    assert adapter.detail_calls == []

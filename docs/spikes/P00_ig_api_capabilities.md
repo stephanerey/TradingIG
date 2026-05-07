@@ -160,6 +160,9 @@ The P01 extractor looks for the following fields, but IG payload shape must be c
   JSON report for local analysis.
 - Confirm whether `/market-navigation` exposes the full relevant product universe for the selected
   account, or whether watchlists/search remain necessary complements.
+- Avoid bulk-calling `/markets/{epic}` for every discovered product during manual tests; IG may
+  reject long read-only scans with an invalid security token. Fetch detailed EPIC metadata later in
+  targeted batches.
 - Inspect whether Barrier/Option products are found for each watchlist instrument.
 - Compare market summary versus market details payload shape.
 - Confirm which fields identify KO level, strike, expiry, direction, min size, currency, and status.

@@ -113,8 +113,9 @@ In the Settings tab:
 
 - Read-only product discovery service and CLI are available.
 - GUI product discovery is available from the `Products / Ticket` panel. It uses the selected
-  stored live/demo profile, browses the IG market navigation tree, fetches read-only market
-  details, displays results in a table, and can export a sanitized JSON report.
+  stored live/demo profile, browses the IG market navigation tree, displays products in a table,
+  and can export a sanitized JSON report. It does not bulk-fetch details for every EPIC because IG
+  can reject long read-only scans with an invalid security token.
 - The product text field is a local filter on displayed results; it does not change the IG API
   discovery query.
 - Product classification is heuristic and conservative.

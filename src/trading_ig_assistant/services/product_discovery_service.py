@@ -87,7 +87,18 @@ class ProductDiscoveryService:
         terms = search_terms or DEFAULT_WATCHLIST_SEARCH_TERMS
         return [self.discover_products(search_term) for search_term in terms]
 
-    def discover_all_products(self, *, max_nodes: int = 1000) -> ProductDiscoveryResult:
+    def discover_all_products(
+        self,
+        *,
+        max_nodes: int = 1000,
+        max_details: int = 0,
+    ) -> ProductDiscoveryResult:
+        """Discover products through IG market navigation.
+
+        By default this intentionally does not fetch details for every EPIC. A full detail scan
+        creates a large burst of `/markets/{epic}` calls and IG may reject the session token.
+        """
+
         errors: list[ProductDiscoveryError] = []
         products: list[TradableProduct] = []
         summaries_by_epic: dict[str, MarketSummary] = {}
@@ -111,12 +122,14 @@ class ProductDiscoveryService:
                 if summary.epic:
                     summaries_by_epic.setdefault(summary.epic, summary)
 
-        for summary in summaries_by_epic.values():
-            try:
-                details = self._adapter.get_market_details(summary.epic)
-                products.append(self.classify_product(summary, details))
-            except Exception as exc:
-                errors.append(ProductDiscoveryError(epic=summary.epic, message=str(exc)))
+        for index, summary in enumerate(summaries_by_epic.values()):
+            details = None
+            if max_details > 0 and index < max_details:
+                try:
+                    details = self._adapter.get_market_details(summary.epic)
+                except Exception as exc:
+                    errors.append(ProductDiscoveryError(epic=summary.epic, message=str(exc)))
+            products.append(self.classify_product(summary, details))
 
         return ProductDiscoveryResult(
             search_term="market-navigation",

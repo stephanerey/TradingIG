@@ -82,7 +82,7 @@ class ProductDiscoveryWorker(QtCore.QObject):
                     if self._request.selected_account_id:
                         adapter.switch_account(self._request.selected_account_id)
                     service = ProductDiscoveryService(adapter)
-                    results = [service.discover_all_products()]
+                    results = [service.discover_all_products(max_details=0)]
                     if _results_contain_invalid_security_token(results):
                         raise IGAPIError(
                             "invalid-security-token: IG rejected the discovery session token."
@@ -443,8 +443,10 @@ def _resolve_account_id(
 
 
 def _results_contain_invalid_security_token(results: list[ProductDiscoveryResult]) -> bool:
-    return any(
+    has_token_error = any(
         is_invalid_security_token_error(error.message)
         for result in results
         for error in result.errors
     )
+    has_products = any(result.products for result in results)
+    return has_token_error and not has_products
