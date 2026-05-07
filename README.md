@@ -86,6 +86,12 @@ Launch the minimal P01 GUI:
 trading-ig-assistant gui
 ```
 
+Direct execution also launches the GUI, which is convenient from an IDE run configuration:
+
+```powershell
+python .\src\trading_ig_assistant\main.py
+```
+
 The GUI includes a main window, menu bar, macro context ribbon placeholder, candlestick chart
 placeholder, product/ticket placeholder panel, and settings placeholder. It does not call IG
 directly and it cannot place trades.
