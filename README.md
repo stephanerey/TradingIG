@@ -124,6 +124,9 @@ In the Settings tab:
 - Product discovery results are grouped in GUI tabs by product family and asset class. Bid/offer
   and variation columns are displayed when the IG search payload provides them; true real-time
   updates are not implemented yet. Use `Tradeable only` to hide offline instruments.
+- The search fallback uses curated seeds aligned with the current IG tabs, including common crypto
+  barrier underlyings such as Bitcoin, Ether, Solana, Chainlink, Polkadot, Uniswap, Avalanche,
+  Dogecoin, Litecoin, Ripple, and Stellar.
 - The product text field is a local filter on displayed results; it does not change the IG API
   discovery query.
 - Product classification is heuristic and conservative.

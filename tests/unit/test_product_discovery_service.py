@@ -9,6 +9,8 @@ from trading_ig_assistant.domain.instruments import (
 )
 from trading_ig_assistant.domain.products import ProductDirection, ProductType
 from trading_ig_assistant.services.product_discovery_service import (
+    CRYPTO_DISCOVERY_SEEDS,
+    DEFAULT_DISCOVERY_FALLBACK_SEARCH_TERMS,
     ProductDiscoveryService,
     write_discovery_report,
 )
@@ -220,3 +222,24 @@ def test_discover_all_products_falls_back_to_search_when_navigation_unavailable(
     }
     assert adapter.detail_calls == []
     assert len(result.errors) == 2
+
+
+def test_crypto_discovery_seeds_cover_ig_crypto_barrier_tab() -> None:
+    expected = {
+        "Bitcoin",
+        "Ether",
+        "Solana",
+        "Chainlink",
+        "Polkadot",
+        "Uniswap",
+        "Avalanche",
+        "Dogecoin",
+        "Litecoin",
+        "Ripple",
+        "Stellar",
+    }
+
+    assert expected.issubset(set(CRYPTO_DISCOVERY_SEEDS))
+    assert len(DEFAULT_DISCOVERY_FALLBACK_SEARCH_TERMS) == len(
+        set(DEFAULT_DISCOVERY_FALLBACK_SEARCH_TERMS)
+    )

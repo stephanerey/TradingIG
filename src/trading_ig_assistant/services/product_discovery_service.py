@@ -23,7 +23,7 @@ from trading_ig_assistant.domain.products import (
 from trading_ig_assistant.utils.redaction import REDACTED, is_secret_key, redact_mapping
 
 DEFAULT_WATCHLIST_SEARCH_TERMS = ["US Tech 100", "France 40", "Germany 40", "Gold"]
-DEFAULT_DISCOVERY_FALLBACK_SEARCH_TERMS = [
+INDEX_DISCOVERY_SEEDS = [
     "US Tech 100",
     "US 500",
     "Wall Street",
@@ -31,16 +31,35 @@ DEFAULT_DISCOVERY_FALLBACK_SEARCH_TERMS = [
     "France 40",
     "FTSE 100",
     "Japan 225",
+]
+FOREX_DISCOVERY_SEEDS = [
     "EUR/USD",
     "GBP/USD",
     "USD/JPY",
     "EUR/GBP",
+]
+COMMODITY_DISCOVERY_SEEDS = [
     "Gold",
     "Silver",
     "Crude",
     "Oil",
+]
+CRYPTO_DISCOVERY_SEEDS = [
     "Bitcoin",
+    "Bitcoin Cash",
+    "Ether",
     "Ethereum",
+    "Solana",
+    "Chainlink",
+    "Polkadot",
+    "Uniswap",
+    "Avalanche",
+    "Dogecoin",
+    "Litecoin",
+    "Ripple",
+    "Stellar",
+]
+SHARE_DISCOVERY_SEEDS = [
     "Carrefour",
     "Verallia",
     "Capgemini",
@@ -110,10 +129,25 @@ DEFAULT_DISCOVERY_FALLBACK_SEARCH_TERMS = [
     "Meta",
     "Alphabet",
     "Netflix",
-    "Wall Street",
+]
+PRODUCT_DISCOVERY_SEEDS = [
     "Barrier",
+    "Barrière",
+    "Barrières",
     "Option",
 ]
+DEFAULT_DISCOVERY_FALLBACK_SEARCH_TERMS = list(
+    dict.fromkeys(
+        [
+            *INDEX_DISCOVERY_SEEDS,
+            *FOREX_DISCOVERY_SEEDS,
+            *COMMODITY_DISCOVERY_SEEDS,
+            *CRYPTO_DISCOVERY_SEEDS,
+            *SHARE_DISCOVERY_SEEDS,
+            *PRODUCT_DISCOVERY_SEEDS,
+        ]
+    )
+)
 LOGGER = logging.getLogger(__name__)
 
 
