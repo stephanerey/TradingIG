@@ -107,7 +107,17 @@ class ProductDiscoveryWorker(QtCore.QObject):
                     credentials = _credentials_from_request(self._request)
                     adapter.login(credentials)
                     if self._request.selected_account_id:
-                        adapter.switch_account(self._request.selected_account_id)
+                        accounts = adapter.get_accounts()
+                        if _account_id_exists(accounts, self._request.selected_account_id):
+                            adapter.switch_account(self._request.selected_account_id)
+                        else:
+                            LOGGER.debug(
+                                "Product discovery selected account not found environment=%s "
+                                "account=%s account_count=%s",
+                                self._request.environment.value,
+                                mask_identifier(self._request.selected_account_id),
+                                len(accounts),
+                            )
                     service = ProductDiscoveryService(adapter)
                     results = [service.discover_all_products(max_details=0)]
                     if _results_contain_invalid_security_token(results):
@@ -548,3 +558,7 @@ def _results_contain_invalid_security_token(results: list[ProductDiscoveryResult
     )
     has_products = any(result.products for result in results)
     return has_token_error and not has_products
+
+
+def _account_id_exists(accounts: list[Account], account_id: str) -> bool:
+    return any(account.account_id == account_id for account in accounts)

@@ -12,6 +12,7 @@ DEFAULT_SECRET_KEYS = frozenset(
         "api_key",
         "apikey",
         "api-key",
+        "x-ig-api-key",
         "password",
         "passwd",
         "secret",
