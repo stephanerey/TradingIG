@@ -88,6 +88,19 @@ def test_account_status_widget_accepts_account_data(qtbot=None) -> None:
     assert widget is not None
 
 
+def test_account_status_widget_displays_auth_lockout() -> None:
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.ui.account_status_widget import AccountStatusRibbonWidget
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    widget = AccountStatusRibbonWidget()
+    widget.set_auth_locked("IG authentication locked: too many failed attempts.")
+
+    assert "too many failed attempts" in widget.layout().itemAt(3).widget().text().lower()
+
+
 def test_resolve_account_id_prefers_last_selected_account() -> None:
     from trading_ig_assistant.domain.instruments import Account
     from trading_ig_assistant.ui.main_window import _resolve_account_id

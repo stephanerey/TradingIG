@@ -18,3 +18,10 @@ def test_humanize_ig_error_for_client_suspended() -> None:
 
     assert "client is suspended" in message
     assert "Stop retrying" in message
+
+
+def test_humanize_ig_error_for_too_many_failed_attempts() -> None:
+    message = humanize_ig_error("{'errorCode': 'error.security.too-many-failed-attempts'}")
+
+    assert "too many failed login attempts" in message.lower()
+    assert "wait" in message.lower()

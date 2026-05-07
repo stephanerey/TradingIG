@@ -171,6 +171,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._connection_worker: ConnectionWorker | None = None
         self._discovery_thread: QtCore.QThread | None = None
         self._discovery_worker: ProductDiscoveryWorker | None = None
+        self._auth_locked_out = False
         self._selected_product: TradableProduct | None = None
         self._streaming_adapter: IGStreamingAdapter | None = None
         self._streaming_bridge = StreamingEventBridge()
@@ -253,6 +254,13 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(object)
     def _connect_environment(self, environment: IGEnvironment) -> None:
         LOGGER.debug("Connect requested environment=%s", environment.value)
+        if self._auth_locked_out:
+            self.statusBar().showMessage(
+                "IG authentication is temporarily locked after too many failed attempts. "
+                "Wait before retrying.",
+                12000,
+            )
+            return
         request = self._build_request_for_environment(environment)
         if request is None:
             return
@@ -344,6 +352,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(object)
     def _on_connection_success(self, result: ActiveIGConnection) -> None:
+        self._auth_locked_out = False
+        self.account_status.clear_auth_locked()
         LOGGER.debug(
             "Connection success environment=%s accounts=%s current_account=%s",
             result.environment.value,
@@ -381,6 +391,12 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(str)
     def _on_connection_failure(self, message: str) -> None:
         LOGGER.debug("Connection failure message=%s", message)
+        if "too-many-failed-attempts" in message:
+            self._auth_locked_out = True
+            self.account_status.set_auth_locked(
+                "IG authentication locked: too many failed attempts. "
+                "Wait before trying again."
+            )
         self.statusBar().showMessage(f"Connection failed: {humanize_ig_error(message)}", 12000)
 
     @QtCore.pyqtSlot()
@@ -657,8 +673,8 @@ def humanize_ig_error(message: str) -> str:
         )
     if "too-many-failed-attempts" in message:
         return (
-            "Too many failed IG login attempts. Wait before retrying and verify demo/live "
-            "identifier, password, and API key."
+            "IG reports too many failed login attempts. Stop retrying and wait for the lock "
+            "to clear before trying again."
         )
     if "invalid-security-token" in message or "client-token-invalid" in message:
         return (

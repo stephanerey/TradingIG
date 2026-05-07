@@ -20,6 +20,8 @@ class AccountStatusRibbonWidget(QtWidgets.QWidget):
         self._accounts: list[Account] = []
         self._current_account_id: str | None = None
         self._connected = False
+        self._auth_locked = False
+        self._auth_lock_message = ""
         self._environment = IGEnvironment.LIVE
         self._layout = QtWidgets.QHBoxLayout(self)
         self._layout.setContentsMargins(8, 4, 8, 6)
@@ -46,12 +48,27 @@ class AccountStatusRibbonWidget(QtWidgets.QWidget):
         self._connected = False
         self._render()
 
+    def set_auth_locked(self, message: str) -> None:
+        self._auth_locked = True
+        self._auth_lock_message = message
+        self._render()
+
+    def clear_auth_locked(self) -> None:
+        self._auth_locked = False
+        self._auth_lock_message = ""
+        self._render()
+
     def _render(self) -> None:
         self._clear()
 
         self._layout.addWidget(self._build_environment_dropdown())
         self._layout.addWidget(self._build_connection_toggle())
         self._layout.addWidget(self._build_settings_button())
+
+        if self._auth_locked:
+            self._layout.addWidget(self._build_plain_label(self._auth_lock_message))
+            self._layout.addStretch(1)
+            return
 
         if not self._accounts:
             self._layout.addWidget(self._build_plain_label("IG account: not connected"))
@@ -100,6 +117,8 @@ class AccountStatusRibbonWidget(QtWidgets.QWidget):
 
     def _build_connection_toggle(self) -> QtWidgets.QPushButton:
         button = QtWidgets.QToolButton()
+        if self._auth_locked:
+            button.setEnabled(False)
         icon_type = (
             QtWidgets.QStyle.SP_MediaStop
             if self._connected
@@ -117,6 +136,8 @@ class AccountStatusRibbonWidget(QtWidgets.QWidget):
         button.setIcon(_settings_icon())
         button.setIconSize(QtCore.QSize(21, 21))
         button.setToolTip("Settings")
+        if self._auth_locked:
+            button.setEnabled(False)
         button.setFixedSize(34, 34)
         button.clicked.connect(self.settings_requested.emit)
         return button
