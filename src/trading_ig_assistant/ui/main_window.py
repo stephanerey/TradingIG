@@ -20,6 +20,7 @@ from trading_ig_assistant.services.ig_connection_service import (
     IGConnectionResult,
     IGConnectionService,
 )
+from trading_ig_assistant.ui.about_dialog import AboutDialog
 from trading_ig_assistant.ui.account_status_widget import AccountStatusRibbonWidget
 from trading_ig_assistant.ui.chart_view import ChartView
 from trading_ig_assistant.ui.macro_ribbon_widget import MacroRibbonWidget
@@ -73,17 +74,24 @@ class MainWindow(QtWidgets.QMainWindow):
         disabled_action = tools_menu.addAction("Live trading disabled")
         disabled_action.setEnabled(False)
 
+        help_menu = self.menuBar().addMenu("&Help")
+        help_action = help_menu.addAction("Help")
+        help_action.triggered.connect(self._show_help)
+        about_action = help_menu.addAction("About TradingIG")
+        about_action.triggered.connect(self._show_about)
+
     def _build_layout(self) -> None:
         root = QtWidgets.QWidget()
         root_layout = QtWidgets.QVBoxLayout(root)
         root_layout.setContentsMargins(0, 0, 0, 0)
 
-        root_layout.addWidget(MacroRibbonWidget())
         self.account_status = AccountStatusRibbonWidget()
         self.account_status.connect_requested.connect(self._connect_environment)
+        self.account_status.disconnect_requested.connect(self._disconnect)
         self.account_status.settings_requested.connect(self._open_settings)
         self.account_status.account_selected.connect(self._select_account)
         root_layout.addWidget(self.account_status)
+        root_layout.addWidget(MacroRibbonWidget())
 
         body = QtWidgets.QSplitter()
         body.setOrientation(QtCore.Qt.Horizontal)
@@ -146,6 +154,14 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         )
 
+    @QtCore.pyqtSlot()
+    def _disconnect(self) -> None:
+        if self._connection_thread is not None:
+            self.statusBar().showMessage("Connection is busy; wait before disconnecting.", 5000)
+            return
+        self.account_status.set_disconnected()
+        self.statusBar().showMessage("Disconnected locally. No IG session is kept open.", 5000)
+
     @QtCore.pyqtSlot(object)
     def _connect_read_only(self, request: IGConnectionRequest) -> None:
         if self._connection_thread is not None:
@@ -168,7 +184,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(object)
     def _on_connection_success(self, result: IGConnectionResult) -> None:
-        self.account_status.set_accounts(result.accounts, result.current_account_id)
+        self.account_status.set_accounts(
+            result.accounts,
+            result.current_account_id,
+            result.environment,
+        )
         self._set_profile_account(result.environment, result.current_account_id)
         message = (
             f"Connected to IG {result.environment.value}. "
@@ -200,6 +220,18 @@ class MainWindow(QtWidgets.QMainWindow):
             selected_account_id=account_id,
         )
         save_config(self._config, self._config_path)
+
+    @QtCore.pyqtSlot()
+    def _show_help(self) -> None:
+        QtWidgets.QMessageBox.information(
+            self,
+            "TradingIG Help",
+            "Help content will be loaded from a Markdown file in a future update.",
+        )
+
+    @QtCore.pyqtSlot()
+    def _show_about(self) -> None:
+        AboutDialog(self).exec()
 
 
 def run_gui() -> int:

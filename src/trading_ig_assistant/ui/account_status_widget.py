@@ -11,6 +11,7 @@ from trading_ig_assistant.utils.redaction import mask_identifier
 
 class AccountStatusRibbonWidget(QtWidgets.QWidget):
     connect_requested = QtCore.pyqtSignal(object)
+    disconnect_requested = QtCore.pyqtSignal()
     settings_requested = QtCore.pyqtSignal()
     account_selected = QtCore.pyqtSignal(object)
 
@@ -18,21 +19,36 @@ class AccountStatusRibbonWidget(QtWidgets.QWidget):
         super().__init__(parent)
         self._accounts: list[Account] = []
         self._current_account_id: str | None = None
+        self._connected = False
+        self._environment = IGEnvironment.LIVE
         self._layout = QtWidgets.QHBoxLayout(self)
         self._layout.setContentsMargins(8, 4, 8, 6)
         self._layout.setSpacing(8)
         self._render()
 
-    def set_accounts(self, accounts: list[Account], current_account_id: str | None) -> None:
+    def set_accounts(
+        self,
+        accounts: list[Account],
+        current_account_id: str | None,
+        environment: IGEnvironment,
+    ) -> None:
         self._accounts = list(accounts)
         self._current_account_id = current_account_id
+        self._environment = environment
+        self._connected = True
+        self._render()
+
+    def set_disconnected(self) -> None:
+        self._accounts = []
+        self._current_account_id = None
+        self._connected = False
         self._render()
 
     def _render(self) -> None:
         self._clear()
 
-        self._layout.addWidget(self._build_connect_button("Connect live", IGEnvironment.LIVE))
-        self._layout.addWidget(self._build_connect_button("Connect demo", IGEnvironment.DEMO))
+        self._layout.addWidget(self._build_environment_dropdown())
+        self._layout.addWidget(self._build_connection_toggle())
         self._layout.addWidget(self._build_settings_button())
 
         if not self._accounts:
@@ -68,19 +84,37 @@ class AccountStatusRibbonWidget(QtWidgets.QWidget):
         label.setStyleSheet("QLabel { color: #4f5965; font-weight: 600; }")
         return label
 
-    def _build_connect_button(
-        self,
-        text: str,
-        environment: IGEnvironment,
-    ) -> QtWidgets.QPushButton:
-        button = QtWidgets.QPushButton(text)
-        button.clicked.connect(lambda: self.connect_requested.emit(environment))
+    def _build_environment_dropdown(self) -> QtWidgets.QComboBox:
+        combo = QtWidgets.QComboBox()
+        combo.addItem("live", IGEnvironment.LIVE)
+        combo.addItem("demo", IGEnvironment.DEMO)
+        combo.setCurrentIndex(0 if self._environment == IGEnvironment.LIVE else 1)
+        combo.setMaximumWidth(85)
+        combo.currentIndexChanged.connect(lambda _index: self._set_environment(combo))
+        return combo
+
+    def _set_environment(self, combo: QtWidgets.QComboBox) -> None:
+        self._environment = combo.currentData()
+
+    def _build_connection_toggle(self) -> QtWidgets.QPushButton:
+        button = QtWidgets.QPushButton("■" if self._connected else "▶")
+        button.setToolTip("Disconnect" if self._connected else "Connect")
+        button.setFixedSize(28, 28)
+        button.clicked.connect(self._toggle_connection)
         return button
 
     def _build_settings_button(self) -> QtWidgets.QPushButton:
-        button = QtWidgets.QPushButton("Settings")
+        button = QtWidgets.QPushButton("⚙")
+        button.setToolTip("Settings")
+        button.setFixedSize(28, 28)
         button.clicked.connect(self.settings_requested.emit)
         return button
+
+    def _toggle_connection(self) -> None:
+        if self._connected:
+            self.disconnect_requested.emit()
+        else:
+            self.connect_requested.emit(self._environment)
 
     def _build_account_dropdown(self, current_account_id: str) -> QtWidgets.QComboBox:
         combo = QtWidgets.QComboBox()
