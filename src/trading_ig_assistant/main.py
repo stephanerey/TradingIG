@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -15,6 +14,7 @@ from trading_ig_assistant.services.product_discovery_service import (
     DEFAULT_WATCHLIST_SEARCH_TERMS,
     ProductDiscoveryResult,
     ProductDiscoveryService,
+    write_discovery_report,
 )
 
 
@@ -220,15 +220,6 @@ def print_discovery_results(results: list[ProductDiscoveryResult]) -> None:
             )
         for error in result.errors[:5]:
             print(f"- discovery error epic={error.epic or 'unknown'}: {error.message}")
-
-
-def write_discovery_report(results: list[ProductDiscoveryResult], output_path: Path) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    report = {
-        "schema": "trading_ig_assistant.product_discovery.v1",
-        "results": [result.to_sanitized_dict() for result in results],
-    }
-    output_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

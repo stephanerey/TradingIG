@@ -21,6 +21,11 @@ from trading_ig_assistant.services.ig_connection_service import (
     IGConnectionResult,
     IGConnectionService,
 )
+from trading_ig_assistant.services.product_discovery_service import (
+    ProductDiscoveryResult,
+    ProductDiscoveryService,
+    write_discovery_report,
+)
 from trading_ig_assistant.ui.about_dialog import AboutDialog
 from trading_ig_assistant.ui.account_status_widget import AccountStatusRibbonWidget
 from trading_ig_assistant.ui.chart_view import ChartView
@@ -50,6 +55,40 @@ class ConnectionWorker(QtCore.QObject):
             self.finished.emit()
 
 
+class ProductDiscoveryWorker(QtCore.QObject):
+    succeeded = QtCore.pyqtSignal(object)
+    failed = QtCore.pyqtSignal(str)
+    finished = QtCore.pyqtSignal()
+
+    def __init__(
+        self,
+        request: IGConnectionRequest,
+        search_terms: list[str],
+    ) -> None:
+        super().__init__()
+        self._request = request
+        self._search_terms = search_terms
+
+    @QtCore.pyqtSlot()
+    def run(self) -> None:
+        from trading_ig_assistant.adapters.ig_rest import IGRestAdapter
+
+        adapter = IGRestAdapter(environment=self._request.environment, read_only=True)
+        try:
+            credentials = _credentials_from_request(self._request)
+            adapter.login(credentials)
+            service = ProductDiscoveryService(adapter)
+            results = [service.discover_products(term) for term in self._search_terms]
+            self.succeeded.emit(results)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+        finally:
+            try:
+                adapter.logout()
+            finally:
+                self.finished.emit()
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -61,6 +100,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._connection_service = IGConnectionService()
         self._connection_thread: QtCore.QThread | None = None
         self._connection_worker: ConnectionWorker | None = None
+        self._discovery_thread: QtCore.QThread | None = None
+        self._discovery_worker: ProductDiscoveryWorker | None = None
         self._build_menu()
         self._build_layout()
 
@@ -99,7 +140,10 @@ class MainWindow(QtWidgets.QMainWindow):
         body.addWidget(ChartView())
 
         right_tabs = QtWidgets.QTabWidget()
-        right_tabs.addTab(ProductSelectorWidget(), "Products / Ticket")
+        self.product_selector = ProductSelectorWidget()
+        self.product_selector.discover_requested.connect(self._discover_products)
+        self.product_selector.export_requested.connect(self._export_discovery_report)
+        right_tabs.addTab(self.product_selector, "Products / Ticket")
         right_tabs.setMinimumWidth(360)
         body.addWidget(right_tabs)
         body.setStretchFactor(0, 4)
@@ -126,6 +170,16 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(object)
     def _connect_environment(self, environment: IGEnvironment) -> None:
+        request = self._build_request_for_environment(environment)
+        if request is None:
+            return
+        self._config.environment = environment
+        self._connect_read_only(request)
+
+    def _build_request_for_environment(
+        self,
+        environment: IGEnvironment,
+    ) -> IGConnectionRequest | None:
         profile = self._config.connection_profiles[environment]
         if not profile.identifier:
             self.statusBar().showMessage(
@@ -133,10 +187,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 7000,
             )
             self._open_settings()
-            return
+            return None
         if self._credential_store is None:
             self.statusBar().showMessage("OS keyring credential store is unavailable.", 7000)
-            return
+            return None
         credentials = self._credential_store.load_profile(environment.value, profile.identifier)
         if credentials is None:
             self.statusBar().showMessage(
@@ -144,15 +198,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 7000,
             )
             self._open_settings()
-            return
-        self._config.environment = environment
-        self._connect_read_only(
-            IGConnectionRequest(
-                environment=environment,
-                username=credentials.username,
-                password=credentials.password.reveal(),
-                api_key=credentials.api_key.reveal(),
-            )
+            return None
+        return IGConnectionRequest(
+            environment=environment,
+            username=credentials.username,
+            password=credentials.password.reveal(),
+            api_key=credentials.api_key.reveal(),
         )
 
     @QtCore.pyqtSlot()
@@ -219,6 +270,54 @@ class MainWindow(QtWidgets.QMainWindow):
         self._connection_worker = None
 
     @QtCore.pyqtSlot(object)
+    def _discover_products(self, search_terms: object) -> None:
+        if self._discovery_thread is not None:
+            return
+        request = self._build_request_for_environment(self._config.environment)
+        if request is None:
+            return
+        self.product_selector.set_busy(True)
+        self.statusBar().showMessage(
+            f"Discovering products on IG {request.environment.value}...",
+            0,
+        )
+        self._discovery_thread = QtCore.QThread(self)
+        self._discovery_worker = ProductDiscoveryWorker(request, list(search_terms))
+        self._discovery_worker.moveToThread(self._discovery_thread)
+        self._discovery_thread.started.connect(self._discovery_worker.run)
+        self._discovery_worker.succeeded.connect(self._on_discovery_success)
+        self._discovery_worker.failed.connect(self._on_discovery_failure)
+        self._discovery_worker.finished.connect(self._discovery_thread.quit)
+        self._discovery_worker.finished.connect(self._discovery_worker.deleteLater)
+        self._discovery_thread.finished.connect(self._discovery_thread.deleteLater)
+        self._discovery_thread.finished.connect(self._clear_discovery_worker)
+        self._discovery_thread.start()
+
+    @QtCore.pyqtSlot(object)
+    def _on_discovery_success(self, results: list[ProductDiscoveryResult]) -> None:
+        self.product_selector.set_results(results)
+        product_count = sum(len(result.products) for result in results)
+        self.statusBar().showMessage(f"Product discovery complete: {product_count} products.", 7000)
+
+    @QtCore.pyqtSlot(str)
+    def _on_discovery_failure(self, message: str) -> None:
+        self.statusBar().showMessage(
+            f"Product discovery failed: {humanize_ig_error(message)}",
+            12000,
+        )
+
+    @QtCore.pyqtSlot()
+    def _clear_discovery_worker(self) -> None:
+        self._discovery_thread = None
+        self._discovery_worker = None
+        self.product_selector.set_busy(False)
+
+    @QtCore.pyqtSlot(object)
+    def _export_discovery_report(self, output_path: object) -> None:
+        write_discovery_report(self.product_selector.results(), output_path)
+        self.statusBar().showMessage(f"Sanitized report written to {output_path}", 7000)
+
+    @QtCore.pyqtSlot(object)
     def _select_account(self, account_id: object) -> None:
         self._set_profile_account(self._config.environment, str(account_id) if account_id else None)
 
@@ -249,6 +348,16 @@ def run_gui() -> int:
     window = MainWindow()
     window.show()
     return app.exec()
+
+
+def _credentials_from_request(request: IGConnectionRequest):
+    from trading_ig_assistant.adapters.credentials import IGCredentials
+
+    return IGCredentials(
+        username=request.username,
+        password=request.password,
+        api_key=request.api_key,
+    )
 
 
 def humanize_ig_error(message: str) -> str:

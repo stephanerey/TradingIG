@@ -74,3 +74,33 @@ def test_resolve_account_id_prefers_last_selected_account() -> None:
     assert _resolve_account_id(accounts, "BARRIER", "CFD") == "BARRIER"
     assert _resolve_account_id(accounts, "MISSING", "CFD") == "CFD"
     assert _resolve_account_id(accounts, "MISSING", "OTHER") == "CFD"
+
+
+def test_product_selector_displays_discovery_results() -> None:
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.domain.products import ProductType, TradableProduct
+    from trading_ig_assistant.services.product_discovery_service import ProductDiscoveryResult
+    from trading_ig_assistant.ui.product_selector import ProductSelectorWidget
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    widget = ProductSelectorWidget()
+    widget.set_results(
+        [
+            ProductDiscoveryResult(
+                search_term="US Tech 100",
+                candidates_count=1,
+                products=[
+                    TradableProduct(
+                        epic="EPIC.ONE",
+                        name="US Tech 100",
+                        product_type=ProductType.CASH_OR_DFB,
+                    )
+                ],
+            )
+        ]
+    )
+
+    assert widget.product_table.rowCount() == 1
+    assert widget.product_table.item(0, 1).text() == "US Tech 100"

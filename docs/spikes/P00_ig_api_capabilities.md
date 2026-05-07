@@ -156,6 +156,8 @@ The P01 extractor looks for the following fields, but IG payload shape must be c
 ### Next manual tests needed
 
 - Run `discover-products --watchlist` against IG demo and record sanitized counts.
+- Run GUI product discovery against the working live read-only profile and export the sanitized
+  JSON report for local analysis.
 - Inspect whether Barrier/Option products are found for each watchlist instrument.
 - Compare market summary versus market details payload shape.
 - Confirm which fields identify KO level, strike, expiry, direction, min size, currency, and status.

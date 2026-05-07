@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
 
 from trading_ig_assistant.domain.instruments import MarketDetails, MarketSummary
@@ -160,6 +162,22 @@ def sanitize_payload(payload: Any) -> Any:
     if isinstance(payload, tuple):
         return [sanitize_payload(item) for item in payload]
     return payload
+
+
+def discovery_results_to_report(results: list[ProductDiscoveryResult]) -> dict[str, Any]:
+    return {
+        "schema": "trading_ig_assistant.product_discovery.v1",
+        "results": [result.to_sanitized_dict() for result in results],
+    }
+
+
+def write_discovery_report(results: list[ProductDiscoveryResult], output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    report = discovery_results_to_report(results)
+    output_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _mask_identifier(value: str) -> str:

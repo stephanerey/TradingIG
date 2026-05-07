@@ -112,6 +112,9 @@ In the Settings tab:
 ## P01 status
 
 - Read-only product discovery service and CLI are available.
+- GUI product discovery is available from the `Products / Ticket` panel. It uses the selected
+  stored live/demo profile, runs read-only market search/details calls, displays results in a
+  table, and can export a sanitized JSON report.
 - Product classification is heuristic and conservative.
 - GUI shell and chart foundation are available.
 - IG streaming is not implemented yet.

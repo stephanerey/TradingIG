@@ -2,8 +2,10 @@ import json
 
 from trading_ig_assistant.domain.instruments import MarketDetails, MarketSummary
 from trading_ig_assistant.domain.products import ProductDirection, ProductType
-from trading_ig_assistant.main import write_discovery_report
-from trading_ig_assistant.services.product_discovery_service import ProductDiscoveryService
+from trading_ig_assistant.services.product_discovery_service import (
+    ProductDiscoveryService,
+    write_discovery_report,
+)
 
 
 class FakeDiscoveryAdapter:
