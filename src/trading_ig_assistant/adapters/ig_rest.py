@@ -168,6 +168,11 @@ class IGRestAdapter:
                 account_id=str(item.get("accountId", "")),
                 account_name=str(item.get("accountName", "")),
                 account_type=item.get("accountType"),
+                currency=item.get("currency"),
+                balance=_optional_float(item.get("balance", {}).get("balance")),
+                available=_optional_float(item.get("balance", {}).get("available")),
+                deposit=_optional_float(item.get("balance", {}).get("deposit")),
+                profit_loss=_optional_float(item.get("balance", {}).get("profitLoss")),
                 preferred=bool(item.get("preferred", False)),
                 raw=item,
             )
@@ -272,3 +277,12 @@ def _case_insensitive_header(headers: dict[str, str], name: str) -> str | None:
         if key.lower() == name.lower():
             return value
     return None
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

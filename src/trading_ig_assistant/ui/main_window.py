@@ -12,6 +12,7 @@ from trading_ig_assistant.services.ig_connection_service import (
     IGConnectionResult,
     IGConnectionService,
 )
+from trading_ig_assistant.ui.account_status_widget import AccountStatusRibbonWidget
 from trading_ig_assistant.ui.chart_view import ChartView
 from trading_ig_assistant.ui.macro_ribbon_widget import MacroRibbonWidget
 from trading_ig_assistant.ui.product_selector import ProductSelectorWidget
@@ -65,6 +66,8 @@ class MainWindow(QtWidgets.QMainWindow):
         root_layout.setContentsMargins(0, 0, 0, 0)
 
         root_layout.addWidget(MacroRibbonWidget())
+        self.account_status = AccountStatusRibbonWidget()
+        root_layout.addWidget(self.account_status)
 
         body = QtWidgets.QSplitter()
         body.setOrientation(QtCore.Qt.Horizontal)
@@ -104,6 +107,7 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(object)
     def _on_connection_success(self, result: IGConnectionResult) -> None:
         self.settings_view.set_accounts(result.accounts, result.current_account_id)
+        self.account_status.set_accounts(result.accounts, result.current_account_id)
         self.settings_view.show_connection_success(len(result.accounts))
 
     @QtCore.pyqtSlot(str)

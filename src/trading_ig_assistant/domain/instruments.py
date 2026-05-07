@@ -11,6 +11,11 @@ class Account:
     account_id: str
     account_name: str
     account_type: str | None = None
+    currency: str | None = None
+    balance: float | None = None
+    available: float | None = None
+    deposit: float | None = None
+    profit_loss: float | None = None
     preferred: bool = False
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 

@@ -1,10 +1,12 @@
 def test_gui_modules_import_without_ig_connectivity() -> None:
+    import trading_ig_assistant.ui.account_status_widget as account_status_widget
     import trading_ig_assistant.ui.chart_view as chart_view
     import trading_ig_assistant.ui.macro_ribbon_widget as macro_ribbon_widget
     import trading_ig_assistant.ui.main_window as main_window
     import trading_ig_assistant.ui.product_selector as product_selector
     import trading_ig_assistant.ui.settings_view as settings_view
 
+    assert account_status_widget.AccountStatusRibbonWidget is not None
     assert chart_view.ChartView is not None
     assert macro_ribbon_widget.MacroRibbonWidget is not None
     assert main_window.MainWindow is not None
@@ -25,3 +27,31 @@ def test_chart_model_accepts_sample_ohlc_data() -> None:
 
     assert model.bars == bars
     assert len(ChartDataModel.sample().bars) > 0
+
+
+def test_account_status_widget_accepts_account_data(qtbot=None) -> None:
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.domain.instruments import Account
+    from trading_ig_assistant.ui.account_status_widget import AccountStatusRibbonWidget
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    widget = AccountStatusRibbonWidget()
+    widget.set_accounts(
+        [
+            Account(
+                account_id="ACC123456",
+                account_name="Live CFD",
+                account_type="CFD",
+                currency="EUR",
+                balance=1000.0,
+                available=900.0,
+                deposit=1000.0,
+                profit_loss=-100.0,
+            )
+        ],
+        "ACC123456",
+    )
+
+    assert widget is not None

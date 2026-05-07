@@ -39,6 +39,13 @@ class FakeHttpClient:
                             "accountId": "SANITIZED_ACCOUNT",
                             "accountName": "Demo CFD",
                             "accountType": "CFD",
+                            "currency": "EUR",
+                            "balance": {
+                                "balance": 10000,
+                                "available": 9500.25,
+                                "deposit": 10000,
+                                "profitLoss": -499.75,
+                            },
                             "preferred": True,
                         }
                     ]
@@ -86,6 +93,11 @@ def test_login_and_read_only_calls_use_demo_base_url() -> None:
 
     assert session.current_account_id == "SANITIZED_ACCOUNT"
     assert accounts[0].account_name == "Demo CFD"
+    assert accounts[0].currency == "EUR"
+    assert accounts[0].balance == 10000.0
+    assert accounts[0].available == 9500.25
+    assert accounts[0].deposit == 10000.0
+    assert accounts[0].profit_loss == -499.75
     assert markets[0].instrument_name == "US Tech 100"
     assert details.instrument_name == "US Tech 100"
     assert len(prices.prices) == 1

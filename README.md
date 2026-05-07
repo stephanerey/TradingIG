@@ -102,6 +102,8 @@ In the Settings tab:
 - `Save non-secret settings` writes only safe settings to the local user config file.
 - Password and API key are not saved by this button.
 - Account IDs are displayed masked in the combo box.
+- After a successful read-only connection, the top account ribbon displays the selected account,
+  currency, balance, available funds, deposit, P/L, and account count.
 - For `demo`, use the demo API key and the demo API identifier/password chosen in the IG demo API
   keys page, not the email address of the web account.
 - For `live`, use the live API key and matching live API login identifier/password.

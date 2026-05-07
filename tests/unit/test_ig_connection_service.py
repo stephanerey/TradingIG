@@ -23,6 +23,9 @@ class FakeAccountAdapter:
                 account_id="ACC123",
                 account_name="Demo CFD",
                 account_type="CFD",
+                currency="EUR",
+                balance=1000.0,
+                available=900.0,
                 preferred=True,
             )
         ]
@@ -46,6 +49,7 @@ def test_connection_service_fetches_accounts_and_logs_out() -> None:
 
     assert result.current_account_id == "ACC123"
     assert result.accounts[0].account_name == "Demo CFD"
+    assert result.accounts[0].available == 900.0
     assert adapter.logged_out is True
     assert adapter.credentials is not None
     assert "fake-password" not in repr(adapter.credentials)
