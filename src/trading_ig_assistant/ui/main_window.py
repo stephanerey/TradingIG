@@ -197,6 +197,7 @@ class MainWindow(QtWidgets.QMainWindow):
             result.accounts,
             selected_account_id,
             result.environment,
+            connected=False,
         )
         self._set_profile_account(result.environment, selected_account_id)
         message = (

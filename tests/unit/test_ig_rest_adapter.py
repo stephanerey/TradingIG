@@ -29,6 +29,8 @@ class FakeHttpClient:
                 headers={"CST": "fake-cst", "X-SECURITY-TOKEN": "fake-security-token"},
                 body={"currentAccountId": "SANITIZED_ACCOUNT", "lightstreamerEndpoint": "demo"},
             )
+        if url.endswith("/session") and method == "DELETE":
+            return HttpResponse(status_code=200, headers={}, body={})
         if url.endswith("/accounts"):
             return HttpResponse(
                 status_code=200,
@@ -117,3 +119,28 @@ def test_order_execution_methods_are_hard_blocked_in_p00() -> None:
         adapter.close_position("deal-id", {})
     with pytest.raises(LiveTradingDisabledError):
         adapter.create_working_order({})
+
+
+def test_logout_ignores_invalid_security_token() -> None:
+    class LogoutTokenExpiredClient(FakeHttpClient):
+        def request(self, method, url, *, headers, json_body=None, timeout):
+            if url.endswith("/session") and method == "DELETE":
+                return HttpResponse(
+                    status_code=401,
+                    headers={},
+                    body={"errorCode": "error.security.invalid-security-token"},
+                )
+            return super().request(
+                method,
+                url,
+                headers=headers,
+                json_body=json_body,
+                timeout=timeout,
+            )
+
+    adapter = IGRestAdapter(environment=IGEnvironment.DEMO, http_client=LogoutTokenExpiredClient())
+    adapter.login(IGCredentials("demo-user", "fake-password", "fake-api-key"))
+
+    adapter.logout()
+
+    assert adapter.session is None

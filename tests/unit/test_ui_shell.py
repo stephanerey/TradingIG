@@ -56,6 +56,7 @@ def test_account_status_widget_accepts_account_data(qtbot=None) -> None:
         ],
         "ACC123456",
         IGEnvironment.LIVE,
+        connected=False,
     )
 
     assert widget is not None

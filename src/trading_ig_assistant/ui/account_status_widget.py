@@ -31,11 +31,13 @@ class AccountStatusRibbonWidget(QtWidgets.QWidget):
         accounts: list[Account],
         current_account_id: str | None,
         environment: IGEnvironment,
+        *,
+        connected: bool = False,
     ) -> None:
         self._accounts = list(accounts)
         self._current_account_id = current_account_id
         self._environment = environment
-        self._connected = True
+        self._connected = connected
         self._render()
 
     def set_disconnected(self) -> None:

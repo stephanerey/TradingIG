@@ -157,7 +157,11 @@ class IGRestAdapter:
 
     def logout(self) -> None:
         if self._session is not None:
-            self._request("DELETE", "/session", version="1", include_session=True)
+            try:
+                self._request("DELETE", "/session", version="1", include_session=True)
+            except IGAPIError as exc:
+                if "invalid-security-token" not in str(exc):
+                    raise
         self._session = None
 
     def get_accounts(self) -> list[Account]:
