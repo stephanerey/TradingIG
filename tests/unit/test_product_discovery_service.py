@@ -102,6 +102,11 @@ class FakeDiscoveryAdapter:
         return MarketNavigation()
 
 
+class EmptyNavigationAdapter(FakeDiscoveryAdapter):
+    def get_market_navigation(self, node_id: str | None = None) -> MarketNavigation:
+        raise RuntimeError("navigation unavailable")
+
+
 def test_classification_heuristics_identify_barrier_and_option() -> None:
     service = ProductDiscoveryService(FakeDiscoveryAdapter())
 
@@ -148,3 +153,20 @@ def test_discover_all_products_uses_market_navigation() -> None:
     assert result.candidates_count == 2
     assert {product.epic for product in result.products} == {"BARRIER.EPIC", "OPTION.EPIC"}
     assert adapter.detail_calls == []
+
+
+def test_discover_all_products_falls_back_to_search_when_navigation_unavailable() -> None:
+    adapter = EmptyNavigationAdapter()
+    service = ProductDiscoveryService(adapter)
+
+    result = service.discover_all_products()
+
+    assert result.search_term == "market-navigation+search-fallback"
+    assert result.candidates_count == 3
+    assert {product.epic for product in result.products} == {
+        "BARRIER.EPIC",
+        "OPTION.EPIC",
+        "BROKEN.EPIC",
+    }
+    assert adapter.detail_calls == []
+    assert len(result.errors) == 1

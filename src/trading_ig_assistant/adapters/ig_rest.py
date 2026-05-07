@@ -291,10 +291,7 @@ class IGRestAdapter:
 
     def get_market_navigation(self, node_id: str | None = None) -> MarketNavigation:
         LOGGER.debug("IG market navigation start node_id=%s", node_id or "<root>")
-        path = "/market-navigation"
-        if node_id:
-            path = f"{path}/{urllib.parse.quote(node_id, safe='')}"
-        response = self._request("GET", path, version="1")
+        response = self._request_market_navigation(node_id)
         nodes = [
             MarketNavigationNode(
                 node_id=str(item.get("id", "")),
@@ -311,6 +308,20 @@ class IGRestAdapter:
             len(markets),
         )
         return MarketNavigation(nodes=nodes, markets=markets, raw=response.body)
+
+    def _request_market_navigation(self, node_id: str | None = None) -> HttpResponse:
+        suffix = f"/{urllib.parse.quote(node_id, safe='')}" if node_id else ""
+        primary_path = f"/market-navigation{suffix}"
+        try:
+            return self._request("GET", primary_path, version="1")
+        except IGAPIError as exc:
+            if "HTTP 404" not in str(exc):
+                raise
+            LOGGER.debug(
+                "IG market navigation primary path unavailable; trying legacy path node_id=%s",
+                node_id or "<root>",
+            )
+        return self._request("GET", f"/marketnavigation{suffix}", version="1")
 
     def get_market_details(self, epic: str) -> MarketDetails:
         LOGGER.debug("IG market details start epic=%s", epic)

@@ -119,7 +119,8 @@ In the Settings tab:
 - GUI product discovery is available from the `Products / Ticket` panel. It uses the selected
   stored live/demo profile, browses the IG market navigation tree, displays products in a table,
   and can export a sanitized JSON report. It does not bulk-fetch details for every EPIC because IG
-  can reject long read-only scans with an invalid security token.
+  can reject long read-only scans with an invalid security token. If IG returns no market
+  navigation for the active account, the GUI falls back to conservative read-only market searches.
 - The product text field is a local filter on displayed results; it does not change the IG API
   discovery query.
 - Product classification is heuristic and conservative.

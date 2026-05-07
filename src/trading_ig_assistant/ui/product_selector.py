@@ -84,7 +84,7 @@ class ProductSelectorWidget(QtWidgets.QWidget):
         self.export_button.setEnabled(bool(self._results) and not busy)
         if busy:
             self.summary_label.setText(
-                "Discovering IG products in read-only mode from market navigation..."
+                "Discovering IG products in read-only mode..."
             )
 
     def set_results(self, results: list[ProductDiscoveryResult]) -> None:
@@ -125,7 +125,8 @@ class ProductSelectorWidget(QtWidgets.QWidget):
         self.summary_label.setText(
             f"Discovery complete: {candidate_count} candidates, "
             f"{total_product_count} products, {len(rows)} displayed, {error_count} errors. "
-            "Detailed EPIC metadata is not bulk-fetched to avoid IG token rejection."
+            "If market navigation is unavailable, search fallback is used. Detailed EPIC metadata "
+            "is not bulk-fetched to avoid IG token rejection."
         )
 
     def results(self) -> list[ProductDiscoveryResult]:

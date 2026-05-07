@@ -13,6 +13,18 @@ from trading_ig_assistant.domain.products import ProductDirection, ProductType, 
 from trading_ig_assistant.utils.redaction import REDACTED, is_secret_key, redact_mapping
 
 DEFAULT_WATCHLIST_SEARCH_TERMS = ["US Tech 100", "France 40", "Germany 40", "Gold"]
+DEFAULT_DISCOVERY_FALLBACK_SEARCH_TERMS = [
+    "US Tech 100",
+    "Wall Street",
+    "France 40",
+    "Germany 40",
+    "Gold",
+    "EUR/USD",
+    "GBP/USD",
+    "Crude",
+    "Barrier",
+    "Option",
+]
 LOGGER = logging.getLogger(__name__)
 
 
@@ -162,6 +174,15 @@ class ProductDiscoveryService:
                 len(errors),
             )
 
+        if not summaries_by_epic:
+            LOGGER.debug(
+                "Product discovery navigation empty; starting search fallback terms=%s",
+                DEFAULT_DISCOVERY_FALLBACK_SEARCH_TERMS,
+            )
+            summaries_by_epic.update(
+                self._fallback_search_summaries(DEFAULT_DISCOVERY_FALLBACK_SEARCH_TERMS, errors)
+            )
+
         for index, summary in enumerate(summaries_by_epic.values()):
             details = None
             if max_details > 0 and index < max_details:
@@ -183,11 +204,43 @@ class ProductDiscoveryService:
             len(errors),
         )
         return ProductDiscoveryResult(
-            search_term="market-navigation",
+            search_term="market-navigation+search-fallback" if errors else "market-navigation",
             candidates_count=len(summaries_by_epic),
             products=products,
             errors=errors,
         )
+
+    def _fallback_search_summaries(
+        self,
+        search_terms: list[str],
+        errors: list[ProductDiscoveryError],
+    ) -> dict[str, MarketSummary]:
+        summaries_by_epic: dict[str, MarketSummary] = {}
+        for search_term in search_terms:
+            try:
+                summaries = self._adapter.search_markets(search_term)
+            except Exception as exc:
+                LOGGER.debug(
+                    "Product discovery fallback search failed search_term=%r error=%s",
+                    search_term,
+                    exc,
+                )
+                errors.append(ProductDiscoveryError(epic=None, message=str(exc)))
+                continue
+            LOGGER.debug(
+                "Product discovery fallback search complete search_term=%r count=%s",
+                search_term,
+                len(summaries),
+            )
+            for summary in summaries:
+                if summary.epic:
+                    summaries_by_epic.setdefault(summary.epic, summary)
+        LOGGER.debug(
+            "Product discovery fallback complete unique_markets=%s errors=%s",
+            len(summaries_by_epic),
+            len(errors),
+        )
+        return summaries_by_epic
 
     def classify_product(
         self,

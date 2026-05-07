@@ -74,6 +74,21 @@ class FakeHttpClient:
                     ]
                 },
             )
+        if url.endswith("/market-navigation"):
+            return HttpResponse(
+                status_code=200,
+                headers={},
+                body={
+                    "nodes": [{"id": "indices", "name": "Indices"}],
+                    "markets": [
+                        {
+                            "epic": "IX.D.NASDAQ.IFD.IP",
+                            "instrumentName": "US Tech 100",
+                            "instrumentType": "INDICES",
+                        }
+                    ],
+                },
+            )
         if "/markets/IX.D.NASDAQ.IFD.IP" in url:
             return HttpResponse(
                 status_code=200,
@@ -139,6 +154,18 @@ def test_switch_account_reuses_new_security_token() -> None:
     account_request = http_client.requests[-1]
     assert account_request["headers"]["X-SECURITY-TOKEN"] == "fake-switched-security-token"
     assert account_request["headers"]["CST"] == "fake-cst"
+
+
+def test_market_navigation_uses_hyphenated_endpoint() -> None:
+    http_client = FakeHttpClient()
+    adapter = IGRestAdapter(environment=IGEnvironment.DEMO, http_client=http_client)
+    adapter.login(IGCredentials("demo-user", "fake-password", "fake-api-key"))
+
+    navigation = adapter.get_market_navigation()
+
+    assert navigation.nodes[0].node_id == "indices"
+    assert navigation.markets[0].epic == "IX.D.NASDAQ.IFD.IP"
+    assert http_client.requests[-1]["url"].endswith("/market-navigation")
 
 
 def test_logout_ignores_invalid_security_token() -> None:
