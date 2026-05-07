@@ -1,0 +1,1 @@
+"""Trade state domain placeholders."""

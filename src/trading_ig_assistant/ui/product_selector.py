@@ -1,0 +1,1 @@
+"""Product selector placeholder."""

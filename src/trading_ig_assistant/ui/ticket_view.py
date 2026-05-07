@@ -1,0 +1,1 @@
+"""Ticket view placeholder."""

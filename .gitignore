@@ -1,0 +1,24 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Local runtime configuration and secrets
+.env
+.env.*
+config.json
+*.local.json
+*.secrets.*
+
+# IDE / OS
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store

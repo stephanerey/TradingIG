@@ -1,0 +1,1 @@
+"""Monitor view placeholder."""

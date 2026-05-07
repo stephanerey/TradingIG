@@ -1,0 +1,1 @@
+"""Product discovery service placeholder."""

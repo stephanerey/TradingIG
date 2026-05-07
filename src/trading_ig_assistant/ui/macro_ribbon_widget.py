@@ -1,0 +1,1 @@
+"""Macro ribbon widget placeholder."""
