@@ -96,6 +96,13 @@ The GUI includes a main window, menu bar, macro context ribbon placeholder, cand
 placeholder, product/ticket placeholder panel, and settings placeholder. It does not call IG
 directly and it cannot place trades.
 
+In the Settings tab:
+
+- `Test read-only IG connection` authenticates, fetches account metadata, then logs out.
+- `Save non-secret settings` writes only safe settings to the local user config file.
+- Password and API key are not saved by this button.
+- Account IDs are displayed masked in the combo box.
+
 ## P01 status
 
 - Read-only product discovery service and CLI are available.
