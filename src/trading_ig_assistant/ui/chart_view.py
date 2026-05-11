@@ -72,7 +72,7 @@ class CandlestickItem(pg.GraphicsObject):
 
     def _generate_picture(self, bars: list[OhlcBar], bar_width_seconds: float) -> None:
         painter = QtGui.QPainter(self._picture)
-        candle_width = max(bar_width_seconds * 0.33, 20.0)
+        candle_width = max(bar_width_seconds, 20.0)
         for bar in bars:
             color = QtGui.QColor("#0f7b45" if bar.close >= bar.open else "#a61b1b")
             painter.setPen(pg.mkPen(color))
@@ -346,7 +346,7 @@ class ChartView(QtWidgets.QWidget):
         return value < low - buffer or value > high + buffer
 
     def _bar_width_seconds(self) -> float:
-        return 18.0
+        return max(self._current_interval_seconds * 0.72, 36.0)
 
     def _render_display_bars(self, bars: list[OhlcBar]) -> None:
         self._display_bars = list(bars)

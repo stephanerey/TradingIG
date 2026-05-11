@@ -351,3 +351,37 @@ def test_product_selector_updates_live_quote_and_details() -> None:
     assert widget.product_table.item(0, 2).text() == "124.5"
     assert "Snapshot vente: 100" in widget.market_summary.toPlainText()
     assert "Live vente: 123.4" in widget.market_summary.toPlainText()
+
+
+def test_product_selector_exposes_visible_epics_from_active_tab() -> None:
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.domain.products import ProductType, TradableProduct
+    from trading_ig_assistant.services.product_discovery_service import ProductDiscoveryResult
+    from trading_ig_assistant.ui.product_selector import ProductSelectorWidget
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    widget = ProductSelectorWidget()
+    widget.set_results(
+        [
+            ProductDiscoveryResult(
+                search_term="cached",
+                candidates_count=2,
+                products=[
+                    TradableProduct(
+                        epic="EPIC.ONE",
+                        name="US Tech 100",
+                        product_type=ProductType.CASH_OR_DFB,
+                    ),
+                    TradableProduct(
+                        epic="EPIC.TWO",
+                        name="US 500",
+                        product_type=ProductType.CASH_OR_DFB,
+                    ),
+                ],
+            )
+        ]
+    )
+
+    assert widget.visible_price_epics()[:2] == ["EPIC.ONE", "EPIC.TWO"]

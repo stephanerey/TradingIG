@@ -12,6 +12,7 @@ from trading_ig_assistant.services.product_discovery_service import (
     CRYPTO_DISCOVERY_SEEDS,
     DEFAULT_DISCOVERY_FALLBACK_SEARCH_TERMS,
     ProductDiscoveryService,
+    read_discovery_report,
     write_discovery_report,
 )
 
@@ -195,6 +196,19 @@ def test_sanitized_report_excludes_sensitive_values(tmp_path) -> None:
     assert "ABCDEF123456" not in report_text
     assert report["schema"] == "trading_ig_assistant.product_discovery.v1"
     assert report["results"][0]["products"][0]["raw"]["summary"]["accountId"] == "AB...56"
+
+
+def test_discovery_report_round_trips_results(tmp_path) -> None:
+    service = ProductDiscoveryService(FakeDiscoveryAdapter())
+    result = service.discover_products("US Tech 100")
+    output_path = tmp_path / "product_discovery.json"
+
+    write_discovery_report([result], output_path)
+    loaded = read_discovery_report(output_path)
+
+    assert len(loaded) == 1
+    assert loaded[0].products[0].epic == result.products[0].epic
+    assert loaded[0].products[0].product_type == result.products[0].product_type
 
 
 def test_discover_all_products_uses_market_navigation() -> None:

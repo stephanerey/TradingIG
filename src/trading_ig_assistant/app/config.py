@@ -52,6 +52,7 @@ class AppConfig:
     ig_password: SecretValue | None = field(default=None, repr=False)
     ig_api_key: SecretValue | None = field(default=None, repr=False)
     selected_account_id: str | None = None
+    last_selected_product_epic: str | None = None
     connection_profiles: dict[IGEnvironment, IGConnectionProfileConfig] = field(
         default_factory=dict
     )
@@ -81,6 +82,7 @@ class AppConfig:
             "environment": self.environment.value,
             "ig_username": self.ig_username,
             "selected_account_id": self.selected_account_id,
+            "last_selected_product_epic": self.last_selected_product_epic,
             "connection_profiles": {
                 environment.value: profile.to_file_dict()
                 for environment, profile in self.connection_profiles.items()
@@ -113,6 +115,7 @@ class AppConfig:
             environment=IGEnvironment(str(data.get("environment", IGEnvironment.DEMO)).lower()),
             ig_username=str(data.get("ig_username", "")),
             selected_account_id=data.get("selected_account_id") or None,
+            last_selected_product_epic=data.get("last_selected_product_epic") or None,
             connection_profiles=connection_profiles,
             read_only=read_only,
             enable_live_trading=enable_live_trading,

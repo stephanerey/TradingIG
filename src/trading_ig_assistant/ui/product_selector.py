@@ -48,12 +48,14 @@ class ProductSelectorWidget(QtWidgets.QWidget):
     discover_requested = QtCore.pyqtSignal(object)
     export_requested = QtCore.pyqtSignal(object)
     product_selected = QtCore.pyqtSignal(object)
+    visible_epics_changed = QtCore.pyqtSignal(object)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._results: list[ProductDiscoveryResult] = []
         self._filter_text = ""
         self._tables: dict[tuple[str, str], QtWidgets.QTableWidget] = {}
+        self._asset_tabs: list[QtWidgets.QTabWidget] = []
         self._rows_by_epic: dict[str, list[tuple[QtWidgets.QTableWidget, int]]] = {}
         self._live_quotes: dict[str, Quote] = {}
         self._selected_product: TradableProduct | None = None
@@ -156,9 +158,29 @@ class ProductSelectorWidget(QtWidgets.QWidget):
             "is not bulk-fetched to avoid IG token rejection."
         )
         self._render_market_summary()
+        self.visible_epics_changed.emit(self.visible_price_epics())
 
     def results(self) -> list[ProductDiscoveryResult]:
         return list(self._results)
+
+    def visible_price_epics(self, max_items: int = 80) -> list[str]:
+        table = self._active_table()
+        if table is None:
+            return []
+        epics: list[str] = []
+        for row_index in range(table.rowCount()):
+            item = table.item(row_index, 0)
+            if item is None:
+                continue
+            product = item.data(QtCore.Qt.UserRole)
+            if not isinstance(product, TradableProduct):
+                continue
+            if not product.epic or product.epic in epics:
+                continue
+            epics.append(product.epic)
+            if len(epics) >= max_items:
+                break
+        return epics
 
     def set_selected_product(self, product: TradableProduct | None) -> None:
         self._selected_product = product
@@ -228,7 +250,10 @@ class ProductSelectorWidget(QtWidgets.QWidget):
                 if first_table is None:
                     first_table = table
                 asset_tabs.addTab(table, asset_label)
+            asset_tabs.currentChanged.connect(lambda _index: self._emit_visible_epics_changed())
+            self._asset_tabs.append(asset_tabs)
             self.product_tabs.addTab(asset_tabs, product_type_label)
+        self.product_tabs.currentChanged.connect(lambda _index: self._emit_visible_epics_changed())
         if first_table is None:
             raise RuntimeError("Product table initialization failed.")
         return first_table
@@ -289,6 +314,18 @@ class ProductSelectorWidget(QtWidgets.QWidget):
             self._selected_product = product
             self._render_market_summary()
             self.product_selected.emit(product)
+
+    def _emit_visible_epics_changed(self) -> None:
+        self.visible_epics_changed.emit(self.visible_price_epics())
+
+    def _active_table(self) -> QtWidgets.QTableWidget | None:
+        asset_tabs = self.product_tabs.currentWidget()
+        if not isinstance(asset_tabs, QtWidgets.QTabWidget):
+            return None
+        table = asset_tabs.currentWidget()
+        if not isinstance(table, QtWidgets.QTableWidget):
+            return None
+        return table
 
     def _render_market_summary(self) -> None:
         product = self._selected_product

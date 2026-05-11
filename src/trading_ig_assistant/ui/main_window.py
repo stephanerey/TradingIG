@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 from PyQt5 import QtCore, QtWidgets
 
@@ -31,6 +32,7 @@ from trading_ig_assistant.services.ig_connection_service import IGConnectionRequ
 from trading_ig_assistant.services.product_discovery_service import (
     ProductDiscoveryResult,
     ProductDiscoveryService,
+    read_discovery_report,
     write_discovery_report,
 )
 from trading_ig_assistant.ui.about_dialog import AboutDialog
@@ -45,6 +47,7 @@ from trading_ig_assistant.utils.redaction import mask_identifier
 
 LOGGER = logging.getLogger(__name__)
 PRICE_HISTORY_POINTS = 240
+PRODUCT_STREAM_ITEMS_LIMIT = 80
 
 
 @dataclass
@@ -213,6 +216,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._auth_locked_out = False
         self._selected_product: TradableProduct | None = None
         self._chart_product: TradableProduct | None = None
+        self._visible_price_epics: list[str] = []
+        self._loaded_cache_environment: IGEnvironment | None = None
         self._streaming_adapter: IGStreamingAdapter | None = None
         self._streaming_bridge = StreamingEventBridge()
         self._build_menu()
@@ -221,6 +226,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._streaming_bridge.chart_received.connect(self._on_stream_chart)
         self._streaming_bridge.status_changed.connect(self._on_stream_status)
         self._streaming_bridge.error_received.connect(self._on_stream_error)
+        self._load_cached_discovery_results()
         LOGGER.debug("MainWindow initialization complete")
 
     def _build_menu(self) -> None:
@@ -265,6 +271,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.product_selector.discover_requested.connect(self._discover_products)
         self.product_selector.export_requested.connect(self._export_discovery_report)
         self.product_selector.product_selected.connect(self._on_product_selected)
+        self.product_selector.visible_epics_changed.connect(self._on_visible_epics_changed)
         right_tabs.addTab(self.product_selector, "Products / Ticket")
         right_tabs.setMinimumWidth(760)
         body.addWidget(right_tabs)
@@ -420,6 +427,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._active_connection = result
         self._active_connection.current_account_id = selected_account_id
         self._set_profile_account(result.environment, selected_account_id)
+        if self._loaded_cache_environment != result.environment:
+            self._load_cached_discovery_results()
         self.chart_view.set_stream_status("STREAM READY")
         self._restart_streaming()
         message = (
@@ -490,6 +499,7 @@ class MainWindow(QtWidgets.QMainWindow):
             for error in result.errors
         ):
             self._mark_api_allowance_exceeded()
+        self._save_discovery_cache(results)
         self.product_selector.set_results(results)
         product_count = sum(len(result.products) for result in results)
         self.statusBar().showMessage(f"Product discovery complete: {product_count} products.", 7000)
@@ -598,10 +608,23 @@ class MainWindow(QtWidgets.QMainWindow):
             (self._chart_product or product).epic,
             product.name,
         )
+        self._config.last_selected_product_epic = product.epic
+        save_config(self._config, self._config_path)
         self.product_selector.set_selected_product(product)
         self.chart_view.set_selected_product(self._chart_product or product)
         self._load_selected_product_history()
         self._restart_streaming()
+
+    @QtCore.pyqtSlot(object)
+    def _on_visible_epics_changed(self, epics: object) -> None:
+        if not isinstance(epics, list):
+            return
+        normalized = [str(epic) for epic in epics if str(epic)]
+        if normalized == self._visible_price_epics:
+            return
+        self._visible_price_epics = normalized
+        if self._active_connection is not None:
+            self._restart_streaming()
 
     @QtCore.pyqtSlot(object)
     def _on_stream_quote(self, quote: object) -> None:
@@ -648,13 +671,15 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             self.chart_view.set_stream_status("CONNECTING")
             adapter.start()
-            adapter.subscribe_market(stream_product.epic)
+            price_epics = list(dict.fromkeys([*self._visible_price_epics, stream_product.epic]))
+            adapter.subscribe_markets(price_epics[:PRODUCT_STREAM_ITEMS_LIMIT])
             adapter.subscribe_chart(stream_product.epic, "1MINUTE")
             self._streaming_adapter = adapter
             LOGGER.debug(
-                "Streaming restarted selected_epic=%s source_epic=%s account=%s",
+                "Streaming restarted selected_epic=%s source_epic=%s visible_prices=%s account=%s",
                 self._selected_product.epic,
                 stream_product.epic,
+                len(price_epics[:PRODUCT_STREAM_ITEMS_LIMIT]),
                 mask_identifier(self._active_connection.current_account_id),
             )
         except Exception as exc:
@@ -758,6 +783,38 @@ class MainWindow(QtWidgets.QMainWindow):
             "IG API allowance exceeded. Product discovery fallback and price history "
             "backfill are paused for this session.",
             15000,
+        )
+
+    def _load_cached_discovery_results(self) -> None:
+        cache_path = _discovery_cache_path(self._config.environment)
+        results = read_discovery_report(cache_path)
+        if not results:
+            if self._loaded_cache_environment != self._config.environment:
+                self.product_selector.set_results([])
+            self._loaded_cache_environment = self._config.environment
+            return
+        self._loaded_cache_environment = self._config.environment
+        LOGGER.debug(
+            "Product discovery cache loaded environment=%s results=%s products=%s",
+            self._config.environment.value,
+            len(results),
+            sum(len(result.products) for result in results),
+        )
+        self.product_selector.set_results(results)
+        if self._config.last_selected_product_epic:
+            cached_product = _find_product_by_epic(results, self._config.last_selected_product_epic)
+            if cached_product is not None:
+                self._on_product_selected(cached_product)
+
+    def _save_discovery_cache(self, results: list[ProductDiscoveryResult]) -> None:
+        cache_path = _discovery_cache_path(self._config.environment)
+        write_discovery_report(results, cache_path)
+        self._loaded_cache_environment = self._config.environment
+        LOGGER.debug(
+            "Product discovery cache saved environment=%s path=%s results=%s",
+            self._config.environment.value,
+            cache_path,
+            len(results),
         )
 
 
@@ -904,6 +961,21 @@ def _first_discovered_product(results: list[ProductDiscoveryResult]) -> Tradable
         if result.products:
             return result.products[0]
     return None
+
+
+def _find_product_by_epic(
+    results: list[ProductDiscoveryResult],
+    epic: str,
+) -> TradableProduct | None:
+    for result in results:
+        for product in result.products:
+            if product.epic == epic:
+                return product
+    return None
+
+
+def _discovery_cache_path(environment: IGEnvironment) -> Path:
+    return Path.home() / ".trading_ig_assistant" / f"product_discovery_{environment.value}.json"
 
 
 def _product_anchor_price(product: TradableProduct) -> float | None:

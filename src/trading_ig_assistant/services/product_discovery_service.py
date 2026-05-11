@@ -576,6 +576,44 @@ def write_discovery_report(results: list[ProductDiscoveryResult], output_path: P
     )
 
 
+def read_discovery_report(path: Path) -> list[ProductDiscoveryResult]:
+    if not path.exists():
+        return []
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        return []
+    raw_results = data.get("results", [])
+    if not isinstance(raw_results, list):
+        return []
+    results: list[ProductDiscoveryResult] = []
+    for raw_result in raw_results:
+        if not isinstance(raw_result, dict):
+            continue
+        raw_products = raw_result.get("products", [])
+        raw_errors = raw_result.get("errors", [])
+        products = [
+            _product_from_mapping(raw_product)
+            for raw_product in raw_products
+            if isinstance(raw_product, dict)
+        ]
+        errors = [
+            ProductDiscoveryError(
+                epic=raw_error.get("epic") if isinstance(raw_error, dict) else None,
+                message=str(raw_error.get("message", "")) if isinstance(raw_error, dict) else "",
+            )
+            for raw_error in raw_errors
+        ]
+        results.append(
+            ProductDiscoveryResult(
+                search_term=str(raw_result.get("search_term", "")),
+                candidates_count=int(raw_result.get("candidates_count", len(products))),
+                products=products,
+                errors=errors,
+            )
+        )
+    return results
+
+
 def _mask_identifier(value: str) -> str:
     if len(value) <= 4:
         return REDACTED
@@ -640,6 +678,58 @@ def _classify_asset_class(text: str, summary: MarketSummary) -> AssetClass:
     if any(token in text for token in ("index", "indice", "indices", "tech 100", "wall street")):
         return AssetClass.INDICES
     return AssetClass.OTHER
+
+
+def _product_from_mapping(data: dict[str, Any]) -> TradableProduct:
+    return TradableProduct(
+        epic=str(data.get("epic", "")),
+        name=str(data.get("name", "")),
+        product_type=_enum_or_default(ProductType, data.get("product_type"), ProductType.UNKNOWN),
+        direction=_enum_or_default(
+            ProductDirection,
+            data.get("direction"),
+            ProductDirection.UNKNOWN,
+        ),
+        instrument_type=_optional_string(data.get("instrument_type")),
+        expiry=_optional_string(data.get("expiry")),
+        currency=_optional_string(data.get("currency")),
+        min_size=_optional_float_value(data.get("min_size")),
+        max_size=_optional_float_value(data.get("max_size")),
+        lot_size=_optional_float_value(data.get("lot_size")),
+        status=_optional_string(data.get("status")),
+        ko_level=_optional_float_value(data.get("ko_level")),
+        strike=_optional_float_value(data.get("strike")),
+        asset_class=_enum_or_default(AssetClass, data.get("asset_class"), AssetClass.OTHER),
+        bid=_optional_float_value(data.get("bid")),
+        offer=_optional_float_value(data.get("offer")),
+        net_change=_optional_float_value(data.get("net_change")),
+        percent_change=_optional_float_value(data.get("percent_change")),
+        raw=data.get("raw", {}) if isinstance(data.get("raw"), dict) else {},
+    )
+
+
+def _enum_or_default(enum_type: type[Any], value: Any, default: Any) -> Any:
+    try:
+        if value is None:
+            return default
+        return enum_type(str(value))
+    except Exception:
+        return default
+
+
+def _optional_string(value: Any) -> str | None:
+    if value in {None, ""}:
+        return None
+    return str(value)
+
+
+def _optional_float_value(value: Any) -> float | None:
+    if value in {None, ""}:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _flatten_text(values: list[Any]) -> str:

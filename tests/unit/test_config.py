@@ -84,3 +84,16 @@ def test_profile_config_saves_non_secret_identifiers_only(tmp_path: Path) -> Non
     assert "api_key" not in saved_text.lower()
     assert loaded.connection_profiles[IGEnvironment.LIVE].identifier == "liveuser"
     assert loaded.connection_profiles[IGEnvironment.DEMO].selected_account_id == "DEMO123"
+
+
+def test_config_persists_last_selected_product_epic(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config = AppConfig(
+        environment=IGEnvironment.LIVE,
+        last_selected_product_epic="IX.D.NASDAQ.IFD.IP",
+    )
+
+    save_config(config, config_path)
+    loaded = load_config(config_path)
+
+    assert loaded.last_selected_product_epic == "IX.D.NASDAQ.IFD.IP"

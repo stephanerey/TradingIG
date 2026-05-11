@@ -50,6 +50,7 @@ class FakeLightstreamerClient:
 class FakeUpdate:
     fields: dict[str, str]
     snapshot: bool = False
+    item_name: str | None = None
 
     def getFields(self):  # noqa: N802
         return self.fields
@@ -59,6 +60,9 @@ class FakeUpdate:
 
     def isSnapshot(self):  # noqa: N802
         return self.snapshot
+
+    def getItemName(self):  # noqa: N802
+        return self.item_name
 
 
 class RecordingSink:
@@ -118,6 +122,7 @@ def test_streaming_adapter_connects_and_parses_quotes() -> None:
                 "TIMESTAMP": "1778490000000",
             },
             snapshot=True,
+            item_name="PRICE:ACC123:EPIC.ONE",
         )
     )
 
@@ -177,6 +182,31 @@ def test_streaming_adapter_emits_chart_updates() -> None:
     assert sink.charts[0].interval == "1MINUTE"
     assert sink.charts[0].close == 11.5
     assert sink.charts[0].end_of_candle is True
+
+
+def test_streaming_adapter_subscribes_multiple_market_prices() -> None:
+    client = FakeLightstreamerClient("https://stream.example", "DEFAULT")
+    sink = RecordingSink()
+    adapter = IGStreamingAdapter(
+        session=IGSession(
+            cst="fake-cst",
+            security_token="fake-security-token",
+            current_account_id="ACC123",
+            lightstreamer_endpoint="https://stream.example",
+        ),
+        account_id="ACC123",
+        event_sink=sink,
+        client_factory=lambda server_address, adapter_set: client,
+    )
+
+    adapter.start()
+    adapter.subscribe_markets(["EPIC.ONE", "EPIC.TWO"])
+
+    assert len(client.subscriptions) == 1
+    assert client.subscriptions[0].getItems() == [
+        "PRICE:ACC123:EPIC.ONE",
+        "PRICE:ACC123:EPIC.TWO",
+    ]
 
 
 def test_streaming_adapter_reports_missing_endpoint() -> None:
