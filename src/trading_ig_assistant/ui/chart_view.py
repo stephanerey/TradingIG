@@ -56,9 +56,6 @@ class ChartDataModel:
         anchor_price: float | None = None,
     ) -> ChartDataModel:
         bars = _bars_from_price_series(series, anchor_price=anchor_price)
-        if not bars and anchor_price is not None:
-            bars = _build_placeholder_bars(anchor_price, count=60)
-            return cls(bars, is_placeholder=True)
         return cls(bars, is_placeholder=False)
 
     def resampled(self, interval_seconds: int) -> list[OhlcBar]:
@@ -122,11 +119,8 @@ class ChartView(QtWidgets.QWidget):
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self._model = model or ChartDataModel.sample()
-        self._source_model = ChartDataModel(
-            list(self._model.bars),
-            is_placeholder=self._model.is_placeholder,
-        )
+        self._model = model or ChartDataModel()
+        self._source_model = ChartDataModel(list(self._model.bars), is_placeholder=False)
         self._live_price_line: pg.InfiniteLine | None = None
         self._live_price_label: pg.TextItem | None = None
         self._hover_vline: pg.InfiniteLine | None = None
@@ -180,7 +174,6 @@ class ChartView(QtWidgets.QWidget):
 
         layout.addLayout(header)
         layout.addWidget(self._plot)
-        self._render_display_bars(self._source_model.bars)
 
     def set_bars(self, bars: list[OhlcBar]) -> None:
         self._source_model.set_bars(bars, placeholder=False)
@@ -200,15 +193,15 @@ class ChartView(QtWidgets.QWidget):
         self.product_label.setText(" ".join(part for part in label_parts if part))
         self._selected_anchor_price = _product_anchor_price(product)
         self._refresh_snapshot_labels(product)
-        if self._selected_anchor_price is not None and (
-            not self._source_model.bars
-            or (self._selected_anchor_price > 1000 and self._source_model.is_placeholder)
-        ):
-            self._source_model = ChartDataModel.sample(self._selected_anchor_price)
-            self._manual_zoom = False
+        if self._source_model.bars:
             self._render_display_bars(self._source_model.resampled(self._current_interval_seconds))
-        elif self._source_model.bars:
-            self._render_display_bars(self._source_model.resampled(self._current_interval_seconds))
+        else:
+            self._plot.clear()
+            self._live_price_line = None
+            self._live_price_label = None
+            self._hover_vline = None
+            self._hover_hline = None
+            self._hover_label = None
 
     def set_stream_status(self, status: str) -> None:
         self.stream_status_label.setText(f"Stream: {status}")
@@ -310,7 +303,7 @@ class ChartView(QtWidgets.QWidget):
 
     def _add_level(
         self,
-        label: str,
+        label: str | None,
         value: float,
         color: str,
         *,
@@ -324,9 +317,10 @@ class ChartView(QtWidgets.QWidget):
                 width=1.5,
                 style=QtCore.Qt.DashLine if dashed else QtCore.Qt.SolidLine,
             ),
-            label=label,
-            labelOpts={"position": 0.92, "color": color},
         )
+        if label is not None:
+            line.label = label
+            line.labelOpts = {"position": 0.92, "color": color}
         self._plot.addItem(line)
         return line
 
@@ -349,12 +343,16 @@ class ChartView(QtWidgets.QWidget):
         self._model.set_bars(self._display_bars)
         self._plot.clear()
         self._live_price_line = None
+        self._live_price_label = None
+        self._hover_vline = None
+        self._hover_hline = None
+        self._hover_label = None
         if not self._display_bars:
             return
 
         self._plot.addItem(CandlestickItem(self._display_bars, self._bar_width_seconds()))
         last_close = self._display_bars[-1].close
-        self._add_level("Entry", last_close, "#254f8f")
+        self._add_level(None, last_close, "#254f8f")
         self._add_level("Stop", last_close * 0.98, "#a61b1b")
         self._add_level("Limit", last_close * 1.03, "#0f7b45")
         self._add_level("KO", last_close * 0.95, "#6f42c1")
@@ -413,8 +411,7 @@ class ChartView(QtWidgets.QWidget):
         right_edge = self._display_bars[-1].timestamp_ms / 1000.0
         if self._view_center_ts is not None and self._view_span_seconds is not None:
             right_edge = self._view_center_ts + (self._view_span_seconds / 2)
-        label_margin = max(self._current_interval_seconds * 0.8, 45.0)
-        self._live_price_label.setPos(right_edge - label_margin, live_value)
+        self._live_price_label.setPos(right_edge - 18.0, live_value)
 
     def _position_hover_label(self) -> None:
         if self._hover_label is None or self._hover_label.isVisible() is False:
@@ -579,7 +576,7 @@ def _build_live_price_label(text: str, color: str) -> pg.TextItem:
     label = pg.TextItem(
         text=text,
         color=color,
-        anchor=(0, 0.5),
+        anchor=(1, 0.5),
         fill=QtGui.QColor("#f4f8fc"),
         border=pg.mkPen(color, width=1),
     )

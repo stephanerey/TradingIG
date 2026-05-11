@@ -44,6 +44,7 @@ from trading_ig_assistant.utils.logging_config import configure_logging, emit_se
 from trading_ig_assistant.utils.redaction import mask_identifier
 
 LOGGER = logging.getLogger(__name__)
+PRICE_HISTORY_POINTS = 240
 
 
 @dataclass
@@ -171,7 +172,11 @@ class PriceHistoryWorker(QtCore.QObject):
     def run(self) -> None:
         try:
             LOGGER.debug("Price history worker start epic=%s", self._epic)
-            series = self._adapter.get_prices(self._epic, resolution="MINUTE", max_points=60)
+            series = self._adapter.get_prices(
+                self._epic,
+                resolution="MINUTE",
+                max_points=PRICE_HISTORY_POINTS,
+            )
             LOGGER.debug(
                 "Price history worker success epic=%s points=%s",
                 self._epic,
@@ -660,7 +665,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 series = self._active_connection.adapter.get_prices(
                     product.epic,
                     resolution="MINUTE",
-                    max_points=60,
+                    max_points=PRICE_HISTORY_POINTS,
                 )
                 self._price_history_cache[cache_key] = series
             anchor_price = _product_anchor_price(product)

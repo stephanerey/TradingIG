@@ -89,8 +89,7 @@ def test_chart_view_accepts_live_quote_update() -> None:
 
     assert "2311.9" in view.bid_label.text()
     assert "2313.1" in view.offer_label.text()
-    assert view._model.bars[0].open > 1000
-    assert view._model.bars[-1].close != 2313.1
+    assert view._model.bars == []
 
     view.apply_chart_update(
         ChartCandleUpdate(
@@ -106,6 +105,7 @@ def test_chart_view_accepts_live_quote_update() -> None:
     )
 
     assert view._model.bars[-1].close == 29200.0
+    assert view._model.bars[-1].open == 29190.0
 
 
 def test_account_status_widget_accepts_account_data(qtbot=None) -> None:
