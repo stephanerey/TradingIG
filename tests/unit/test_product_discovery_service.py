@@ -140,6 +140,22 @@ class CategoryDiscoveryAdapter(FakeDiscoveryAdapter):
         ]
 
 
+class AllowanceExceededNavigationAdapter(FakeDiscoveryAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.search_calls: list[str] = []
+
+    def get_market_navigation(self, node_id: str | None = None) -> MarketNavigation:
+        raise RuntimeError(
+            "IG REST request failed with HTTP 403: {'errorCode': "
+            "'error.public-api.exceeded-api-key-allowance'}"
+        )
+
+    def search_markets(self, query: str) -> list[MarketSummary]:
+        self.search_calls.append(query)
+        return super().search_markets(query)
+
+
 def test_classification_heuristics_identify_barrier_and_option() -> None:
     service = ProductDiscoveryService(FakeDiscoveryAdapter())
 
@@ -222,6 +238,18 @@ def test_discover_all_products_falls_back_to_search_when_navigation_unavailable(
     }
     assert adapter.detail_calls == []
     assert len(result.errors) == 2
+
+
+def test_discover_all_products_stops_after_allowance_exceeded() -> None:
+    adapter = AllowanceExceededNavigationAdapter()
+    service = ProductDiscoveryService(adapter)
+
+    result = service.discover_all_products()
+
+    assert result.search_term == "market-navigation"
+    assert result.candidates_count == 0
+    assert len(result.errors) == 2
+    assert adapter.search_calls == []
 
 
 def test_crypto_discovery_seeds_cover_ig_crypto_barrier_tab() -> None:

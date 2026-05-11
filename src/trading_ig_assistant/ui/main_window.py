@@ -209,6 +209,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._price_history_worker: PriceHistoryWorker | None = None
         self._price_history_cache: dict[str, PriceSeries] = {}
         self._price_history_blocked_epics: set[str] = set()
+        self._api_allowance_exceeded = False
         self._auth_locked_out = False
         self._selected_product: TradableProduct | None = None
         self._chart_product: TradableProduct | None = None
@@ -394,6 +395,7 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(object)
     def _on_connection_success(self, result: ActiveIGConnection) -> None:
         self._auth_locked_out = False
+        self._api_allowance_exceeded = False
         self.account_status.clear_auth_locked()
         LOGGER.debug(
             "Connection success environment=%s accounts=%s current_account=%s",
@@ -482,6 +484,12 @@ class MainWindow(QtWidgets.QMainWindow):
             sum(len(result.products) for result in results),
             sum(len(result.errors) for result in results),
         )
+        if any(
+            _is_api_allowance_exceeded(error.message)
+            for result in results
+            for error in result.errors
+        ):
+            self._mark_api_allowance_exceeded()
         self.product_selector.set_results(results)
         product_count = sum(len(result.products) for result in results)
         self.statusBar().showMessage(f"Product discovery complete: {product_count} products.", 7000)
@@ -493,6 +501,8 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(str)
     def _on_discovery_failure(self, message: str) -> None:
         LOGGER.debug("Product discovery failure message=%s", message)
+        if _is_api_allowance_exceeded(message):
+            self._mark_api_allowance_exceeded()
         self.statusBar().showMessage(
             f"Product discovery failed: {humanize_ig_error(message)}",
             12000,
@@ -578,9 +588,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self._chart_product = _resolve_chart_source_product(
             product,
             self.product_selector.results(),
-            self._active_connection.adapter if self._active_connection is not None else None,
+            self._active_connection.adapter
+            if self._active_connection is not None and not self._api_allowance_exceeded
+            else None,
         )
-        LOGGER.debug("Product selected epic=%s name=%r", product.epic, product.name)
+        LOGGER.debug(
+            "Product selected epic=%s source_epic=%s name=%r",
+            product.epic,
+            (self._chart_product or product).epic,
+            product.name,
+        )
         self.product_selector.set_selected_product(product)
         self.chart_view.set_selected_product(self._chart_product or product)
         self._load_selected_product_history()
@@ -653,6 +670,12 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         try:
             cache_key = product.epic
+            if self._api_allowance_exceeded:
+                LOGGER.debug(
+                    "Price history skipped epic=%s due to global allowance block",
+                    cache_key,
+                )
+                return
             if cache_key in self._price_history_blocked_epics:
                 LOGGER.debug(
                     "Price history skipped epic=%s due to cached allowance block",
@@ -677,8 +700,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 len(series.prices),
             )
         except Exception as exc:
-            if "exceeded-api-key-allowance" in str(exc):
+            if _is_api_allowance_exceeded(exc):
                 self._price_history_blocked_epics.add(product.epic)
+                self._mark_api_allowance_exceeded()
             LOGGER.debug(
                 "Price history load failed epic=%s error=%s",
                 product.epic,
@@ -692,7 +716,6 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot()
     def _reload_selected_product_history(self) -> None:
         self._load_selected_product_history()
-
 
     def _stop_streaming(self) -> None:
         if self._streaming_adapter is None:
@@ -726,6 +749,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._logout_active_connection()
         super().closeEvent(event)
 
+    def _mark_api_allowance_exceeded(self) -> None:
+        if self._api_allowance_exceeded:
+            return
+        self._api_allowance_exceeded = True
+        LOGGER.debug("IG public API allowance exceeded; further REST backfill is paused")
+        self.statusBar().showMessage(
+            "IG API allowance exceeded. Product discovery fallback and price history "
+            "backfill are paused for this session.",
+            15000,
+        )
+
 
 def run_gui() -> int:
     configure_logging()
@@ -755,6 +789,11 @@ def _credentials_from_request(request: IGConnectionRequest):
 
 
 def humanize_ig_error(message: str) -> str:
+    if "exceeded-api-key-allowance" in message:
+        return (
+            "IG public API allowance exceeded. Stop discovery retries for now and reconnect "
+            "later before requesting history again."
+        )
     if "api-key-invalid" in message:
         return (
             "API key invalid for this request. Check that the environment matches the key: "
@@ -809,6 +848,10 @@ def humanize_ig_error(message: str) -> str:
             "selected account belongs to the selected live/demo environment."
         )
     return message
+
+
+def _is_api_allowance_exceeded(error: Exception | str) -> bool:
+    return "exceeded-api-key-allowance" in str(error)
 
 
 def _api_resolution_for_interval(interval_seconds: int) -> str:

@@ -272,14 +272,27 @@ class ProductDiscoveryService:
         category_errors = self._discover_category_summaries(summaries_by_epic)
         errors.extend(category_errors)
         category_product_count = len(summaries_by_epic)
+        if _contains_api_allowance_error(category_errors):
+            LOGGER.debug("Product discovery aborted after category allowance rejection")
+            return ProductDiscoveryResult(
+                search_term="categories",
+                candidates_count=len(summaries_by_epic),
+                products=[
+                    self.classify_product(summary, None)
+                    for summary in summaries_by_epic.values()
+                ],
+                errors=errors,
+            )
 
         navigation_was_used = False
         if not summaries_by_epic:
             navigation_was_used = True
             self._discover_navigation_summaries(summaries_by_epic, errors, max_nodes=max_nodes)
+            if _contains_api_allowance_error(errors):
+                LOGGER.debug("Product discovery aborted after navigation allowance rejection")
 
         fallback_was_used = False
-        if not summaries_by_epic:
+        if not summaries_by_epic and not _contains_api_allowance_error(errors):
             fallback_was_used = True
             LOGGER.debug(
                 "Product discovery navigation empty; starting search fallback terms=%s",
@@ -385,6 +398,8 @@ class ProductDiscoveryService:
                     exc,
                 )
                 errors.append(ProductDiscoveryError(epic=node_id, message=str(exc)))
+                if _is_api_allowance_exceeded(exc):
+                    break
                 continue
 
             pending_node_ids.extend(node.node_id for node in navigation.nodes if node.node_id)
@@ -417,6 +432,8 @@ class ProductDiscoveryService:
                     exc,
                 )
                 errors.append(ProductDiscoveryError(epic=None, message=str(exc)))
+                if _is_api_allowance_exceeded(exc):
+                    break
                 continue
             LOGGER.debug(
                 "Product discovery fallback search complete search_term=%r count=%s",
@@ -563,6 +580,14 @@ def _mask_identifier(value: str) -> str:
     if len(value) <= 4:
         return REDACTED
     return f"{value[:2]}...{value[-2:]}"
+
+
+def _is_api_allowance_exceeded(error: Exception | str) -> bool:
+    return "exceeded-api-key-allowance" in str(error)
+
+
+def _contains_api_allowance_error(errors: list[ProductDiscoveryError]) -> bool:
+    return any(_is_api_allowance_exceeded(error.message) for error in errors)
 
 
 def _classify_product_type(text: str, summary: MarketSummary) -> ProductType:

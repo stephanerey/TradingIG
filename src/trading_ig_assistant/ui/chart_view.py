@@ -122,7 +122,7 @@ class ChartView(QtWidgets.QWidget):
         self._model = model or ChartDataModel()
         self._source_model = ChartDataModel(list(self._model.bars), is_placeholder=False)
         self._live_price_line: pg.InfiniteLine | None = None
-        self._live_price_label: pg.TextItem | None = None
+        self._live_price_label: QtWidgets.QLabel | None = None
         self._hover_vline: pg.InfiniteLine | None = None
         self._hover_hline: pg.InfiniteLine | None = None
         self._hover_label: pg.TextItem | None = None
@@ -172,6 +172,7 @@ class ChartView(QtWidgets.QWidget):
         self._plot.setMouseEnabled(x=False, y=False)
         self._plot.hideButtons()
         self._plot.setMenuEnabled(False)
+        self._plot.getAxis("left").setWidth(96)
         self._plot.zoom_requested.connect(self._on_zoom_requested)
         self._plot.scene().sigMouseMoved.connect(self._on_mouse_moved)
 
@@ -181,10 +182,8 @@ class ChartView(QtWidgets.QWidget):
     def _detach_live_price_label(self) -> None:
         if self._live_price_label is None:
             return
-        try:
-            self._plot.scene().removeItem(self._live_price_label)
-        except Exception:
-            pass
+        self._live_price_label.hide()
+        self._live_price_label.deleteLater()
         self._live_price_label = None
 
     def set_bars(self, bars: list[OhlcBar]) -> None:
@@ -369,8 +368,11 @@ class ChartView(QtWidgets.QWidget):
         self._add_level("KO", last_close * 0.95, "#6f42c1")
         self._live_price_line = self._add_level("Live", last_close, "#0b6bcb", dashed=False)
         self._live_price_line.label = None
-        self._live_price_label = _build_live_price_label(_format_number(last_close), "#0b6bcb")
-        self._plot.scene().addItem(self._live_price_label)
+        self._live_price_label = _build_live_price_label(
+            _format_number(last_close),
+            "#0b6bcb",
+            self._plot,
+        )
         self._hover_vline = pg.InfiniteLine(
             angle=90,
             movable=False,
@@ -429,8 +431,15 @@ class ChartView(QtWidgets.QWidget):
         scene_point = view_box.mapViewToScene(
             QtCore.QPointF(self._display_bars[-1].timestamp_ms / 1000.0, live_value)
         )
-        scene_x = view_box.sceneBoundingRect().left() - 6.0
-        self._live_price_label.setPos(scene_x, scene_point.y())
+        widget_point = self._plot.mapFromScene(scene_point.toPoint())
+        self._live_price_label.adjustSize()
+        axis_width = int(self._plot.getAxis("left").width())
+        x_pos = max(axis_width - self._live_price_label.width() - 8, 4)
+        y_pos = int(widget_point.y() - (self._live_price_label.height() / 2))
+        y_pos = max(0, min(y_pos, self._plot.height() - self._live_price_label.height() - 2))
+        self._live_price_label.move(x_pos, y_pos)
+        self._live_price_label.raise_()
+        self._live_price_label.show()
 
     def _position_hover_label(self) -> None:
         if self._hover_label is None or self._hover_label.isVisible() is False:
@@ -561,6 +570,11 @@ class ChartView(QtWidgets.QWidget):
                 return bar
         return None
 
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._position_live_price_label()
+        self._position_hover_label()
+
 
 def _format_number(value: float | None) -> str:
     if value is None:
@@ -657,18 +671,27 @@ def _bar_from_chart_update(
     )
 
 
-def _build_live_price_label(text: str, color: str) -> pg.TextItem:
-    label = pg.TextItem(
-        text=text,
-        color=color,
-        anchor=(1, 0.5),
-        fill=QtGui.QColor("#f4f8fc"),
-        border=pg.mkPen(color, width=1),
-    )
+def _build_live_price_label(
+    text: str,
+    color: str,
+    parent: QtWidgets.QWidget,
+) -> QtWidgets.QLabel:
+    label = QtWidgets.QLabel(text, parent)
     font = QtGui.QFont("Consolas", 9)
     font.setStyleHint(QtGui.QFont.Monospace)
     label.setFont(font)
-    label.setZValue(10_000)
+    label.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+    label.setStyleSheet(
+        "QLabel {"
+        f"color: {color};"
+        "background: #f4f8fc;"
+        f"border: 1px solid {color};"
+        "padding: 1px 4px;"
+        "border-radius: 2px;"
+        "}"
+    )
+    label.adjustSize()
+    label.hide()
     return label
 
 
