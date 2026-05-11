@@ -77,7 +77,7 @@ class RecordingSink:
 
 
 def test_streaming_adapter_connects_and_parses_quotes() -> None:
-    client = FakeLightstreamerClient("https://stream.example", "")
+    client = FakeLightstreamerClient("https://stream.example", "DEFAULT")
     sink = RecordingSink()
     adapter = IGStreamingAdapter(
         session=IGSession(
@@ -95,7 +95,7 @@ def test_streaming_adapter_connects_and_parses_quotes() -> None:
     adapter.subscribe_market("EPIC.ONE")
 
     assert client.server_address == "https://stream.example"
-    assert client.adapter_set == ""
+    assert client.adapter_set == "DEFAULT"
     assert client.connectionDetails.user == "ACC123"
     assert client.connectionDetails.password == "CST-fake-cst|XST-fake-security-token"
     assert client.connect_called is True

@@ -50,8 +50,9 @@ class StreamingEventSink(Protocol):
 class IGStreamingAdapter:
     session: IGSession
     account_id: str
+    adapter_set: str | None = "DEFAULT"
     event_sink: StreamingEventSink | None = None
-    client_factory: Callable[[str, str], Any] | None = None
+    client_factory: Callable[[str, str | None], Any] | None = None
     _client: Any = field(default=None, init=False, repr=False)
     _subscription: Any = field(default=None, init=False, repr=False)
     _current_epic: str | None = field(default=None, init=False, repr=False)
@@ -62,7 +63,7 @@ class IGStreamingAdapter:
         if not self.session.lightstreamer_endpoint:
             raise RuntimeError("IG session does not expose a Lightstreamer endpoint.")
         client_factory = self.client_factory or self._default_client_factory
-        self._client = client_factory(self.session.lightstreamer_endpoint, "")
+        self._client = client_factory(self.session.lightstreamer_endpoint, self.adapter_set)
         self._client.addListener(_ClientListener(self))
         self._client.connectionDetails.setUser(self.account_id)
         self._client.connectionDetails.setPassword(
@@ -73,8 +74,8 @@ class IGStreamingAdapter:
             self._mask_account_id(self.account_id),
             self.session.lightstreamer_endpoint,
         )
-        self._client.connect()
         self._emit_status("CONNECTING")
+        self._client.connect()
 
     def stop(self) -> None:
         if self._client is None:
@@ -173,7 +174,7 @@ class IGStreamingAdapter:
             self.event_sink.on_stream_error(message)
 
     @staticmethod
-    def _default_client_factory(server_address: str, adapter_set: str) -> Any:
+    def _default_client_factory(server_address: str, adapter_set: str | None) -> Any:
         if LightstreamerClient is None:
             raise RuntimeError(
                 "lightstreamer-client-lib is not installed. Install the optional streaming "

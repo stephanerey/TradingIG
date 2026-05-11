@@ -378,7 +378,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._active_connection = result
         self._active_connection.current_account_id = selected_account_id
         self._set_profile_account(result.environment, selected_account_id)
-        self.chart_view.set_stream_status("CONNECTED")
+        self.chart_view.set_stream_status("STREAM READY")
         self._restart_streaming()
         message = (
             f"Connected to IG {result.environment.value}. "
@@ -575,10 +575,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 account_id=self._active_connection.current_account_id,
                 event_sink=self._streaming_bridge,
             )
+            self.chart_view.set_stream_status("CONNECTING")
             adapter.start()
             adapter.subscribe_market(self._selected_product.epic)
             self._streaming_adapter = adapter
-            self.chart_view.set_stream_status("CONNECTING")
             LOGGER.debug(
                 "Streaming restarted epic=%s account=%s",
                 self._selected_product.epic,

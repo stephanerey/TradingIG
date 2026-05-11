@@ -212,6 +212,9 @@ def _format_signed_number(value: float | None) -> str:
 
 def _chip_label(label: str, value: str) -> QtWidgets.QLabel:
     chip = QtWidgets.QLabel(f"{label}: {value}")
+    if label == "Stream":
+        chip.setMinimumWidth(210)
+        chip.setAlignment(QtCore.Qt.AlignCenter)
     chip.setStyleSheet(
         "QLabel {"
         "color: #203040;"
