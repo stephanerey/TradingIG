@@ -37,7 +37,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         for environment in (IGEnvironment.LIVE, IGEnvironment.DEMO):
             profile = self._config.connection_profiles[environment]
-            editor = ConnectionProfileWidget(environment, profile)
+            editor = ConnectionProfileWidget(environment, profile, self._credential_store)
             self._profile_tabs[environment] = editor
             credentials_layout.addWidget(editor)
 
@@ -120,10 +120,12 @@ class ConnectionProfileWidget(QtWidgets.QGroupBox):
         self,
         environment: IGEnvironment,
         profile: IGConnectionProfileConfig,
+        credential_store: object | None,
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(environment.value.upper(), parent)
         self._environment = environment
+        self._credential_store = credential_store
         form = QtWidgets.QFormLayout(self)
 
         self.identifier = QtWidgets.QLineEdit(profile.identifier)
@@ -137,11 +139,20 @@ class ConnectionProfileWidget(QtWidgets.QGroupBox):
         self.selected_account_id = QtWidgets.QLineEdit(profile.selected_account_id or "")
         self.selected_account_id.setReadOnly(True)
         self.selected_account_id.setPlaceholderText("Updated from the top account dropdown")
+        self.diagnostic = QtWidgets.QLabel("")
+        self.diagnostic.setWordWrap(True)
+        self.diagnostic.setStyleSheet("QLabel { color: #4f5965; font-size: 11px; }")
 
         form.addRow("API identifier", self.identifier)
         form.addRow("Password", self.password_field)
         form.addRow("API key", self.api_key_field)
         form.addRow("Last selected account", self.selected_account_id)
+        form.addRow("Status", self.diagnostic)
+
+        self.identifier.textChanged.connect(self._update_diagnostic)
+        self.password_field.textChanged.connect(self._update_diagnostic)
+        self.api_key_field.textChanged.connect(self._update_diagnostic)
+        self._update_diagnostic()
 
     def profile_config(self) -> IGConnectionProfileConfig:
         return IGConnectionProfileConfig(
@@ -158,6 +169,40 @@ class ConnectionProfileWidget(QtWidgets.QGroupBox):
 
     def api_key(self) -> str:
         return self.api_key_field.text().strip()
+
+    def _update_diagnostic(self) -> None:
+        identifier_present = bool(self.identifier.text().strip())
+        password_present = bool(self.password_field.text().strip())
+        api_key_present = bool(self.api_key_field.text().strip())
+        stored_present = self._stored_credentials_present()
+        self.diagnostic.setText(
+            "Profile status: "
+            f"ID={'OK' if identifier_present else 'MISSING'}, "
+            f"password={_status_text(password_present, stored_present)}, "
+            f"API key={'OK' if api_key_present else ('STORED' if stored_present else 'MISSING')}."
+        )
+
+    def _stored_credentials_present(self) -> bool:
+        if self._credential_store is None:
+            return False
+        loader = getattr(self._credential_store, "load_profile", None)
+        if loader is None:
+            return False
+        identifier = self.identifier.text().strip()
+        if not identifier:
+            return False
+        try:
+            return loader(self._environment.value, identifier) is not None
+        except Exception:
+            return False
+
+
+def _status_text(is_present: bool, stored_present: bool) -> str:
+    if is_present:
+        return "OK"
+    if stored_present:
+        return "STORED"
+    return "MISSING"
 
 
 def _placeholder_tab() -> QtWidgets.QWidget:

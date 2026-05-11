@@ -101,6 +101,33 @@ def test_account_status_widget_displays_auth_lockout() -> None:
     assert "too many failed attempts" in widget.layout().itemAt(3).widget().text().lower()
 
 
+def test_settings_profile_widget_shows_secret_presence() -> None:
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.adapters.credentials import IGCredentials
+    from trading_ig_assistant.app.config import IGConnectionProfileConfig, IGEnvironment
+    from trading_ig_assistant.ui.settings_dialog import ConnectionProfileWidget
+
+    class FakeStore:
+        def load_profile(self, profile_key: str, username: str):
+            if profile_key == "demo" and username == "sreytradingdemo":
+                return IGCredentials("sreytradingdemo", "demo-pass", "demo-key")
+            return None
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    widget = ConnectionProfileWidget(
+        IGEnvironment.DEMO,
+        IGConnectionProfileConfig(environment=IGEnvironment.DEMO, identifier="sreytradingdemo"),
+        FakeStore(),
+    )
+
+    text = widget.diagnostic.text().lower()
+    assert "id=ok" in text
+    assert "stored" in text
+    assert "api key" in text
+
+
 def test_resolve_account_id_prefers_last_selected_account() -> None:
     from trading_ig_assistant.domain.instruments import Account
     from trading_ig_assistant.ui.main_window import _resolve_account_id
