@@ -173,3 +173,47 @@ def test_product_selector_displays_discovery_results() -> None:
 
     widget.filter_box.setText("missing")
     assert widget.product_table.rowCount() == 0
+
+
+def test_product_selector_updates_live_quote_and_details() -> None:
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.domain.market_data import Quote
+    from trading_ig_assistant.domain.products import ProductType, TradableProduct
+    from trading_ig_assistant.services.product_discovery_service import ProductDiscoveryResult
+    from trading_ig_assistant.ui.product_selector import ProductSelectorWidget
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    widget = ProductSelectorWidget()
+    product = TradableProduct(
+        epic="EPIC.ONE",
+        name="US Tech 100",
+        product_type=ProductType.CASH_OR_DFB,
+        bid=100.0,
+        offer=101.0,
+    )
+    widget.set_results(
+        [
+            ProductDiscoveryResult(
+                search_term="US Tech 100",
+                candidates_count=1,
+                products=[product],
+            )
+        ]
+    )
+    widget.set_selected_product(product)
+    widget.set_live_quote(
+        Quote(
+            epic="EPIC.ONE",
+            bid=123.4,
+            offer=124.5,
+            net_change=2.3,
+            percent_change=1.9,
+            market_state="TRADEABLE",
+        )
+    )
+
+    assert widget.product_table.item(0, 1).text() == "123.4"
+    assert widget.product_table.item(0, 2).text() == "124.5"
+    assert "Live vente: 123.4" in widget.market_summary.toPlainText()

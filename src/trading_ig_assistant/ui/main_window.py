@@ -322,6 +322,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._stop_streaming()
         self._logout_active_connection()
         self.account_status.set_disconnected()
+        self.product_selector.set_selected_product(None)
         self.chart_view.set_stream_status("DISCONNECTED")
         self.chart_view.set_live_quote(None)
         self.statusBar().showMessage("Disconnected from IG.", 5000)
@@ -535,12 +536,14 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self._selected_product = product
         LOGGER.debug("Product selected epic=%s name=%r", product.epic, product.name)
+        self.product_selector.set_selected_product(product)
         self.chart_view.set_selected_product(product)
         self._restart_streaming()
 
     @QtCore.pyqtSlot(object)
     def _on_stream_quote(self, quote: object) -> None:
         if isinstance(quote, Quote):
+            self.product_selector.set_live_quote(quote)
             self.chart_view.set_live_quote(quote)
 
     @QtCore.pyqtSlot(str)
