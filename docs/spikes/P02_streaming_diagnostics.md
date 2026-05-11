@@ -152,3 +152,35 @@ from the CLI first.
 - Live streaming remains independent from historical backfill:
   - the chart still receives live `CHART` updates
   - no live trading is implemented
+
+## Historical Allowance Pause / Cached History / Chart Source
+
+- Once IG reports `error.public-api.exceeded-account-historical-data-allowance`, the GUI
+  finishes the current fallback ladder and then pauses further automatic historical REST retries
+  for that account during the session.
+- While paused, the GUI does not keep retrying on product refresh, timeframe change, or range
+  change.
+- The user-facing status becomes:
+  - `IG historical data allowance reached; live chart continues. Retry later or use cached history.`
+- Successful historical backfills are cached locally under:
+  - `~/.trading_ig_assistant/cache/history/`
+- Cached files contain only chart data and metadata:
+  - environment
+  - masked/hash account marker
+  - epic
+  - resolution
+  - price basis
+  - range/max points
+  - saved timestamp
+- No credentials, CST/XST tokens, API keys, or passwords are stored in history cache files.
+- On later reloads, cached history is loaded first when available and the UI reports the cache
+  timestamp being used.
+- Chart source resolution now prefers an underlying cash/DFB market over the selected
+  barrier/option EPIC when a matching underlying can be found.
+- Local config supports explicit chart source overrides via:
+  - `chart_source_overrides`
+- Logs now show chart-source candidate diagnostics and whether the final chart source came from:
+  - override
+  - cached discovery candidates
+  - targeted market search
+  - fallback to the selected product EPIC

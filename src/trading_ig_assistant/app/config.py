@@ -53,6 +53,7 @@ class AppConfig:
     ig_api_key: SecretValue | None = field(default=None, repr=False)
     selected_account_id: str | None = None
     last_selected_product_epic: str | None = None
+    chart_source_overrides: dict[str, str] = field(default_factory=dict)
     connection_profiles: dict[IGEnvironment, IGConnectionProfileConfig] = field(
         default_factory=dict
     )
@@ -83,6 +84,7 @@ class AppConfig:
             "ig_username": self.ig_username,
             "selected_account_id": self.selected_account_id,
             "last_selected_product_epic": self.last_selected_product_epic,
+            "chart_source_overrides": dict(sorted(self.chart_source_overrides.items())),
             "connection_profiles": {
                 environment.value: profile.to_file_dict()
                 for environment, profile in self.connection_profiles.items()
@@ -116,6 +118,13 @@ class AppConfig:
             ig_username=str(data.get("ig_username", "")),
             selected_account_id=data.get("selected_account_id") or None,
             last_selected_product_epic=data.get("last_selected_product_epic") or None,
+            chart_source_overrides={
+                str(key): str(value)
+                for key, value in data.get("chart_source_overrides", {}).items()
+                if str(key).strip() and str(value).strip()
+            }
+            if isinstance(data.get("chart_source_overrides", {}), dict)
+            else {},
             connection_profiles=connection_profiles,
             read_only=read_only,
             enable_live_trading=enable_live_trading,

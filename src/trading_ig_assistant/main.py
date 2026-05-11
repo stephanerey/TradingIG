@@ -118,10 +118,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     history_market_parser = subparsers.add_parser(
         "history-market",
-        help="Run historical backfill diagnostics for a single IG epic.",
+        help="Run historical backfill diagnostics for one or more IG epics.",
     )
     add_credential_arguments(history_market_parser)
-    history_market_parser.add_argument("--epic", required=True)
+    history_market_parser.add_argument("--epic", action="append", required=True)
     history_market_parser.add_argument("--resolution", required=True)
     history_market_parser.add_argument("--max-points", type=int, required=True)
     history_market_parser.add_argument("--fallback-ladder", action="store_true")
@@ -297,7 +297,7 @@ def stream_market(args: argparse.Namespace) -> int:
 
 def history_market(args: argparse.Namespace) -> int:
     LOGGER.debug(
-        "CLI history market start environment=%s epic=%s resolution=%s max_points=%s ladder=%s",
+        "CLI history market start environment=%s epics=%s resolution=%s max_points=%s ladder=%s",
         args.environment,
         args.epic,
         args.resolution,
@@ -318,48 +318,49 @@ def history_market(args: argparse.Namespace) -> int:
         session = adapter.login(credentials)
         print(f"Environment: {environment.value}")
         print(f"Account: {mask_identifier(session.current_account_id)}")
-        print(f"Epic: {args.epic}")
         print(f"Resolution: {args.resolution}")
         print(f"Requested max_points: {args.max_points}")
-        result = load_prices_with_adaptive_fallback(
-            adapter,
-            args.epic,
-            resolution=args.resolution,
-            requested_max_points=args.max_points,
-            use_fallback_ladder=bool(args.fallback_ladder),
-        )
-        for attempt in result.attempts:
-            if attempt.success:
-                print(
-                    f"Attempt {attempt.max_points}: success "
-                    f"({attempt.price_count} candles)"
-                )
-            else:
-                sanitized_error = redact_text(
-                    attempt.error or "unknown",
-                    [credentials.password.reveal(), credentials.api_key.reveal()],
-                )
-                print(
-                    f"Attempt {attempt.max_points}: failed "
-                    f"({sanitized_error})"
-                )
-        print(
-            f"Final selected max_points: "
-            f"{result.selected_max_points if result.selected_max_points is not None else 'none'}"
-        )
-        if result.series is None or not result.series.prices:
-            print("Number of candles returned: 0")
-            return 1
-        first_timestamp = result.series.prices[0].get("snapshotTimeUTC") or result.series.prices[
-            0
-        ].get("snapshotTime")
-        last_timestamp = result.series.prices[-1].get("snapshotTimeUTC") or result.series.prices[
-            -1
-        ].get("snapshotTime")
-        print(f"Number of candles returned: {len(result.series.prices)}")
-        print(f"First timestamp: {first_timestamp}")
-        print(f"Last timestamp: {last_timestamp}")
-        return 0
+        exit_code = 0
+        for epic in args.epic:
+            print(f"Epic: {epic}")
+            result = load_prices_with_adaptive_fallback(
+                adapter,
+                epic,
+                resolution=args.resolution,
+                requested_max_points=args.max_points,
+                use_fallback_ladder=bool(args.fallback_ladder),
+            )
+            for attempt in result.attempts:
+                if attempt.success:
+                    print(
+                        f"Attempt {attempt.max_points}: success "
+                        f"({attempt.price_count} candles)"
+                    )
+                else:
+                    sanitized_error = redact_text(
+                        attempt.error or "unknown",
+                        [credentials.password.reveal(), credentials.api_key.reveal()],
+                    )
+                    print(
+                        f"Attempt {attempt.max_points}: failed "
+                        f"({sanitized_error})"
+                    )
+            final_points = (
+                result.selected_max_points if result.selected_max_points is not None else "none"
+            )
+            print(f"Final selected max_points: {final_points}")
+            if result.series is None or not result.series.prices:
+                print("Number of candles returned: 0")
+                exit_code = 1
+                continue
+            first_price = result.series.prices[0]
+            last_price = result.series.prices[-1]
+            first_timestamp = first_price.get("snapshotTimeUTC") or first_price.get("snapshotTime")
+            last_timestamp = last_price.get("snapshotTimeUTC") or last_price.get("snapshotTime")
+            print(f"Number of candles returned: {len(result.series.prices)}")
+            print(f"First timestamp: {first_timestamp}")
+            print(f"Last timestamp: {last_timestamp}")
+        return exit_code
     except IGAPIError as exc:
         print(f"History diagnostics failed: {exc}", file=sys.stderr)
         return 1

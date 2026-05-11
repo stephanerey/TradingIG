@@ -168,3 +168,69 @@ def test_history_market_reports_fallback_attempts(monkeypatch, capsys) -> None:
     assert "Requested max_points: 5000" in captured.out
     assert "Attempt 5000: failed" in captured.out
     assert "Final selected max_points:" in captured.out
+
+
+def test_history_market_accepts_multiple_epics(monkeypatch, capsys) -> None:
+    class FakeRestAdapter:
+        def __init__(self, environment, read_only=True):
+            self.environment = environment
+            self.read_only = read_only
+
+        def login(self, credentials):
+            return IGSession(
+                cst="secret-cst",
+                security_token="secret-xst",
+                current_account_id="ABCDEF1234",
+                lightstreamer_endpoint="https://stream.example",
+            )
+
+        def get_prices(
+            self,
+            epic,
+            *,
+            resolution=None,
+            max_points=None,
+            start_time=None,
+            end_time=None,
+        ):
+            return type(
+                "Series",
+                (),
+                {
+                    "prices": [
+                        {
+                            "snapshotTime": "2026/05/07 10:00:00",
+                        }
+                    ]
+                },
+            )()
+
+        def logout(self):
+            return None
+
+    monkeypatch.setattr(main_module, "IGRestAdapter", FakeRestAdapter)
+    monkeypatch.setenv("TRADING_IG_PASSWORD", "pass123")
+    monkeypatch.setenv("TRADING_IG_API_KEY", "key123")
+
+    exit_code = main_module.main(
+        [
+            "history-market",
+            "--environment",
+            "live",
+            "--username",
+            "user",
+            "--epic",
+            "IX.D.TEST.ONE",
+            "--epic",
+            "IX.D.TEST.TWO",
+            "--resolution",
+            "MINUTE_5",
+            "--max-points",
+            "120",
+        ]
+    )
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "Epic: IX.D.TEST.ONE" in captured.out
+    assert "Epic: IX.D.TEST.TWO" in captured.out

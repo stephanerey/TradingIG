@@ -409,6 +409,63 @@ def test_resolve_chart_source_product_uses_targeted_search_when_results_miss_cas
     assert "US Tech 100" in adapter.queries
 
 
+def test_resolve_chart_source_product_override_takes_precedence() -> None:
+    from trading_ig_assistant.domain.products import ProductType, TradableProduct
+    from trading_ig_assistant.ui.main_window import _resolve_chart_source_product
+
+    selected = TradableProduct(
+        epic="IX.D.NASDAQ.OPTCALL2.IP",
+        name="US Tech 100 BarriÃƒÂ¨res Achat",
+        product_type=ProductType.BARRIER,
+    )
+    resolved = _resolve_chart_source_product(
+        selected,
+        [],
+        chart_source_overrides={"us tech 100": "IX.D.NASDAQ.IFD.IP"},
+    )
+
+    assert resolved.epic == "IX.D.NASDAQ.IFD.IP"
+    assert resolved.product_type == ProductType.CASH_OR_DFB
+
+
+def test_resolve_chart_source_product_avoids_barrier_candidates_when_cash_exists() -> None:
+    from trading_ig_assistant.domain.products import ProductType, TradableProduct
+    from trading_ig_assistant.services.product_discovery_service import ProductDiscoveryResult
+    from trading_ig_assistant.ui.main_window import _resolve_chart_source_product
+
+    selected = TradableProduct(
+        epic="IX.D.NASDAQ.OPTCALL2.IP",
+        name="US Tech 100 BarriÃƒÂ¨res Achat",
+        product_type=ProductType.BARRIER,
+    )
+    barrier_candidate = TradableProduct(
+        epic="IX.D.NASDAQ.OPTPUT2.IP",
+        name="US Tech 100 Barrier Put",
+        product_type=ProductType.BARRIER,
+        instrument_type="INDICES",
+        status="TRADEABLE",
+    )
+    cash_candidate = TradableProduct(
+        epic="IX.D.NASDAQ.IFD.IP",
+        name="US Tech 100",
+        product_type=ProductType.CASH_OR_DFB,
+        instrument_type="INDICES",
+        status="TRADEABLE",
+    )
+    resolved = _resolve_chart_source_product(
+        selected,
+        [
+            ProductDiscoveryResult(
+                search_term="US Tech 100",
+                candidates_count=3,
+                products=[selected, barrier_candidate, cash_candidate],
+            )
+        ],
+    )
+
+    assert resolved.epic == "IX.D.NASDAQ.IFD.IP"
+
+
 def test_chart_source_search_terms_include_safe_underlying_candidates() -> None:
     from trading_ig_assistant.domain.products import ProductType, TradableProduct
     from trading_ig_assistant.ui.main_window import _chart_source_search_terms
@@ -543,6 +600,142 @@ def test_historical_allowance_failure_keeps_streaming_start(monkeypatch) -> None
     assert (
         "historical data allowance" in window.statusBar().currentMessage().lower()
     )
+
+
+def test_historical_allowance_pause_prevents_automatic_retry(monkeypatch) -> None:
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.app.config import IGEnvironment
+    from trading_ig_assistant.domain.products import ProductType, TradableProduct
+    from trading_ig_assistant.ui.main_window import ActiveIGConnection, MainWindow
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    window = MainWindow()
+
+    class FailingAdapter:
+        session = object()
+
+        def __init__(self):
+            self.calls = 0
+
+        def get_prices(self, epic, **kwargs):
+            self.calls += 1
+            raise RuntimeError(
+                "HTTP 403 {'errorCode': "
+                "'error.public-api.exceeded-account-historical-data-allowance'}"
+            )
+
+    adapter = FailingAdapter()
+    product = TradableProduct(
+        epic="IX.D.NASDAQ.OPTCALL2.IP",
+        name="US Tech 100 BarriÃƒÂ¨res Achat",
+        product_type=ProductType.BARRIER,
+    )
+    window._selected_product = product
+    window._chart_product = product
+    window._active_connection = ActiveIGConnection(
+        environment=IGEnvironment.LIVE,
+        current_account_id="ACC123",
+        accounts=[],
+        adapter=adapter,
+    )
+
+    window._load_selected_product_history()
+    first_call_count = adapter.calls
+    window._load_selected_product_history()
+
+    assert first_call_count > 0
+    assert adapter.calls == first_call_count
+    assert "retry later or use cached history" in window.statusBar().currentMessage().lower()
+
+
+def test_cached_history_is_used_when_allowance_is_exhausted(monkeypatch, tmp_path) -> None:
+    from datetime import UTC, datetime
+
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.app.config import IGEnvironment
+    from trading_ig_assistant.domain.market_data import ChartPriceBasis, PriceSeries
+    from trading_ig_assistant.domain.products import ProductType, TradableProduct
+    from trading_ig_assistant.ui.main_window import (
+        ActiveIGConnection,
+        CachedHistoryEntry,
+        HistoricalAllowanceState,
+        MainWindow,
+        _save_history_cache,
+    )
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    monkeypatch.setattr(
+        "trading_ig_assistant.ui.main_window._history_cache_root",
+        lambda: tmp_path,
+    )
+    window = MainWindow()
+
+    class SilentAdapter:
+        session = object()
+
+        def __init__(self):
+            self.calls = 0
+
+        def get_prices(self, epic, **kwargs):
+            self.calls += 1
+            raise AssertionError("REST history should not be called while allowance is exhausted")
+
+    adapter = SilentAdapter()
+    product = TradableProduct(
+        epic="IX.D.NASDAQ.IFD.IP",
+        name="US Tech 100",
+        product_type=ProductType.CASH_OR_DFB,
+    )
+    entry = CachedHistoryEntry(
+        series=PriceSeries(
+            epic=product.epic,
+            prices=[
+                {
+                    "snapshotTimeUTC": "2026-05-11T10:00:00Z",
+                    "openPrice": {"bid": 100.0, "offer": 100.2},
+                    "highPrice": {"bid": 101.0, "offer": 101.2},
+                    "lowPrice": {"bid": 99.5, "offer": 99.7},
+                    "closePrice": {"bid": 100.5, "offer": 100.7},
+                }
+            ],
+        ),
+        saved_at=datetime(2026, 5, 11, 10, 30, tzinfo=UTC),
+    )
+    _save_history_cache(
+        environment=IGEnvironment.LIVE,
+        account_id="ACC123",
+        epic=product.epic,
+        resolution="MINUTE_5",
+        range_key="1M",
+        price_basis=ChartPriceBasis.MID.value,
+        max_points=8640,
+        entry=entry,
+    )
+    window._selected_product = product
+    window._chart_product = product
+    window._active_connection = ActiveIGConnection(
+        environment=IGEnvironment.LIVE,
+        current_account_id="ACC123",
+        accounts=[],
+        adapter=adapter,
+    )
+    window._history_allowance_state = HistoricalAllowanceState(
+        exhausted=True,
+        exhausted_at=datetime.now(UTC),
+        last_error="historical allowance",
+        affected_account_id="ACC123",
+        affected_epic="*",
+    )
+
+    window._load_selected_product_history()
+
+    assert adapter.calls == 0
+    assert window.chart_view.display_bar_count() == 1
+    assert "using cached history" in window.statusBar().currentMessage().lower()
 
 
 def test_product_selector_displays_discovery_results() -> None:

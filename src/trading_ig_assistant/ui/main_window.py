@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import re
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from PyQt5 import QtCore, QtWidgets
@@ -63,6 +67,38 @@ class ActiveIGConnection:
     current_account_id: str | None
     accounts: list[Account]
     adapter: IGRestAdapter
+
+
+@dataclass
+class CachedHistoryEntry:
+    series: PriceSeries
+    saved_at: datetime
+
+
+@dataclass
+class HistoricalAllowanceState:
+    exhausted: bool = False
+    exhausted_at: datetime | None = None
+    last_error: str | None = None
+    blocked_until: datetime | None = None
+    affected_account_id: str | None = None
+    affected_epic: str | None = None
+
+    def is_blocked(
+        self,
+        *,
+        account_id: str | None,
+        epic: str | None = None,
+    ) -> bool:
+        if not self.exhausted:
+            return False
+        if self.blocked_until is not None and datetime.now(UTC) >= self.blocked_until:
+            return False
+        if self.affected_account_id and account_id and self.affected_account_id != account_id:
+            return False
+        if self.affected_epic in (None, "*"):
+            return True
+        return epic == self.affected_epic
 
 
 class ConnectionWorker(QtCore.QObject):
@@ -217,8 +253,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._discovery_worker: ProductDiscoveryWorker | None = None
         self._price_history_thread: QtCore.QThread | None = None
         self._price_history_worker: PriceHistoryWorker | None = None
-        self._price_history_cache: dict[tuple[str, str, str, int], PriceSeries] = {}
-        self._price_history_blocked_epics: set[str] = set()
+        self._price_history_cache: dict[
+            tuple[str, str, str, str, int],
+            CachedHistoryEntry,
+        ] = {}
+        self._history_allowance_state = HistoricalAllowanceState()
         self._api_allowance_exceeded = False
         self._auth_locked_out = False
         self._selected_product: TradableProduct | None = None
@@ -412,6 +451,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_connection_success(self, result: ActiveIGConnection) -> None:
         self._auth_locked_out = False
         self._api_allowance_exceeded = False
+        self._history_allowance_state = HistoricalAllowanceState()
         self.account_status.clear_auth_locked()
         LOGGER.debug(
             "Connection success environment=%s accounts=%s current_account=%s",
@@ -717,7 +757,8 @@ class MainWindow(QtWidgets.QMainWindow):
             price_basis = self.chart_view.current_price_basis()
             time_axis_mode = self.chart_view.current_time_axis_mode()
             resolution, max_points = _history_request_spec(interval_seconds, range_key)
-            cache_key = (product.epic, resolution, range_key, max_points)
+            account_id = self._active_connection.current_account_id
+            cache_key = (product.epic, resolution, range_key, price_basis.value, max_points)
             LOGGER.debug(
                 "History request selected_product_epic=%s selected_product_type=%s "
                 "chart_source_epic=%s chart_source_type=%s history_request_epic=%s "
@@ -745,55 +786,122 @@ class MainWindow(QtWidgets.QMainWindow):
                     product.epic,
                 )
                 return
-            if product.epic in self._price_history_blocked_epics:
-                LOGGER.debug(
-                    "Price history skipped epic=%s due to cached allowance block",
-                    product.epic,
-                )
-                return
-            cached_series = self._price_history_cache.get(cache_key)
-            if cached_series is not None:
-                series = cached_series
-                fallback_result = HistoricalPriceFetchResult(
+            cached_entry = self._price_history_cache.get(cache_key)
+            if cached_entry is None:
+                cached_entry = _load_history_cache(
+                    environment=self._active_connection.environment,
+                    account_id=account_id,
                     epic=product.epic,
                     resolution=resolution,
-                    requested_max_points=max_points,
-                    selected_max_points=max_points,
-                    series=series,
-                    attempts=(),
+                    range_key=range_key,
+                    price_basis=price_basis.value,
+                    max_points=max_points,
                 )
-            else:
-                fallback_result = load_prices_with_adaptive_fallback(
-                    self._active_connection.adapter,
-                    product.epic,
-                    resolution=resolution,
-                    requested_max_points=max_points,
-                )
-                if fallback_result.series is None:
-                    fallback_reason = _history_fallback_reason(fallback_result)
-                    LOGGER.debug(
-                        "Price history fallback exhausted selected_product_epic=%s "
-                        "chart_source_epic=%s history_requested_points=%s "
-                        "history_attempted_points=%s history_final_points=%s "
-                        "historical_candles_loaded=0 fallback_reason=%s",
-                        self._selected_product.epic if self._selected_product else "<none>",
-                        product.epic,
-                        max_points,
-                        [attempt.max_points for attempt in fallback_result.attempts],
-                        None,
-                        fallback_reason,
-                    )
-                    if _history_fallback_is_historical_allowance(fallback_result):
-                        self.statusBar().showMessage(
-                            "Historical backfill unavailable due to IG historical data allowance; "
-                            "live chart is running.",
-                            12000,
-                        )
-                        return
-                    raise RuntimeError(_history_fallback_last_error(fallback_result))
-                series = fallback_result.series
-                self._price_history_cache[cache_key] = series
+                if cached_entry is not None:
+                    self._price_history_cache[cache_key] = cached_entry
+
             anchor_price = _product_anchor_price(product)
+            if self._history_allowance_state.is_blocked(account_id=account_id, epic=product.epic):
+                LOGGER.debug(
+                    "Price history skipped epic=%s due to historical allowance pause "
+                    "account=%s exhausted_at=%s last_error=%s",
+                    product.epic,
+                    mask_identifier(account_id),
+                    self._history_allowance_state.exhausted_at.isoformat()
+                    if self._history_allowance_state.exhausted_at
+                    else None,
+                    self._history_allowance_state.last_error,
+                )
+                if cached_entry is not None:
+                    self.chart_view.set_price_series(cached_entry.series, anchor_price=anchor_price)
+                    self.statusBar().showMessage(
+                        "IG historical data allowance reached; live chart continues. "
+                        "Using cached history from "
+                        f"{cached_entry.saved_at.strftime('%Y-%m-%d %H:%M:%S')}.",
+                        15000,
+                    )
+                else:
+                    self.statusBar().showMessage(
+                        "IG historical data allowance reached; live chart continues. "
+                        "Retry later or use cached history.",
+                        15000,
+                    )
+                return
+
+            if cached_entry is not None:
+                self.chart_view.set_price_series(cached_entry.series, anchor_price=anchor_price)
+                LOGGER.debug(
+                    "History cache hit selected_product_epic=%s chart_source_epic=%s "
+                    "history_requested_points=%s history_attempted_points=%s "
+                    "history_final_points=%s historical_candles_loaded=%s "
+                    "display_candles=%s cached_at=%s",
+                    self._selected_product.epic if self._selected_product else "<none>",
+                    product.epic,
+                    max_points,
+                    [],
+                    max_points,
+                    len(cached_entry.series.prices),
+                    self.chart_view.display_bar_count(),
+                    cached_entry.saved_at.isoformat(),
+                )
+                self.statusBar().showMessage(
+                    "Using cached history from "
+                    f"{cached_entry.saved_at.strftime('%Y-%m-%d %H:%M:%S')}.",
+                    7000,
+                )
+                return
+
+            fallback_result = load_prices_with_adaptive_fallback(
+                self._active_connection.adapter,
+                product.epic,
+                resolution=resolution,
+                requested_max_points=max_points,
+            )
+            if fallback_result.series is None:
+                fallback_reason = _history_fallback_reason(fallback_result)
+                LOGGER.debug(
+                    "Price history fallback exhausted selected_product_epic=%s "
+                    "chart_source_epic=%s history_requested_points=%s "
+                    "history_attempted_points=%s history_final_points=%s "
+                    "historical_candles_loaded=0 fallback_reason=%s",
+                    self._selected_product.epic if self._selected_product else "<none>",
+                    product.epic,
+                    max_points,
+                    [attempt.max_points for attempt in fallback_result.attempts],
+                    None,
+                    fallback_reason,
+                )
+                if _history_fallback_is_historical_allowance(fallback_result):
+                    self._history_allowance_state = HistoricalAllowanceState(
+                        exhausted=True,
+                        exhausted_at=datetime.now(UTC),
+                        last_error=_history_fallback_last_error(fallback_result),
+                        affected_account_id=account_id,
+                        affected_epic="*",
+                    )
+                    self.statusBar().showMessage(
+                        "IG historical data allowance reached; live chart continues. "
+                        "Retry later or use cached history.",
+                        15000,
+                    )
+                    return
+                raise RuntimeError(_history_fallback_last_error(fallback_result))
+            series = fallback_result.series
+            cached_entry = CachedHistoryEntry(
+                series=series,
+                saved_at=datetime.now(UTC),
+            )
+            self._price_history_cache[cache_key] = cached_entry
+            _save_history_cache(
+                environment=self._active_connection.environment,
+                account_id=account_id,
+                epic=product.epic,
+                resolution=resolution,
+                range_key=range_key,
+                price_basis=price_basis.value,
+                max_points=max_points,
+                entry=cached_entry,
+            )
             self.chart_view.set_price_series(series, anchor_price=anchor_price)
             LOGGER.debug(
                 "Price history loaded selected_product_epic=%s chart_source_epic=%s "
@@ -811,7 +919,6 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         except Exception as exc:
             if _is_api_allowance_exceeded(exc):
-                self._price_history_blocked_epics.add(product.epic)
                 self._mark_api_allowance_exceeded()
             LOGGER.debug(
                 "Price history load failed epic=%s error=%s",
@@ -924,6 +1031,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._active_connection.adapter
             if self._active_connection is not None and not self._api_allowance_exceeded
             else None,
+            chart_source_overrides=self._config.chart_source_overrides,
         )
         LOGGER.debug(
             "Selected product state applied selected_epic=%s selected_product_type=%s "
@@ -1130,6 +1238,116 @@ def _discovery_cache_path(environment: IGEnvironment) -> Path:
     return Path.home() / ".trading_ig_assistant" / f"product_discovery_{environment.value}.json"
 
 
+def _history_cache_root() -> Path:
+    return Path.home() / ".trading_ig_assistant" / "cache" / "history"
+
+
+def _history_cache_path(
+    *,
+    environment: IGEnvironment,
+    account_id: str | None,
+    epic: str,
+    resolution: str,
+    range_key: str,
+    price_basis: str,
+    max_points: int,
+) -> Path:
+    account_marker = _history_account_marker(account_id)
+    payload = json.dumps(
+        {
+            "environment": environment.value,
+            "account": account_marker,
+            "epic": epic,
+            "resolution": resolution,
+            "range_key": range_key,
+            "price_basis": price_basis,
+            "max_points": max_points,
+        },
+        sort_keys=True,
+    )
+    digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()
+    return _history_cache_root() / environment.value / f"{digest}.json"
+
+
+def _history_account_marker(account_id: str | None) -> str:
+    if not account_id:
+        return "no-account"
+    return hashlib.sha1(account_id.encode("utf-8")).hexdigest()[:12]
+
+
+def _load_history_cache(
+    *,
+    environment: IGEnvironment,
+    account_id: str | None,
+    epic: str,
+    resolution: str,
+    range_key: str,
+    price_basis: str,
+    max_points: int,
+) -> CachedHistoryEntry | None:
+    cache_path = _history_cache_path(
+        environment=environment,
+        account_id=account_id,
+        epic=epic,
+        resolution=resolution,
+        range_key=range_key,
+        price_basis=price_basis,
+        max_points=max_points,
+    )
+    if not cache_path.exists():
+        return None
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        LOGGER.debug("History cache read failed path=%s error=%s", cache_path, exc)
+        return None
+    prices = payload.get("prices", [])
+    saved_at_text = payload.get("saved_at")
+    if not isinstance(prices, list) or not saved_at_text:
+        return None
+    try:
+        saved_at = datetime.fromisoformat(str(saved_at_text))
+    except ValueError:
+        saved_at = datetime.now(UTC)
+    return CachedHistoryEntry(
+        series=PriceSeries(epic=epic, prices=prices, raw={"cache": True}),
+        saved_at=saved_at,
+    )
+
+
+def _save_history_cache(
+    *,
+    environment: IGEnvironment,
+    account_id: str | None,
+    epic: str,
+    resolution: str,
+    range_key: str,
+    price_basis: str,
+    max_points: int,
+    entry: CachedHistoryEntry,
+) -> None:
+    cache_path = _history_cache_path(
+        environment=environment,
+        account_id=account_id,
+        epic=epic,
+        resolution=resolution,
+        range_key=range_key,
+        price_basis=price_basis,
+        max_points=max_points,
+    )
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "saved_at": entry.saved_at.isoformat(),
+        "epic": epic,
+        "resolution": resolution,
+        "range_key": range_key,
+        "price_basis": price_basis,
+        "max_points": max_points,
+        "prices": entry.series.prices,
+    }
+    cache_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
 def _product_anchor_price(product: TradableProduct) -> float | None:
     for value in (product.offer, product.bid, product.ko_level, product.strike):
         if isinstance(value, (int, float)) and value > 0:
@@ -1163,6 +1381,8 @@ def _resolve_chart_source_product(
     selected_product: TradableProduct,
     results: list[ProductDiscoveryResult],
     adapter: IGRestAdapter | None = None,
+    *,
+    chart_source_overrides: dict[str, str] | None = None,
 ) -> TradableProduct:
     if selected_product.product_type == ProductType.CASH_OR_DFB:
         LOGGER.debug(
@@ -1178,6 +1398,22 @@ def _resolve_chart_source_product(
     candidates: list[TradableProduct] = []
     for result in results:
         candidates.extend(result.products)
+
+    override_product = _resolve_chart_source_override(
+        selected_product,
+        candidates,
+        chart_source_overrides or {},
+    )
+    if override_product is not None:
+        LOGGER.debug(
+            "Chart source resolved via override selected_product_epic=%s "
+            "selected_product_type=%s chart_source_epic=%s chart_source_type=%s",
+            selected_product.epic,
+            selected_product.product_type.value,
+            override_product.epic,
+            override_product.product_type.value,
+        )
+        return override_product
 
     resolved = _resolve_chart_source_from_candidates(selected_product, candidates)
     if resolved.epic != selected_product.epic:
@@ -1199,10 +1435,16 @@ def _resolve_chart_source_product(
         live_candidates: list[TradableProduct] = []
         for search_term in _chart_source_search_terms(selected_product):
             try:
-                live_candidates.extend(
-                    service.classify_product(summary, details=None)
-                    for summary in adapter.search_markets(search_term)
+                summaries = adapter.search_markets(search_term)
+                classified_candidates = [
+                    service.classify_product(summary, details=None) for summary in summaries
+                ]
+                _log_chart_source_candidates(
+                    selected_product.epic,
+                    search_term,
+                    classified_candidates,
                 )
+                live_candidates.extend(classified_candidates)
             except Exception as exc:
                 LOGGER.debug(
                     "Chart source targeted search term failed "
@@ -1288,36 +1530,102 @@ def _chart_source_search_terms(selected_product: TradableProduct) -> list[str]:
 def _chart_source_candidate_rank(
     product: TradableProduct,
     target_name: str,
-) -> tuple[int, int, int, int, int]:
+) -> tuple[int, int, int, int, int, int]:
     normalized_name = _normalize_chart_base_name(product.name)
     is_cash = 1 if product.product_type == ProductType.CASH_OR_DFB else 0
     is_indices = 1 if str(product.instrument_type or "").upper() == "INDICES" else 0
     is_tradeable = 1 if str(product.status or "").upper() == "TRADEABLE" else 0
     exact_name = 1 if normalized_name == target_name else 0
     close_name = 1 if target_name in normalized_name or normalized_name in target_name else 0
-    return (is_cash, is_indices, is_tradeable, exact_name, close_name)
+    avoids_derivative_words = (
+        0 if any(token in normalized_name for token in ("barri", "option", "call", "put")) else 1
+    )
+    return (is_cash, is_indices, is_tradeable, exact_name, close_name, avoids_derivative_words)
+
+
+def _resolve_chart_source_override(
+    selected_product: TradableProduct,
+    candidates: list[TradableProduct],
+    chart_source_overrides: dict[str, str],
+) -> TradableProduct | None:
+    if not chart_source_overrides:
+        return None
+    override_keys = [
+        selected_product.name,
+        _strip_chart_suffixes(selected_product.name),
+        _normalize_chart_base_name(selected_product.name),
+    ]
+    override_epic = None
+    lowered_overrides = {
+        str(key).strip().lower(): value for key, value in chart_source_overrides.items()
+    }
+    for key in override_keys:
+        override_epic = lowered_overrides.get(str(key).strip().lower())
+        if override_epic:
+            break
+    if not override_epic:
+        return None
+    for candidate in candidates:
+        if candidate.epic == override_epic:
+            return candidate
+    return TradableProduct(
+        epic=override_epic,
+        name=_strip_chart_suffixes(selected_product.name),
+        product_type=ProductType.CASH_OR_DFB,
+        instrument_type="INDICES",
+        status="TRADEABLE",
+    )
+
+
+def _log_chart_source_candidates(
+    selected_epic: str,
+    search_term: str,
+    candidates: list[TradableProduct],
+) -> None:
+    if not candidates:
+        LOGGER.debug(
+            "Chart source candidates selected_epic=%s search_term=%r count=0",
+            selected_epic,
+            search_term,
+        )
+        return
+    sample = [
+        {
+            "name": candidate.name,
+            "epic": candidate.epic,
+            "instrument_type": candidate.instrument_type,
+            "expiry": candidate.expiry,
+            "status": candidate.status,
+            "product_type": candidate.product_type.value,
+        }
+        for candidate in candidates[:5]
+    ]
+    LOGGER.debug(
+        "Chart source candidates selected_epic=%s search_term=%r count=%s sample=%s",
+        selected_epic,
+        search_term,
+        len(candidates),
+        sample,
+    )
 
 
 def _strip_chart_suffixes(name: str) -> str:
     text = " ".join(str(name).split()).strip()
-    replacements = [
-        " Barrières Achat",
-        " Barrières Vente",
-        " BarriÃ¨res Achat",
-        " BarriÃ¨res Vente",
-        " Barrier Call",
-        " Barrier Put",
-        " Barrière Achat",
-        " Barrière Vente",
-        " BarriÃ¨re Achat",
-        " BarriÃ¨re Vente",
-        " Call",
-        " Put",
+    text = re.sub(r"\s*\((?:S1|E1)\)\s*$", "", text, flags=re.IGNORECASE)
+    suffix_patterns = [
+        r"\s+barri\S*\s+achat$",
+        r"\s+barri\S*\s+vente$",
+        r"\s+barrier\s+call$",
+        r"\s+barrier\s+put$",
+        r"\s+call$",
+        r"\s+put$",
     ]
-    for replacement in replacements:
-        if text.endswith(replacement):
-            text = text[: -len(replacement)]
-    return text.replace("(S1)", "").replace("(E1)", "").strip()
+    previous = None
+    while previous != text:
+        previous = text
+        for pattern in suffix_patterns:
+            text = re.sub(pattern, "", text, flags=re.IGNORECASE)
+    return text.strip()
 
 
 def _normalize_chart_base_name(name: str) -> str:

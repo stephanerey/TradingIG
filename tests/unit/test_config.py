@@ -97,3 +97,16 @@ def test_config_persists_last_selected_product_epic(tmp_path: Path) -> None:
     loaded = load_config(config_path)
 
     assert loaded.last_selected_product_epic == "IX.D.NASDAQ.IFD.IP"
+
+
+def test_config_persists_chart_source_overrides(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config = AppConfig(
+        environment=IGEnvironment.LIVE,
+        chart_source_overrides={"us tech 100": "IX.D.NASDAQ.IFD.IP"},
+    )
+
+    save_config(config, config_path)
+    loaded = load_config(config_path)
+
+    assert loaded.chart_source_overrides == {"us tech 100": "IX.D.NASDAQ.IFD.IP"}
