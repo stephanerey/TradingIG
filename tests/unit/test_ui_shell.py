@@ -42,7 +42,7 @@ def test_chart_model_builds_bars_from_price_series() -> None:
             epic="EPIC.ONE",
             prices=[
                 {
-                    "snapshotTime": "2026/05/11 10:00:00",
+                    "snapshotTimeUTC": "2026-05-11T10:00:00Z",
                     "openPrice": {"bid": 10.0},
                     "highPrice": {"bid": 12.0},
                     "lowPrice": {"bid": 9.5},
@@ -55,6 +55,14 @@ def test_chart_model_builds_bars_from_price_series() -> None:
     assert model.bars[0].timestamp_ms == 1_778_493_600_000
     assert model.bars[0].open == 10.0
     assert model.bars[0].close == 11.5
+
+
+def test_history_request_spec_targets_longer_windows() -> None:
+    from trading_ig_assistant.ui.main_window import _history_request_spec
+
+    assert _history_request_spec(60) == ("MINUTE", 6)
+    assert _history_request_spec(300) == ("MINUTE_5", 31)
+    assert _history_request_spec(3600) == ("HOUR", 360)
 
 
 def test_chart_view_accepts_live_quote_update() -> None:

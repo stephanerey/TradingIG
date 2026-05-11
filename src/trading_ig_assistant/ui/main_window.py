@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from PyQt5 import QtCore, QtWidgets
@@ -210,7 +211,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._discovery_worker: ProductDiscoveryWorker | None = None
         self._price_history_thread: QtCore.QThread | None = None
         self._price_history_worker: PriceHistoryWorker | None = None
-        self._price_history_cache: dict[str, PriceSeries] = {}
+        self._price_history_cache: dict[tuple[str, str, int], PriceSeries] = {}
         self._price_history_blocked_epics: set[str] = set()
         self._api_allowance_exceeded = False
         self._auth_locked_out = False
@@ -264,6 +265,7 @@ class MainWindow(QtWidgets.QMainWindow):
         body = QtWidgets.QSplitter()
         body.setOrientation(QtCore.Qt.Horizontal)
         self.chart_view = ChartView()
+        self.chart_view.resolution_changed.connect(self._on_chart_resolution_changed)
         body.addWidget(self.chart_view)
 
         right_tabs = QtWidgets.QTabWidget()
@@ -703,34 +705,41 @@ class MainWindow(QtWidgets.QMainWindow):
         if product is None:
             return
         try:
-            cache_key = product.epic
+            interval_seconds = self.chart_view.current_interval_seconds()
+            resolution, lookback_days = _history_request_spec(interval_seconds)
+            cache_key = (product.epic, resolution, lookback_days)
             if self._api_allowance_exceeded:
                 LOGGER.debug(
                     "Price history skipped epic=%s due to global allowance block",
-                    cache_key,
+                    product.epic,
                 )
                 return
-            if cache_key in self._price_history_blocked_epics:
+            if product.epic in self._price_history_blocked_epics:
                 LOGGER.debug(
                     "Price history skipped epic=%s due to cached allowance block",
-                    cache_key,
+                    product.epic,
                 )
                 return
             cached_series = self._price_history_cache.get(cache_key)
             if cached_series is not None:
                 series = cached_series
             else:
+                end_time = datetime.now(tz=UTC)
+                start_time = end_time - timedelta(days=lookback_days)
                 series = self._active_connection.adapter.get_prices(
                     product.epic,
-                    resolution="MINUTE",
-                    max_points=PRICE_HISTORY_POINTS,
+                    resolution=resolution,
+                    start_time=start_time,
+                    end_time=end_time,
                 )
                 self._price_history_cache[cache_key] = series
             anchor_price = _product_anchor_price(product)
             self.chart_view.set_price_series(series, anchor_price=anchor_price)
             LOGGER.debug(
-                "Price history loaded epic=%s points=%s",
+                "Price history loaded epic=%s resolution=%s days=%s points=%s",
                 product.epic,
+                resolution,
+                lookback_days,
                 len(series.prices),
             )
         except Exception as exc:
@@ -749,6 +758,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def _reload_selected_product_history(self) -> None:
+        self._load_selected_product_history()
+
+    @QtCore.pyqtSlot(int)
+    def _on_chart_resolution_changed(self, _interval_seconds: int) -> None:
+        if self._selected_product is None:
+            return
         self._load_selected_product_history()
 
     def _stop_streaming(self) -> None:
@@ -954,6 +969,25 @@ def _api_resolution_for_interval(interval_seconds: int) -> str:
         86_400: "DAY",
     }
     return mapping.get(interval_seconds, "MINUTE")
+
+
+def _history_request_spec(interval_seconds: int) -> tuple[str, int]:
+    resolution = _api_resolution_for_interval(interval_seconds)
+    max_available_days = {
+        60: 40,
+        300: 360,
+        600: 360,
+        900: 360,
+        1800: 360,
+        3600: 360,
+        7200: 360,
+        14_400: 360,
+        86_400: 3650,
+    }.get(interval_seconds, 40)
+    target_points = 9000
+    days_for_target_points = max(1, int((interval_seconds * target_points) / 86_400))
+    lookback_days = min(max_available_days, days_for_target_points)
+    return resolution, lookback_days
 
 
 def _resolve_account_id(

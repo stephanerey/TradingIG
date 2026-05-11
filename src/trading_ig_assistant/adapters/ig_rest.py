@@ -8,6 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Protocol
 
 from trading_ig_assistant.adapters.credentials import IGCredentials
@@ -376,16 +377,32 @@ class IGRestAdapter:
         *,
         resolution: str | None = None,
         max_points: int | None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
     ) -> PriceSeries:
         LOGGER.debug(
-            "IG prices start epic=%s resolution=%s max_points=%s",
+            "IG prices start epic=%s resolution=%s max_points=%s start=%s end=%s",
             epic,
             resolution,
             max_points,
+            start_time.isoformat() if start_time else None,
+            end_time.isoformat() if end_time else None,
         )
         encoded_epic = urllib.parse.quote(epic, safe="")
-        if resolution is None or max_points is None:
+        if resolution is None and start_time is None and end_time is None and max_points is None:
             response = self._request("GET", f"/prices/{encoded_epic}", version="3")
+        elif start_time is not None and end_time is not None and resolution is not None:
+            query = urllib.parse.urlencode(
+                {
+                    "startdate": _format_ig_datetime(start_time),
+                    "enddate": _format_ig_datetime(end_time),
+                }
+            )
+            response = self._request(
+                "GET",
+                f"/prices/{encoded_epic}/{resolution}?{query}",
+                version="1",
+            )
         else:
             response = self._request(
                 "GET",
@@ -489,3 +506,7 @@ def _market_summary_from_mapping(item: dict[str, Any]) -> MarketSummary:
         market_status=item.get("marketStatus"),
         raw=item,
     )
+
+
+def _format_ig_datetime(value: datetime) -> str:
+    return value.strftime("%Y-%m-%dT%H:%M:%S")

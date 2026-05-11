@@ -155,6 +155,8 @@ class ChartPlotWidget(pg.PlotWidget):
 
 
 class ChartView(QtWidgets.QWidget):
+    resolution_changed = QtCore.pyqtSignal(int)
+
     def __init__(
         self,
         model: ChartDataModel | None = None,
@@ -194,6 +196,9 @@ class ChartView(QtWidgets.QWidget):
         self.resolution_combo = QtWidgets.QComboBox()
         for label, interval_seconds in CHART_RESOLUTIONS:
             self.resolution_combo.addItem(label, interval_seconds)
+        default_resolution_index = self.resolution_combo.findData(300)
+        if default_resolution_index >= 0:
+            self.resolution_combo.setCurrentIndex(default_resolution_index)
         self.resolution_combo.currentIndexChanged.connect(self._on_resolution_changed)
         self.resolution_combo.setMinimumWidth(110)
 
@@ -317,6 +322,7 @@ class ChartView(QtWidgets.QWidget):
     def _on_resolution_changed(self, _index: int) -> None:
         self._current_interval_seconds = int(self.resolution_combo.currentData() or 60)
         self._apply_resolution()
+        self.resolution_changed.emit(self._current_interval_seconds)
 
     def _apply_resolution(self) -> None:
         if not self._source_model.bars:
@@ -842,24 +848,35 @@ def _bars_from_price_series(
 
 
 def _parse_price_timestamp_ms(price: dict[str, object]) -> int | None:
-    raw_timestamp = None
-    for key in ("snapshotTimeUTC", "snapshotTime", "snapshot_time", "timestamp", "UTM"):
+    utc_timestamp = price.get("snapshotTimeUTC")
+    if utc_timestamp not in (None, ""):
+        if isinstance(utc_timestamp, (int, float)):
+            return int(float(utc_timestamp))
+        parsed = _parse_datetime_string(str(utc_timestamp).strip(), assume_utc=True)
+        if parsed is not None:
+            return int(parsed.timestamp() * 1000)
+
+    local_timestamp = price.get("snapshotTime")
+    if local_timestamp not in (None, ""):
+        if isinstance(local_timestamp, (int, float)):
+            return int(float(local_timestamp))
+        parsed = _parse_datetime_string(str(local_timestamp).strip(), assume_utc=False)
+        if parsed is not None:
+            return int(parsed.timestamp() * 1000)
+
+    for key in ("snapshot_time", "timestamp", "UTM"):
         value = price.get(key)
-        if value not in (None, ""):
-            raw_timestamp = value
-            break
-    if raw_timestamp is None:
-        return None
-    if isinstance(raw_timestamp, (int, float)):
-        return int(float(raw_timestamp))
-    text = str(raw_timestamp).strip()
-    parsed = _parse_datetime_string(text)
-    if parsed is not None:
-        return int(parsed.timestamp() * 1000)
+        if value in (None, ""):
+            continue
+        if isinstance(value, (int, float)):
+            return int(float(value))
+        parsed = _parse_datetime_string(str(value).strip(), assume_utc=True)
+        if parsed is not None:
+            return int(parsed.timestamp() * 1000)
     return None
 
 
-def _parse_datetime_string(text: str) -> datetime | None:
+def _parse_datetime_string(text: str, *, assume_utc: bool) -> datetime | None:
     patterns = [
         "%Y/%m/%d %H:%M:%S",
         "%Y-%m-%d %H:%M:%S",
@@ -868,7 +885,11 @@ def _parse_datetime_string(text: str) -> datetime | None:
     ]
     for pattern in patterns:
         try:
-            return datetime.strptime(text, pattern).replace(tzinfo=UTC)
+            parsed = datetime.strptime(text, pattern)
+            if assume_utc:
+                return parsed.replace(tzinfo=UTC)
+            local_timezone = datetime.now().astimezone().tzinfo or UTC
+            return parsed.replace(tzinfo=local_timezone)
         except ValueError:
             continue
     return None
