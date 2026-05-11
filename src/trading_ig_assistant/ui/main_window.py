@@ -761,6 +761,12 @@ def humanize_ig_error(message: str) -> str:
         return "API key disabled in IG settings."
     if "api-key-revoked" in message:
         return "API key revoked. Generate a new key in IG settings."
+    if "failure-invalid-client-security-token" in message:
+        return (
+            "IG rejected the client security token during login. Verify the selected "
+            "environment, the API key for that environment, and whether the key is still "
+            "enabled in My IG."
+        )
     if "stopbrock" in message or "stockbroking-not-supported" in message:
         return (
             "IG rejected the demo connection. Verify that the demo API identifier, demo "
