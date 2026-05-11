@@ -40,7 +40,7 @@ from trading_ig_assistant.ui.log_view_dialog import LogViewDialog
 from trading_ig_assistant.ui.macro_ribbon_widget import MacroRibbonWidget
 from trading_ig_assistant.ui.product_selector import ProductSelectorWidget
 from trading_ig_assistant.ui.settings_dialog import SettingsDialog
-from trading_ig_assistant.utils.logging_config import configure_logging
+from trading_ig_assistant.utils.logging_config import configure_logging, emit_session_banner
 from trading_ig_assistant.utils.redaction import mask_identifier
 
 LOGGER = logging.getLogger(__name__)
@@ -716,11 +716,19 @@ class MainWindow(QtWidgets.QMainWindow):
 
 def run_gui() -> int:
     configure_logging()
+    session_id = emit_session_banner()
+    if session_id:
+        LOGGER.debug("GUI session banner emitted session_id=%s", session_id)
     LOGGER.debug("GUI launch start")
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
     window = MainWindow()
     window.show()
-    return app.exec()
+    try:
+        return app.exec()
+    finally:
+        logging.getLogger("trading_ig_assistant.session").info("=" * 86)
+        logging.getLogger("trading_ig_assistant.session").info("TradingIG session end")
+        logging.getLogger("trading_ig_assistant.session").info("=" * 86)
 
 
 def _credentials_from_request(request: IGConnectionRequest):

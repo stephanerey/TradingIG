@@ -22,19 +22,31 @@ class OhlcBar:
 
 
 class ChartDataModel:
-    def __init__(self, bars: list[OhlcBar] | None = None) -> None:
+    def __init__(
+        self,
+        bars: list[OhlcBar] | None = None,
+        *,
+        is_placeholder: bool = False,
+    ) -> None:
         self._bars = bars or []
+        self._is_placeholder = is_placeholder
 
     @property
     def bars(self) -> list[OhlcBar]:
         return list(self._bars)
 
-    def set_bars(self, bars: list[OhlcBar]) -> None:
+    @property
+    def is_placeholder(self) -> bool:
+        return self._is_placeholder
+
+    def set_bars(self, bars: list[OhlcBar], *, placeholder: bool | None = None) -> None:
         self._bars = list(bars)
+        if placeholder is not None:
+            self._is_placeholder = placeholder
 
     @classmethod
     def sample(cls, anchor_price: float | None = None) -> ChartDataModel:
-        return cls(_build_placeholder_bars(anchor_price or 100.0))
+        return cls(_build_placeholder_bars(anchor_price or 100.0, count=60), is_placeholder=True)
 
     @classmethod
     def from_price_series(
@@ -44,8 +56,9 @@ class ChartDataModel:
     ) -> ChartDataModel:
         bars = _bars_from_price_series(series, anchor_price=anchor_price)
         if not bars and anchor_price is not None:
-            bars = _build_placeholder_bars(anchor_price)
-        return cls(bars)
+            bars = _build_placeholder_bars(anchor_price, count=60)
+            return cls(bars, is_placeholder=True)
+        return cls(bars, is_placeholder=False)
 
     def resampled(self, interval_seconds: int) -> list[OhlcBar]:
         if interval_seconds <= 1:
@@ -109,7 +122,10 @@ class ChartView(QtWidgets.QWidget):
     ) -> None:
         super().__init__(parent)
         self._model = model or ChartDataModel.sample()
-        self._source_model = ChartDataModel(list(self._model.bars))
+        self._source_model = ChartDataModel(
+            list(self._model.bars),
+            is_placeholder=self._model.is_placeholder,
+        )
         self._live_price_line: pg.InfiniteLine | None = None
         self._last_quote: Quote | None = None
         self._selected_anchor_price: float | None = None
@@ -158,10 +174,10 @@ class ChartView(QtWidgets.QWidget):
 
         layout.addLayout(header)
         layout.addWidget(self._plot)
-        self.set_bars(self._model.bars)
+        self._render_display_bars(self._source_model.bars)
 
     def set_bars(self, bars: list[OhlcBar]) -> None:
-        self._source_model.set_bars(bars)
+        self._source_model.set_bars(bars, placeholder=False)
         self._manual_zoom = False
         self._render_display_bars(self._source_model.bars)
 
@@ -180,10 +196,7 @@ class ChartView(QtWidgets.QWidget):
         self._refresh_snapshot_labels(product)
         if self._selected_anchor_price is not None and (
             not self._source_model.bars
-            or (
-                self._selected_anchor_price > 1000
-                and _looks_like_placeholder_bars(self._source_model.bars)
-            )
+            or (self._selected_anchor_price > 1000 and self._source_model.is_placeholder)
         ):
             self._source_model = ChartDataModel.sample(self._selected_anchor_price)
             self._manual_zoom = False
@@ -413,14 +426,7 @@ def _product_anchor_price(product: object) -> float | None:
     return None
 
 
-def _looks_like_placeholder_bars(bars: list[OhlcBar]) -> bool:
-    if len(bars) != 5:
-        return False
-    closes = [bar.close for bar in bars]
-    return min(closes) > 0 and max(closes) < 1000
-
-
-def _build_placeholder_bars(anchor_price: float) -> list[OhlcBar]:
+def _build_placeholder_bars(anchor_price: float, *, count: int = 60) -> list[OhlcBar]:
     step = max(abs(anchor_price) * 0.00015, 0.5)
     now = int(datetime.now(tz=UTC).timestamp())
     patterns = [
@@ -431,14 +437,16 @@ def _build_placeholder_bars(anchor_price: float) -> list[OhlcBar]:
         (-0.2, 2.1, -1.0, 3.0),
     ]
     bars: list[OhlcBar] = []
-    for index, (open_delta, close_delta, low_delta, high_delta) in enumerate(patterns):
-        open_price = anchor_price + open_delta * step
-        close_price = anchor_price + close_delta * step
+    for index in range(count):
+        open_delta, close_delta, low_delta, high_delta = patterns[index % len(patterns)]
+        drift = (index // len(patterns)) * 0.25 * step
+        open_price = anchor_price + open_delta * step + drift
+        close_price = anchor_price + close_delta * step + drift
         low_price = min(open_price, close_price) + low_delta * step
         high_price = max(open_price, close_price) + high_delta * step
         bars.append(
             OhlcBar(
-                timestamp_ms=(now - (len(patterns) - index) * 300) * 1000,
+                timestamp_ms=(now - (count - index) * 60) * 1000,
                 open=open_price,
                 high=max(high_price, open_price, close_price),
                 low=min(low_price, open_price, close_price),

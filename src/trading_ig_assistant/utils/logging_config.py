@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
+from uuid import uuid4
 
 LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
 LOG_FILE_NAME = "trading_ig_assistant.log"
+_SESSION_BANNER_EMITTED = False
 
 
 def default_log_dir() -> Path:
@@ -47,6 +50,26 @@ def configure_logging(
 
     logging.getLogger(__name__).debug("Logging configured at %s", log_path)
     return log_path
+
+
+def emit_session_banner() -> str:
+    """Write a visible separator for the current app session."""
+
+    global _SESSION_BANNER_EMITTED
+    if _SESSION_BANNER_EMITTED:
+        return ""
+    _SESSION_BANNER_EMITTED = True
+    session_id = uuid4().hex[:8]
+    started_at = datetime.now(tz=UTC).isoformat()
+    logger = logging.getLogger("trading_ig_assistant.session")
+    logger.info("=" * 86)
+    logger.info(
+        "TradingIG session start session_id=%s started_at=%s",
+        session_id,
+        started_at,
+    )
+    logger.info("=" * 86)
+    return session_id
 
 
 def _find_existing_file_handler(
