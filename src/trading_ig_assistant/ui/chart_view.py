@@ -127,6 +127,7 @@ class ChartView(QtWidgets.QWidget):
             is_placeholder=self._model.is_placeholder,
         )
         self._live_price_line: pg.InfiniteLine | None = None
+        self._live_price_label: pg.TextItem | None = None
         self._last_quote: Quote | None = None
         self._selected_anchor_price: float | None = None
         self._display_bars: list[OhlcBar] = []
@@ -222,8 +223,12 @@ class ChartView(QtWidgets.QWidget):
             f"% Variation: {_format_signed_number(quote.percent_change)}"
         )
         live_value = quote.offer if quote.offer is not None else quote.bid
-        if live_value is not None and self._live_price_line is not None:
-            self._live_price_line.setValue(live_value)
+        if live_value is not None:
+            if self._live_price_line is not None:
+                self._live_price_line.setValue(live_value)
+            if self._live_price_label is not None:
+                self._live_price_label.setText(_format_number(live_value))
+                self._position_live_price_label(live_value)
 
     def set_price_series(self, series: PriceSeries, anchor_price: float | None = None) -> None:
         self._source_model = ChartDataModel.from_price_series(series, anchor_price=anchor_price)
@@ -276,6 +281,9 @@ class ChartView(QtWidgets.QWidget):
             if live_value is not None:
                 if self._live_price_line is not None:
                     self._live_price_line.setValue(live_value)
+                if self._live_price_label is not None:
+                    self._live_price_label.setText(_format_number(live_value))
+                    self._position_live_price_label(live_value)
 
     def current_interval_seconds(self) -> int:
         return self._current_interval_seconds
@@ -346,6 +354,9 @@ class ChartView(QtWidgets.QWidget):
         self._add_level("Limit", last_close * 1.03, "#0f7b45")
         self._add_level("KO", last_close * 0.95, "#6f42c1")
         self._live_price_line = self._add_level("Live", last_close, "#0b6bcb", dashed=False)
+        self._live_price_line.label = None
+        self._live_price_label = _build_live_price_label(_format_number(last_close), "#0b6bcb")
+        self._plot.addItem(self._live_price_label)
         if self._view_center_ts is None or self._view_span_seconds is None or not self._manual_zoom:
             first_ts = self._display_bars[0].timestamp_ms / 1000.0
             last_ts = self._display_bars[-1].timestamp_ms / 1000.0
@@ -354,6 +365,7 @@ class ChartView(QtWidgets.QWidget):
             self._view_center_ts = (first_ts + last_ts) / 2
             self._view_span_seconds = max(span + padding * 2, 60.0)
         self._apply_view_range()
+        self._position_live_price_label()
 
     def _apply_view_range(self) -> None:
         if not self._display_bars:
@@ -371,6 +383,17 @@ class ChartView(QtWidgets.QWidget):
         high = max(highs)
         y_padding = max((high - low) * 0.12, 1.0)
         self._plot.setYRange(low - y_padding, high + y_padding)
+        self._position_live_price_label()
+
+    def _position_live_price_label(self, live_value: float | None = None) -> None:
+        if self._live_price_label is None or not self._display_bars:
+            return
+        if live_value is None:
+            live_value = self._display_bars[-1].close
+        right_edge = self._display_bars[-1].timestamp_ms / 1000.0
+        if self._view_center_ts is not None and self._view_span_seconds is not None:
+            right_edge = self._view_center_ts + (self._view_span_seconds / 2)
+        self._live_price_label.setPos(right_edge, live_value)
 
 
 def _format_number(value: float | None) -> str:
@@ -461,6 +484,18 @@ def _bar_from_chart_update(chart_update: ChartCandleUpdate) -> OhlcBar | None:
         close=close_price,
         volume=chart_update.volume,
     )
+
+
+def _build_live_price_label(text: str, color: str) -> pg.TextItem:
+    label = pg.TextItem(
+        text=text,
+        color=color,
+        anchor=(0, 0.5),
+        fill=QtGui.QColor("#f4f8fc"),
+        border=pg.mkPen(color, width=1),
+    )
+    label.setZValue(10_000)
+    return label
 
 
 def _bars_from_price_series(
