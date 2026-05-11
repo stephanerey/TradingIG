@@ -628,6 +628,14 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_stream_chart(self, chart_update: object) -> None:
         if isinstance(chart_update, ChartCandleUpdate):
             self.chart_view.apply_chart_update(chart_update)
+            live_quote = _quote_from_chart_update(chart_update)
+            if live_quote is not None:
+                self.chart_view.set_live_quote(live_quote)
+                if (
+                    self._selected_product is not None
+                    and live_quote.epic == self._selected_product.epic
+                ):
+                    self.product_selector.set_live_quote(live_quote)
 
     @QtCore.pyqtSlot(str)
     def _on_stream_status(self, status: str) -> None:
@@ -1007,6 +1015,28 @@ def _product_anchor_price(product: TradableProduct) -> float | None:
     return None
 
 
+def _quote_from_chart_update(chart_update: ChartCandleUpdate) -> Quote | None:
+    raw = chart_update.raw or {}
+    bid = _optional_float(raw.get("BID_CLOSE"))
+    offer = _optional_float(raw.get("OFR_CLOSE"))
+    if bid is None and offer is None and chart_update.close is None:
+        return None
+    if bid is None:
+        bid = chart_update.close
+    if offer is None:
+        offer = chart_update.close
+    return Quote(
+        epic=chart_update.epic,
+        bid=bid,
+        offer=offer,
+        net_change=_optional_float(raw.get("DAY_NET_CHG_MID")),
+        percent_change=_optional_float(raw.get("DAY_PERC_CHG_MID")),
+        timestamp_ms=chart_update.timestamp_ms,
+        snapshot=chart_update.snapshot,
+        raw=dict(raw),
+    )
+
+
 def _resolve_chart_source_product(
     selected_product: TradableProduct,
     results: list[ProductDiscoveryResult],
@@ -1097,3 +1127,12 @@ def _normalize_chart_base_name(name: str) -> str:
             text = text[: -len(replacement)]
     text = text.replace("(S1)", "").replace("(E1)", "").strip()
     return text.lower()
+
+
+def _optional_float(value: object) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(str(value).replace(",", ""))
+    except (TypeError, ValueError):
+        return None

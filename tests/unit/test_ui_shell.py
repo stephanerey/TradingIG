@@ -131,6 +131,33 @@ def test_chart_view_accepts_live_quote_update() -> None:
     assert view._live_price_label is not None
 
 
+def test_quote_from_chart_update_uses_day_change_fields() -> None:
+    from trading_ig_assistant.domain.market_data import ChartCandleUpdate
+    from trading_ig_assistant.ui.main_window import _quote_from_chart_update
+
+    quote = _quote_from_chart_update(
+        ChartCandleUpdate(
+            epic="EPIC.ONE",
+            interval="1MINUTE",
+            timestamp_ms=1_778_496_600_000,
+            close=29195.0,
+            raw={
+                "BID_CLOSE": "29194.8",
+                "OFR_CLOSE": "29195.3",
+                "DAY_NET_CHG_MID": "-37.3",
+                "DAY_PERC_CHG_MID": "-0.13",
+            },
+        )
+    )
+
+    assert quote is not None
+    assert quote.epic == "EPIC.ONE"
+    assert quote.bid == 29194.8
+    assert quote.offer == 29195.3
+    assert quote.net_change == -37.3
+    assert quote.percent_change == -0.13
+
+
 def test_account_status_widget_accepts_account_data(qtbot=None) -> None:
     from PyQt5 import QtWidgets
 

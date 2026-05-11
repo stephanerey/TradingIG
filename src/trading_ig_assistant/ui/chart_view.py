@@ -101,15 +101,57 @@ class CandlestickItem(pg.GraphicsObject):
 
 
 class ChartPlotWidget(pg.PlotWidget):
-    zoom_requested = QtCore.pyqtSignal(float)
+    zoom_requested = QtCore.pyqtSignal(float, float)
+    pan_requested = QtCore.pyqtSignal(float)
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self._dragging = False
+        self._last_drag_x: float | None = None
 
     def wheelEvent(self, event: QtGui.QWheelEvent) -> None:  # noqa: N802
         delta = event.angleDelta().y()
         if delta == 0:
             super().wheelEvent(event)
             return
-        self.zoom_requested.emit(0.85 if delta > 0 else 1.15)
+        scene_pos = self.mapToScene(event.pos())
+        view_point = self.plotItem.vb.mapSceneToView(scene_pos)
+        self.zoom_requested.emit(0.85 if delta > 0 else 1.15, float(view_point.x()))
         event.accept()
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+        if event.button() == QtCore.Qt.LeftButton:
+            scene_pos = self.mapToScene(event.pos())
+            if self.plotItem.vb.sceneBoundingRect().contains(scene_pos):
+                view_point = self.plotItem.vb.mapSceneToView(scene_pos)
+                self._dragging = True
+                self._last_drag_x = float(view_point.x())
+                self.setCursor(QtCore.Qt.ClosedHandCursor)
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+        if self._dragging and self._last_drag_x is not None:
+            scene_pos = self.mapToScene(event.pos())
+            view_point = self.plotItem.vb.mapSceneToView(scene_pos)
+            current_x = float(view_point.x())
+            delta_x = current_x - self._last_drag_x
+            if abs(delta_x) > 0:
+                self.pan_requested.emit(delta_x)
+            self._last_drag_x = current_x
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
+        if event.button() == QtCore.Qt.LeftButton and self._dragging:
+            self._dragging = False
+            self._last_drag_x = None
+            self.unsetCursor()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class ChartView(QtWidgets.QWidget):
@@ -174,6 +216,7 @@ class ChartView(QtWidgets.QWidget):
         self._plot.setMenuEnabled(False)
         self._plot.getAxis("left").setWidth(96)
         self._plot.zoom_requested.connect(self._on_zoom_requested)
+        self._plot.pan_requested.connect(self._on_pan_requested)
         self._plot.scene().sigMouseMoved.connect(self._on_mouse_moved)
 
         layout.addLayout(header)
@@ -296,7 +339,31 @@ class ChartView(QtWidgets.QWidget):
     def current_interval_seconds(self) -> int:
         return self._current_interval_seconds
 
-    def _on_zoom_requested(self, factor: float) -> None:
+    def _on_zoom_requested(self, factor: float, anchor_x: float | None = None) -> None:
+        if not self._display_bars:
+            return
+        if self._view_center_ts is None or self._view_span_seconds is None:
+            first_ts = self._display_bars[0].timestamp_ms / 1000.0
+            last_ts = self._display_bars[-1].timestamp_ms / 1000.0
+            self._view_center_ts = (first_ts + last_ts) / 2
+            self._view_span_seconds = max(last_ts - first_ts, 60.0)
+        old_span = self._view_span_seconds
+        old_min = self._view_center_ts - old_span / 2
+        old_max = self._view_center_ts + old_span / 2
+        self._manual_zoom = True
+        new_span = max(old_span * factor, 60.0)
+        if anchor_x is None or old_max <= old_min:
+            self._view_span_seconds = new_span
+        else:
+            anchor_ratio = (anchor_x - old_min) / (old_max - old_min)
+            anchor_ratio = max(0.0, min(anchor_ratio, 1.0))
+            new_min = anchor_x - anchor_ratio * new_span
+            new_max = new_min + new_span
+            self._view_center_ts = (new_min + new_max) / 2
+            self._view_span_seconds = new_span
+        self._apply_view_range()
+
+    def _on_pan_requested(self, delta_x: float) -> None:
         if not self._display_bars:
             return
         if self._view_center_ts is None or self._view_span_seconds is None:
@@ -305,10 +372,7 @@ class ChartView(QtWidgets.QWidget):
             self._view_center_ts = (first_ts + last_ts) / 2
             self._view_span_seconds = max(last_ts - first_ts, 60.0)
         self._manual_zoom = True
-        self._view_span_seconds = max(
-            self._view_span_seconds * factor,
-            60.0,
-        )
+        self._view_center_ts -= delta_x
         self._apply_view_range()
 
     def _add_level(
