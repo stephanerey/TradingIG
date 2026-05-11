@@ -3,8 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from trading_ig_assistant.adapters.ig_rest import IGSession
-from trading_ig_assistant.adapters.ig_streaming import IGStreamingAdapter
+from trading_ig_assistant.adapters.ig_streaming import (
+    IGStreamingAdapter,
+    _chart_update_from_update,
+    _quote_from_update,
+    build_stream_items,
+)
 from trading_ig_assistant.domain.market_data import ChartCandleUpdate
+from trading_ig_assistant.domain.streaming import (
+    CHART_CANDLE_SPEC,
+    MARKET_QUOTE_SPEC,
+    PRICE_QUOTE_SPEC,
+)
 
 
 class FakeConnectionDetails:
@@ -207,6 +217,90 @@ def test_streaming_adapter_subscribes_multiple_market_prices() -> None:
         "PRICE:ACC123:EPIC.ONE",
         "PRICE:ACC123:EPIC.TWO",
     ]
+
+
+def test_stream_item_template_generation_supports_market_and_chart() -> None:
+    assert build_stream_items(MARKET_QUOTE_SPEC, epics=["EPIC.ONE"]) == ["MARKET:EPIC.ONE"]
+    assert build_stream_items(
+        PRICE_QUOTE_SPEC,
+        epics=["EPIC.ONE"],
+        account_id="ACC123",
+    ) == ["PRICE:ACC123:EPIC.ONE"]
+    assert build_stream_items(
+        CHART_CANDLE_SPEC,
+        epics=["EPIC.ONE"],
+        scale="1MINUTE",
+    ) == ["CHART:EPIC.ONE:1MINUTE"]
+
+
+def test_quote_parser_supports_market_style_fields() -> None:
+    quote = _quote_from_update(
+        FakeUpdate(
+            {
+                "BID": "100.1",
+                "OFFER": "100.4",
+                "UPDATE_TIME": "1778490000000",
+                "MARKET_STATE": "TRADEABLE",
+                "CHANGE": "-2.5",
+                "CHANGE_PCT": "-0.24",
+            },
+            item_name="MARKET:EPIC.ONE",
+        )
+    )
+
+    assert quote.epic == "EPIC.ONE"
+    assert quote.bid == 100.1
+    assert quote.offer == 100.4
+    assert quote.net_change == -2.5
+    assert quote.percent_change == -0.24
+    assert quote.market_state == "TRADEABLE"
+    assert quote.timestamp_ms == 1_778_490_000_000
+
+
+def test_quote_parser_supports_price_style_fields() -> None:
+    quote = _quote_from_update(
+        FakeUpdate(
+            {
+                "BIDPRICE1": "2311.9",
+                "ASKPRICE1": "2313.1",
+                "NET_CHG": "-38.7",
+                "NET_CHG_PCT": "-1.64",
+                "TIMESTAMP": "1778490000000",
+            },
+            item_name="PRICE:ACC123:EPIC.ONE",
+        )
+    )
+
+    assert quote.epic == "EPIC.ONE"
+    assert quote.bid == 2311.9
+    assert quote.offer == 2313.1
+    assert quote.net_change == -38.7
+    assert quote.percent_change == -1.64
+
+
+def test_chart_parser_supports_chart_subscription_item() -> None:
+    chart_update = _chart_update_from_update(
+        FakeUpdate(
+            {
+                "UTM": "1778490000000",
+                "BID_OPEN": "10.0",
+                "BID_HIGH": "12.0",
+                "BID_LOW": "9.5",
+                "BID_CLOSE": "11.5",
+                "CONS_END": "1",
+                "CONS_TICK_COUNT": "8",
+            },
+            item_name="CHART:EPIC.ONE:1MINUTE",
+        ),
+        "EPIC.ONE",
+        "1MINUTE",
+    )
+
+    assert isinstance(chart_update, ChartCandleUpdate)
+    assert chart_update.epic == "EPIC.ONE"
+    assert chart_update.interval == "1MINUTE"
+    assert chart_update.close == 11.5
+    assert chart_update.end_of_candle is True
 
 
 def test_streaming_adapter_reports_missing_endpoint() -> None:
