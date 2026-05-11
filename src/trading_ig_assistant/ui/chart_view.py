@@ -126,6 +126,9 @@ class ChartView(QtWidgets.QWidget):
         self._hover_vline: pg.InfiniteLine | None = None
         self._hover_hline: pg.InfiniteLine | None = None
         self._hover_label: pg.TextItem | None = None
+        self._hover_state_bar_timestamp_ms: int | None = None
+        self._hover_state_x_value: float | None = None
+        self._hover_state_y_value: float | None = None
         self._last_quote: Quote | None = None
         self._selected_anchor_price: float | None = None
         self._display_bars: list[OhlcBar] = []
@@ -383,6 +386,7 @@ class ChartView(QtWidgets.QWidget):
             self._view_span_seconds = max(span + padding * 2, 60.0)
         self._apply_view_range()
         self._position_live_price_label()
+        self._restore_hover_state()
 
     def _apply_view_range(self) -> None:
         if not self._display_bars:
@@ -408,10 +412,13 @@ class ChartView(QtWidgets.QWidget):
             return
         if live_value is None:
             live_value = self._display_bars[-1].close
-        right_edge = self._display_bars[-1].timestamp_ms / 1000.0
+        left_edge = self._display_bars[0].timestamp_ms / 1000.0
         if self._view_center_ts is not None and self._view_span_seconds is not None:
-            right_edge = self._view_center_ts + (self._view_span_seconds / 2)
-        self._live_price_label.setPos(right_edge - 18.0, live_value)
+            left_edge = self._view_center_ts - (self._view_span_seconds / 2)
+        self._live_price_label.setPos(
+            left_edge + max(self._current_interval_seconds * 0.15, 6.0),
+            live_value,
+        )
 
     def _position_hover_label(self) -> None:
         if self._hover_label is None or self._hover_label.isVisible() is False:
@@ -420,9 +427,10 @@ class ChartView(QtWidgets.QWidget):
             return
         if self._view_center_ts is None or self._view_span_seconds is None:
             return
-        left_edge = self._view_center_ts - self._view_span_seconds / 2
-        top_edge = max(bar.high for bar in self._display_bars)
-        self._hover_label.setPos(left_edge + 20.0, top_edge)
+        self._position_hover_label_at(
+            self._hover_state_x_value,
+            self._hover_state_y_value,
+        )
 
     def _on_mouse_moved(self, scene_pos: QtCore.QPointF) -> None:
         if not self._display_bars:
@@ -437,19 +445,16 @@ class ChartView(QtWidgets.QWidget):
         if bar is None:
             self._hide_hover_state()
             return
+        self._hover_state_bar_timestamp_ms = bar.timestamp_ms
+        self._hover_state_x_value = x_value
+        self._hover_state_y_value = y_value
         if self._hover_vline is not None:
             self._hover_vline.setPos(bar.timestamp_ms / 1000.0)
             self._hover_vline.show()
         if self._hover_hline is not None:
             self._hover_hline.setPos(y_value)
             self._hover_hline.show()
-        if self._hover_label is not None:
-            self._hover_label.setHtml(_hover_label_html(bar))
-            self._hover_label.setVisible(True)
-            self._hover_label.setPos(
-                bar.timestamp_ms / 1000.0 + max(self._current_interval_seconds * 0.75, 30.0),
-                bar.high,
-            )
+        self._show_hover_label(bar, x_value, y_value)
 
     def _nearest_bar(self, x_value: float) -> OhlcBar | None:
         if not self._display_bars:
@@ -475,12 +480,80 @@ class ChartView(QtWidgets.QWidget):
             self._hover_hline.hide()
         if self._hover_label is not None:
             self._hover_label.hide()
+        self._hover_state_bar_timestamp_ms = None
+        self._hover_state_x_value = None
+        self._hover_state_y_value = None
+
+    def _show_hover_label(self, bar: OhlcBar, x_value: float, y_value: float) -> None:
+        if self._hover_label is None:
+            return
+        self._hover_label.setHtml(_hover_label_html(bar))
+        self._hover_label.setVisible(True)
+        self._position_hover_label_at(x_value, y_value)
+
+    def _restore_hover_state(self) -> None:
+        if (
+            self._hover_label is None
+            or self._hover_state_bar_timestamp_ms is None
+            or self._hover_state_x_value is None
+            or self._hover_state_y_value is None
+        ):
+            return
+        bar = self._bar_by_timestamp_ms(self._hover_state_bar_timestamp_ms)
+        if bar is None:
+            return
+        if self._hover_vline is not None:
+            self._hover_vline.setPos(bar.timestamp_ms / 1000.0)
+            self._hover_vline.show()
+        if self._hover_hline is not None:
+            self._hover_hline.setPos(self._hover_state_y_value)
+            self._hover_hline.show()
+        self._show_hover_label(bar, self._hover_state_x_value, self._hover_state_y_value)
+
+    def _position_hover_label_at(
+        self,
+        x_value: float | None,
+        y_value: float | None,
+    ) -> None:
+        if self._hover_label is None:
+            return
+        if (
+            x_value is None
+            or y_value is None
+            or self._view_center_ts is None
+            or self._view_span_seconds is None
+            or not self._display_bars
+        ):
+            return
+        x_min = self._view_center_ts - self._view_span_seconds / 2
+        x_max = self._view_center_ts + self._view_span_seconds / 2
+        y_min = min(bar.low for bar in self._display_bars)
+        y_max = max(bar.high for bar in self._display_bars)
+        x_offset = max(self._current_interval_seconds * 0.8, 40.0)
+        y_offset = max((y_max - y_min) * 0.05, 2.0)
+        tooltip_x = x_value + x_offset
+        if tooltip_x > x_max - x_offset:
+            tooltip_x = x_value - (x_offset * 1.6)
+        if tooltip_x < x_min + 2.0:
+            tooltip_x = x_min + 2.0
+        tooltip_y = y_value + y_offset
+        if tooltip_y > y_max - y_offset:
+            tooltip_y = y_value - (y_offset * 4.0)
+        if tooltip_y < y_min + y_offset:
+            tooltip_y = y_min + y_offset
+        self._hover_label.setPos(tooltip_x, tooltip_y)
+
+    def _bar_by_timestamp_ms(self, timestamp_ms: int) -> OhlcBar | None:
+        for bar in self._display_bars:
+            if bar.timestamp_ms == timestamp_ms:
+                return bar
+        return None
 
 
 def _format_number(value: float | None) -> str:
     if value is None:
         return "-"
-    return f"{value:g}"
+    return f"{value:.1f}"
 
 
 def _format_signed_number(value: float | None) -> str:
@@ -576,10 +649,13 @@ def _build_live_price_label(text: str, color: str) -> pg.TextItem:
     label = pg.TextItem(
         text=text,
         color=color,
-        anchor=(1, 0.5),
+        anchor=(0, 0.5),
         fill=QtGui.QColor("#f4f8fc"),
         border=pg.mkPen(color, width=1),
     )
+    font = QtGui.QFont("Consolas", 9)
+    font.setStyleHint(QtGui.QFont.Monospace)
+    label.setFont(font)
     label.setZValue(10_000)
     return label
 
@@ -587,7 +663,7 @@ def _build_live_price_label(text: str, color: str) -> pg.TextItem:
 def _build_hover_label() -> pg.TextItem:
     label = pg.TextItem(
         text="",
-        anchor=(0, 1),
+        anchor=(0, 0),
         fill=QtGui.QColor("#f4f8fc"),
         border=pg.mkPen("#607080", width=1),
     )
