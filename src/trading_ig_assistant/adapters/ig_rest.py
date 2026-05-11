@@ -374,8 +374,8 @@ class IGRestAdapter:
         self,
         epic: str,
         *,
-        resolution: str = "MINUTE",
-        max_points: int = 10,
+        resolution: str | None = None,
+        max_points: int | None = None,
     ) -> PriceSeries:
         LOGGER.debug(
             "IG prices start epic=%s resolution=%s max_points=%s",
@@ -384,11 +384,14 @@ class IGRestAdapter:
             max_points,
         )
         encoded_epic = urllib.parse.quote(epic, safe="")
-        response = self._request(
-            "GET",
-            f"/prices/{encoded_epic}/{resolution}/{max_points}",
-            version="3",
-        )
+        if resolution is None or max_points is None:
+            response = self._request("GET", f"/prices/{encoded_epic}", version="3")
+        else:
+            response = self._request(
+                "GET",
+                f"/prices/{encoded_epic}/{resolution}/{max_points}",
+                version="2",
+            )
         series = PriceSeries(
             epic=epic,
             prices=list(response.body.get("prices", [])),

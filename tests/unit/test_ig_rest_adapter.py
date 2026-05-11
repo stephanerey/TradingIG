@@ -133,7 +133,7 @@ def test_login_and_read_only_calls_use_demo_base_url() -> None:
     accounts = adapter.get_accounts()
     markets = adapter.search_markets("US Tech")
     details = adapter.get_market_details("IX.D.NASDAQ.IFD.IP")
-    prices = adapter.get_prices("IX.D.NASDAQ.IFD.IP", max_points=2)
+    prices = adapter.get_prices("IX.D.NASDAQ.IFD.IP", resolution="MINUTE", max_points=2)
 
     assert session.current_account_id == "SANITIZED_ACCOUNT"
     assert accounts[0].account_name == "Demo CFD"
@@ -148,6 +148,7 @@ def test_login_and_read_only_calls_use_demo_base_url() -> None:
     assert all(
         request["url"].startswith("https://demo-api.ig.com") for request in http_client.requests
     )
+    assert http_client.requests[-1]["headers"]["VERSION"] == "2"
 
 
 def test_order_execution_methods_are_hard_blocked_in_p00() -> None:

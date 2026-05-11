@@ -25,13 +25,17 @@ except ImportError:  # pragma: no cover - keep import errors explicit at runtime
 
 LOGGER = logging.getLogger(__name__)
 PRICE_FIELDS = [
+    "BIDPRICE1",
+    "ASKPRICE1",
+    "DAY_NET_CHG_MID",
+    "DAY_PERC_CHG_MID",
+    "MARKET_STATE",
+    "UPDATE_TIME",
+    "UTM",
     "BID",
     "OFFER",
     "CHANGE",
     "CHANGE_PCT",
-    "MARKET_STATE",
-    "UPDATE_TIME",
-    "UTM",
 ]
 
 
@@ -107,7 +111,7 @@ class IGStreamingAdapter:
         if self._subscription is not None:
             self._client.unsubscribe(self._subscription)
             self._subscription = None
-        item_name = f"MARKET:{epic}"
+        item_name = f"PRICE:{self.account_id}:{epic}"
         LOGGER.debug(
             "IG streaming subscribe market account=%s epic=%s item=%s",
             self._mask_account_id(self.account_id),

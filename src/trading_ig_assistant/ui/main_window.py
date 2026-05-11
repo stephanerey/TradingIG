@@ -628,9 +628,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._active_connection is None or self._selected_product is None:
             return
         try:
+            interval_seconds = self.chart_view.current_interval_seconds()
             series = self._active_connection.adapter.get_prices(
                 self._selected_product.epic,
-                resolution="MINUTE",
+                resolution=_api_resolution_for_interval(interval_seconds),
                 max_points=240,
             )
             anchor_price = _product_anchor_price(self._selected_product)
@@ -654,6 +655,7 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot()
     def _reload_selected_product_history(self) -> None:
         self._load_selected_product_history()
+
 
     def _stop_streaming(self) -> None:
         if self._streaming_adapter is None:
@@ -756,6 +758,21 @@ def humanize_ig_error(message: str) -> str:
             "selected account belongs to the selected live/demo environment."
         )
     return message
+
+
+def _api_resolution_for_interval(interval_seconds: int) -> str:
+    mapping = {
+        60: "MINUTE",
+        300: "MINUTE_5",
+        600: "MINUTE_10",
+        900: "MINUTE_15",
+        1800: "MINUTE_30",
+        3600: "HOUR",
+        7200: "HOUR_2",
+        14_400: "HOUR_4",
+        86_400: "DAY",
+    }
+    return mapping.get(interval_seconds, "MINUTE")
 
 
 def _resolve_account_id(

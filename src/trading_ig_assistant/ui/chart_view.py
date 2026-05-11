@@ -89,6 +89,18 @@ class CandlestickItem(pg.GraphicsObject):
         return QtCore.QRectF(self._picture.boundingRect())
 
 
+class ChartPlotWidget(pg.PlotWidget):
+    zoom_requested = QtCore.pyqtSignal(float)
+
+    def wheelEvent(self, event: QtGui.QWheelEvent) -> None:  # noqa: N802
+        delta = event.angleDelta().y()
+        if delta == 0:
+            super().wheelEvent(event)
+            return
+        self.zoom_requested.emit(0.85 if delta > 0 else 1.15)
+        event.accept()
+
+
 class ChartView(QtWidgets.QWidget):
     def __init__(
         self,
@@ -101,6 +113,10 @@ class ChartView(QtWidgets.QWidget):
         self._live_price_line: pg.InfiniteLine | None = None
         self._last_quote: Quote | None = None
         self._selected_anchor_price: float | None = None
+        self._display_bars: list[OhlcBar] = []
+        self._view_center_ts: float | None = None
+        self._view_span_seconds: float | None = None
+        self._manual_zoom = False
         self._current_interval_seconds = 60
         layout = QtWidgets.QVBoxLayout(self)
         header = QtWidgets.QGridLayout()
@@ -129,7 +145,7 @@ class ChartView(QtWidgets.QWidget):
         header.addWidget(self.change_label, 1, 2)
         header.addWidget(self.percent_change_label, 1, 3)
 
-        self._plot = pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem(orientation="bottom")})
+        self._plot = ChartPlotWidget(axisItems={"bottom": pg.DateAxisItem(orientation="bottom")})
         self._plot.setBackground("#fbfaf7")
         self._plot.showGrid(x=True, y=True, alpha=0.25)
         self._plot.setLabel("left", "Price")
@@ -138,40 +154,16 @@ class ChartView(QtWidgets.QWidget):
         self._plot.setMouseEnabled(x=False, y=False)
         self._plot.hideButtons()
         self._plot.setMenuEnabled(False)
+        self._plot.zoom_requested.connect(self._on_zoom_requested)
 
         layout.addLayout(header)
         layout.addWidget(self._plot)
         self.set_bars(self._model.bars)
 
     def set_bars(self, bars: list[OhlcBar]) -> None:
-        self._model.set_bars(bars)
-        self._plot.clear()
-        if self._model.bars:
-            self._plot.addItem(CandlestickItem(self._model.bars, self._bar_width_seconds()))
-        self._live_price_line = None
-        if bars:
-            last_close = bars[-1].close
-            self._add_level("Entry", last_close, "#254f8f")
-            self._add_level("Stop", last_close * 0.98, "#a61b1b")
-            self._add_level("Limit", last_close * 1.03, "#0f7b45")
-            self._add_level("KO", last_close * 0.95, "#6f42c1")
-            self._live_price_line = self._add_level(
-                "Live",
-                last_close,
-                "#0b6bcb",
-                dashed=False,
-            )
-            first_ts = bars[0].timestamp_ms / 1000.0
-            last_ts = bars[-1].timestamp_ms / 1000.0
-            span = max(last_ts - first_ts, 60.0)
-            padding = span * 0.08
-            self._plot.setXRange(first_ts - padding, last_ts + padding)
-            lows = [bar.low for bar in bars]
-            highs = [bar.high for bar in bars]
-            low = min(lows)
-            high = max(highs)
-            y_padding = max((high - low) * 0.12, 1.0)
-            self._plot.setYRange(low - y_padding, high + y_padding)
+        self._source_model.set_bars(bars)
+        self._manual_zoom = False
+        self._render_display_bars(self._source_model.bars)
 
     def set_selected_product(self, product: object) -> None:
         name = getattr(product, "name", "Unknown product")
@@ -186,11 +178,18 @@ class ChartView(QtWidgets.QWidget):
         self.product_label.setText(" ".join(part for part in label_parts if part))
         self._selected_anchor_price = _product_anchor_price(product)
         self._refresh_snapshot_labels(product)
-        if self._selected_anchor_price is not None and not self._source_model.bars:
+        if self._selected_anchor_price is not None and (
+            not self._source_model.bars
+            or (
+                self._selected_anchor_price > 1000
+                and _looks_like_placeholder_bars(self._source_model.bars)
+            )
+        ):
             self._source_model = ChartDataModel.sample(self._selected_anchor_price)
-            self._apply_resolution()
+            self._manual_zoom = False
+            self._render_display_bars(self._source_model.resampled(self._current_interval_seconds))
         elif self._source_model.bars:
-            self._apply_resolution()
+            self._render_display_bars(self._source_model.resampled(self._current_interval_seconds))
 
     def set_stream_status(self, status: str) -> None:
         self.stream_status_label.setText(f"Stream: {status}")
@@ -211,15 +210,14 @@ class ChartView(QtWidgets.QWidget):
         )
         live_value = quote.offer if quote.offer is not None else quote.bid
         if live_value is not None:
-            if self._is_out_of_view(live_value):
-                self._source_model = ChartDataModel.sample(live_value)
-                self._apply_resolution()
+            self._update_display_bars_from_quote(quote, live_value)
             if self._live_price_line is not None:
                 self._live_price_line.setValue(live_value)
 
     def set_price_series(self, series: PriceSeries, anchor_price: float | None = None) -> None:
         self._source_model = ChartDataModel.from_price_series(series, anchor_price=anchor_price)
-        self._apply_resolution()
+        self._manual_zoom = False
+        self._render_display_bars(self._source_model.resampled(self._current_interval_seconds))
 
     def _refresh_snapshot_labels(self, product: object) -> None:
         self.bid_label.setText(f"Vente: {_format_number(getattr(product, 'bid', None))}")
@@ -239,12 +237,35 @@ class ChartView(QtWidgets.QWidget):
         if not self._source_model.bars:
             return
         bars = self._source_model.resampled(self._current_interval_seconds)
-        self.set_bars(bars)
+        self._render_display_bars(bars)
         if self._last_quote is not None:
-            self.set_live_quote(self._last_quote)
+            live_value = (
+                self._last_quote.offer
+                if self._last_quote.offer is not None
+                else self._last_quote.bid
+            )
+            if live_value is not None:
+                self._update_display_bars_from_quote(self._last_quote, live_value)
+                if self._live_price_line is not None:
+                    self._live_price_line.setValue(live_value)
 
     def current_interval_seconds(self) -> int:
         return self._current_interval_seconds
+
+    def _on_zoom_requested(self, factor: float) -> None:
+        if not self._display_bars:
+            return
+        if self._view_center_ts is None or self._view_span_seconds is None:
+            first_ts = self._display_bars[0].timestamp_ms / 1000.0
+            last_ts = self._display_bars[-1].timestamp_ms / 1000.0
+            self._view_center_ts = (first_ts + last_ts) / 2
+            self._view_span_seconds = max(last_ts - first_ts, 60.0)
+        self._manual_zoom = True
+        self._view_span_seconds = max(
+            self._view_span_seconds * factor,
+            60.0,
+        )
+        self._apply_view_range()
 
     def _add_level(
         self,
@@ -280,7 +301,78 @@ class ChartView(QtWidgets.QWidget):
         return value < low - buffer or value > high + buffer
 
     def _bar_width_seconds(self) -> float:
-        return max(self._current_interval_seconds * 0.65, 20.0)
+        return 18.0
+
+    def _render_display_bars(self, bars: list[OhlcBar]) -> None:
+        self._display_bars = list(bars)
+        self._model.set_bars(self._display_bars)
+        self._plot.clear()
+        self._live_price_line = None
+        if not self._display_bars:
+            return
+
+        self._plot.addItem(CandlestickItem(self._display_bars, self._bar_width_seconds()))
+        last_close = self._display_bars[-1].close
+        self._add_level("Entry", last_close, "#254f8f")
+        self._add_level("Stop", last_close * 0.98, "#a61b1b")
+        self._add_level("Limit", last_close * 1.03, "#0f7b45")
+        self._add_level("KO", last_close * 0.95, "#6f42c1")
+        self._live_price_line = self._add_level("Live", last_close, "#0b6bcb", dashed=False)
+        if self._view_center_ts is None or self._view_span_seconds is None or not self._manual_zoom:
+            first_ts = self._display_bars[0].timestamp_ms / 1000.0
+            last_ts = self._display_bars[-1].timestamp_ms / 1000.0
+            span = max(last_ts - first_ts, 60.0)
+            padding = span * 0.06
+            self._view_center_ts = (first_ts + last_ts) / 2
+            self._view_span_seconds = max(span + padding * 2, 60.0)
+        self._apply_view_range()
+
+    def _apply_view_range(self) -> None:
+        if not self._display_bars:
+            return
+        if self._view_center_ts is None or self._view_span_seconds is None:
+            first_ts = self._display_bars[0].timestamp_ms / 1000.0
+            last_ts = self._display_bars[-1].timestamp_ms / 1000.0
+            self._view_center_ts = (first_ts + last_ts) / 2
+            self._view_span_seconds = max(last_ts - first_ts, 60.0)
+        half_span = self._view_span_seconds / 2
+        self._plot.setXRange(self._view_center_ts - half_span, self._view_center_ts + half_span)
+        lows = [bar.low for bar in self._display_bars]
+        highs = [bar.high for bar in self._display_bars]
+        low = min(lows)
+        high = max(highs)
+        y_padding = max((high - low) * 0.12, 1.0)
+        self._plot.setYRange(low - y_padding, high + y_padding)
+
+    def _update_display_bars_from_quote(self, quote: Quote, live_value: float) -> None:
+        if not self._display_bars:
+            return
+        last_bar = self._display_bars[-1]
+        now_ms = quote.timestamp_ms or int(datetime.now(tz=UTC).timestamp() * 1000)
+        updated_bars = list(self._display_bars)
+        if now_ms - last_bar.timestamp_ms >= self._current_interval_seconds * 1000:
+            updated_bars.append(
+                OhlcBar(
+                    timestamp_ms=now_ms,
+                    open=last_bar.close,
+                    high=max(last_bar.close, live_value),
+                    low=min(last_bar.close, live_value),
+                    close=live_value,
+                    volume=last_bar.volume,
+                )
+            )
+        else:
+            updated_bars[-1] = OhlcBar(
+                timestamp_ms=last_bar.timestamp_ms,
+                open=last_bar.open,
+                high=max(last_bar.high, live_value),
+                low=min(last_bar.low, live_value),
+                close=live_value,
+                volume=last_bar.volume,
+            )
+        self._display_bars = updated_bars
+        self._model.set_bars(updated_bars)
+        self._render_display_bars(updated_bars)
 
 
 def _format_number(value: float | None) -> str:
@@ -319,6 +411,13 @@ def _product_anchor_price(product: object) -> float | None:
         if isinstance(value, (int, float)) and value > 0:
             return float(value)
     return None
+
+
+def _looks_like_placeholder_bars(bars: list[OhlcBar]) -> bool:
+    if len(bars) != 5:
+        return False
+    closes = [bar.close for bar in bars]
+    return min(closes) > 0 and max(closes) < 1000
 
 
 def _build_placeholder_bars(anchor_price: float) -> list[OhlcBar]:
