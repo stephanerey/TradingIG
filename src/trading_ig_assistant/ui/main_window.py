@@ -651,6 +651,11 @@ def humanize_ig_error(message: str) -> str:
         return "API key disabled in IG settings."
     if "api-key-revoked" in message:
         return "API key revoked. Generate a new key in IG settings."
+    if "stopbrock" in message or "stockbroking-not-supported" in message:
+        return (
+            "IG rejected the demo connection. Verify that the demo API identifier, demo "
+            "password, and demo API key were created in the demo tab, not reused from live."
+        )
     if "validation.pattern.invalid.auth.identifier" in message:
         return (
             "Invalid API identifier format. For demo, use the demo API identifier you chose "

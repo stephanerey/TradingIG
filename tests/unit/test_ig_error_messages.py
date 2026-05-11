@@ -25,3 +25,10 @@ def test_humanize_ig_error_for_too_many_failed_attempts() -> None:
 
     assert "too many failed login attempts" in message.lower()
     assert "wait" in message.lower()
+
+
+def test_humanize_ig_error_for_demo_stopbrocking() -> None:
+    message = humanize_ig_error("{'errorCode': 'stopbrocking'}")
+
+    assert "demo connection" in message.lower()
+    assert "demo api identifier" in message.lower()
