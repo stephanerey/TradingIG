@@ -380,8 +380,11 @@ def test_resolve_chart_source_product_uses_targeted_search_when_results_miss_cas
     from trading_ig_assistant.ui.main_window import _resolve_chart_source_product
 
     class FakeAdapter:
+        def __init__(self):
+            self.queries = []
+
         def search_markets(self, query: str):
-            assert query == "us tech 100"
+            self.queries.append(query)
             return [
                 MarketSummary(
                     epic="IX.D.NASDAQ.IFD.IP",
@@ -398,10 +401,28 @@ def test_resolve_chart_source_product_uses_targeted_search_when_results_miss_cas
         direction=ProductDirection.BUY,
     )
 
-    chart_product = _resolve_chart_source_product(selected, [], FakeAdapter())
+    adapter = FakeAdapter()
+    chart_product = _resolve_chart_source_product(selected, [], adapter)
 
     assert chart_product.epic == "IX.D.NASDAQ.IFD.IP"
     assert chart_product.product_type == ProductType.CASH_OR_DFB
+    assert "US Tech 100" in adapter.queries
+
+
+def test_chart_source_search_terms_include_safe_underlying_candidates() -> None:
+    from trading_ig_assistant.domain.products import ProductType, TradableProduct
+    from trading_ig_assistant.ui.main_window import _chart_source_search_terms
+
+    product = TradableProduct(
+        epic="IX.D.NASDAQ.OPTCALL2.IP",
+        name="US Tech 100 BarriÃ¨res Achat",
+        product_type=ProductType.BARRIER,
+    )
+
+    terms = _chart_source_search_terms(product)
+
+    assert "US Tech 100" in terms
+    assert "us tech 100" in [term.lower() for term in terms]
 
 
 def test_resolve_chart_source_product_logs_selected_and_chart_source(caplog) -> None:
@@ -475,6 +496,52 @@ def test_historical_rest_failure_does_not_prevent_streaming_start(monkeypatch) -
     assert (
         "Historical backfill unavailable; live chart is running."
         in window.statusBar().currentMessage()
+    )
+
+
+def test_historical_allowance_failure_keeps_streaming_start(monkeypatch) -> None:
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.adapters.ig_rest import IGAPIError
+    from trading_ig_assistant.app.config import IGEnvironment
+    from trading_ig_assistant.domain.products import ProductType, TradableProduct
+    from trading_ig_assistant.ui.main_window import ActiveIGConnection, MainWindow
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    window = MainWindow()
+
+    class FailingAdapter:
+        session = object()
+
+        def get_prices(self, epic, **kwargs):
+            raise IGAPIError(
+                "HTTP 403: {'errorCode': "
+                "'error.public-api.exceeded-account-historical-data-allowance'}"
+            )
+
+    product = TradableProduct(
+        epic="EPIC.ONE",
+        name="US Tech 100 BarriÃƒÂ¨res Achat",
+        product_type=ProductType.BARRIER,
+    )
+    restarted = {"called": False}
+
+    monkeypatch.setattr(window, "_restart_streaming", lambda: restarted.__setitem__("called", True))
+    window._selected_product = product
+    window._chart_product = product
+    window._active_connection = ActiveIGConnection(
+        environment=IGEnvironment.LIVE,
+        current_account_id="ACC123",
+        accounts=[],
+        adapter=FailingAdapter(),
+    )
+
+    window._apply_selected_product_state()
+
+    assert restarted["called"] is True
+    assert (
+        "historical data allowance" in window.statusBar().currentMessage().lower()
     )
 
 

@@ -105,3 +105,66 @@ def test_stream_market_redacts_account_and_secrets(monkeypatch, capsys) -> None:
     assert "pass123" not in captured.out
     assert "AB...34" in captured.out
     assert "First update received: yes" in captured.out
+
+
+def test_history_market_reports_fallback_attempts(monkeypatch, capsys) -> None:
+    class FakeRestAdapter:
+        def __init__(self, environment, read_only=True):
+            self.environment = environment
+            self.read_only = read_only
+            self.calls = []
+
+        def login(self, credentials):
+            return IGSession(
+                cst="secret-cst",
+                security_token="secret-xst",
+                current_account_id="ABCDEF1234",
+                lightstreamer_endpoint="https://stream.example",
+            )
+
+        def get_prices(
+            self,
+            epic,
+            *,
+            resolution=None,
+            max_points=None,
+            start_time=None,
+            end_time=None,
+        ):
+            self.calls.append((epic, resolution, max_points))
+            if max_points == 5000:
+                raise RuntimeError(
+                    "HTTP 403 {'errorCode': "
+                    "'error.public-api.exceeded-account-historical-data-allowance'}"
+                )
+            return type("Series", (), {"prices": [{"snapshotTime": "2026/05/07 10:00:00"}]})()
+
+        def logout(self):
+            return None
+
+    monkeypatch.setattr(main_module, "IGRestAdapter", FakeRestAdapter)
+    monkeypatch.setenv("TRADING_IG_PASSWORD", "pass123")
+    monkeypatch.setenv("TRADING_IG_API_KEY", "key123")
+
+    exit_code = main_module.main(
+        [
+            "history-market",
+            "--environment",
+            "live",
+            "--username",
+            "user",
+            "--epic",
+            "IX.D.TEST.IP",
+            "--resolution",
+            "MINUTE_5",
+            "--max-points",
+            "5000",
+            "--fallback-ladder",
+        ]
+    )
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "Requested max_points: 5000" in captured.out
+    assert "Attempt 5000: failed" in captured.out
+    assert "Final selected max_points:" in captured.out

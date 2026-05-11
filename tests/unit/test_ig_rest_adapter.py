@@ -5,6 +5,9 @@ from trading_ig_assistant.adapters.ig_rest import (
     HttpResponse,
     IGRestAdapter,
     LiveTradingDisabledError,
+    build_historical_fallback_ladder,
+    is_historical_allowance_error,
+    load_prices_with_adaptive_fallback,
 )
 from trading_ig_assistant.app.config import IGEnvironment
 
@@ -270,3 +273,93 @@ def test_get_prices_falls_back_from_malformed_date_to_max_points() -> None:
 
     assert len(prices.prices) == 1
     assert "/prices/IX.D.NASDAQ.IFD.IP/MINUTE/2" in http_client.requests[-1]["url"]
+
+
+def test_build_historical_fallback_ladder_skips_larger_values() -> None:
+    assert build_historical_fallback_ladder(8640) == [8640, 5000, 3000, 2000, 1000, 600, 300, 120]
+    assert build_historical_fallback_ladder(700) == [700, 600, 300, 120]
+
+
+def test_is_historical_allowance_error_matches_ig_error_code() -> None:
+    assert is_historical_allowance_error(
+        "HTTP 403 {'errorCode': 'error.public-api.exceeded-account-historical-data-allowance'}"
+    )
+    assert is_historical_allowance_error("exceeded-account-historical-data-allowance")
+    assert not is_historical_allowance_error("error.public-api.exceeded-api-key-allowance")
+
+
+def test_adaptive_history_fallback_uses_first_successful_attempt() -> None:
+    class FallbackClient(FakeHttpClient):
+        def request(self, method, url, *, headers, json_body=None, timeout):
+            if "/prices/IX.D.NASDAQ.IFD.IP/MINUTE_5/8640" in url:
+                return HttpResponse(
+                    status_code=403,
+                    headers={},
+                    body={
+                        "errorCode": "error.public-api.exceeded-account-historical-data-allowance"
+                    },
+                )
+            if "/prices/IX.D.NASDAQ.IFD.IP/MINUTE_5/5000" in url:
+                return HttpResponse(
+                    status_code=200,
+                    headers={},
+                    body={"prices": [{"snapshotTime": "2026/05/07 10:00:00"}]},
+                )
+            return super().request(
+                method,
+                url,
+                headers=headers,
+                json_body=json_body,
+                timeout=timeout,
+            )
+
+    adapter = IGRestAdapter(environment=IGEnvironment.DEMO, http_client=FallbackClient())
+    adapter.login(IGCredentials("demo-user", "fake-password", "fake-api-key"))
+
+    result = load_prices_with_adaptive_fallback(
+        adapter,
+        "IX.D.NASDAQ.IFD.IP",
+        resolution="MINUTE_5",
+        requested_max_points=8640,
+    )
+
+    assert result.succeeded is True
+    assert result.selected_max_points == 5000
+    assert len(result.attempts) == 2
+    assert result.attempts[0].success is False
+    assert result.attempts[1].success is True
+
+
+def test_adaptive_history_fallback_allows_all_fail_result() -> None:
+    class FailingFallbackClient(FakeHttpClient):
+        def request(self, method, url, *, headers, json_body=None, timeout):
+            if "/prices/IX.D.NASDAQ.IFD.IP/MINUTE_5/" in url:
+                return HttpResponse(
+                    status_code=403,
+                    headers={},
+                    body={
+                        "errorCode": "error.public-api.exceeded-account-historical-data-allowance"
+                    },
+                )
+            return super().request(
+                method,
+                url,
+                headers=headers,
+                json_body=json_body,
+                timeout=timeout,
+            )
+
+    adapter = IGRestAdapter(environment=IGEnvironment.DEMO, http_client=FailingFallbackClient())
+    adapter.login(IGCredentials("demo-user", "fake-password", "fake-api-key"))
+
+    result = load_prices_with_adaptive_fallback(
+        adapter,
+        "IX.D.NASDAQ.IFD.IP",
+        resolution="MINUTE_5",
+        requested_max_points=8640,
+    )
+
+    assert result.succeeded is False
+    assert result.series is None
+    assert result.selected_max_points is None
+    assert len(result.attempts) == len(build_historical_fallback_ladder(8640))

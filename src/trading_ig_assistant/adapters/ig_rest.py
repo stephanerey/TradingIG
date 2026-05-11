@@ -52,6 +52,28 @@ class HttpResponse:
     body: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class HistoricalPriceAttempt:
+    max_points: int
+    success: bool
+    price_count: int = 0
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class HistoricalPriceFetchResult:
+    epic: str
+    resolution: str
+    requested_max_points: int
+    selected_max_points: int | None
+    series: PriceSeries | None
+    attempts: tuple[HistoricalPriceAttempt, ...]
+
+    @property
+    def succeeded(self) -> bool:
+        return self.series is not None and self.selected_max_points is not None
+
+
 class HttpClient(Protocol):
     def request(
         self,
@@ -525,6 +547,92 @@ def is_invalid_security_token_error(error: Exception | str) -> bool:
         "invalid-security-token" in message
         or "client-token-invalid" in message
         or "invalid security token" in message
+    )
+
+
+def is_historical_allowance_error(error: Exception | str) -> bool:
+    message = str(error).lower()
+    return (
+        "error.public-api.exceeded-account-historical-data-allowance" in message
+        or "exceeded-account-historical-data-allowance" in message
+        or "historical-data-allowance" in message
+    )
+
+
+def build_historical_fallback_ladder(requested_max_points: int) -> list[int]:
+    ladder = [requested_max_points]
+    for candidate in (5000, 3000, 2000, 1000, 600, 300, 120):
+        if candidate < requested_max_points and candidate not in ladder:
+            ladder.append(candidate)
+    return ladder
+
+
+def load_prices_with_adaptive_fallback(
+    adapter: IGRestAdapter,
+    epic: str,
+    *,
+    resolution: str,
+    requested_max_points: int,
+    use_fallback_ladder: bool = True,
+) -> HistoricalPriceFetchResult:
+    attempts: list[HistoricalPriceAttempt] = []
+    ladder = (
+        build_historical_fallback_ladder(requested_max_points)
+        if use_fallback_ladder
+        else [requested_max_points]
+    )
+    for max_points in ladder:
+        try:
+            series = adapter.get_prices(epic, resolution=resolution, max_points=max_points)
+        except Exception as exc:
+            attempts.append(
+                HistoricalPriceAttempt(
+                    max_points=max_points,
+                    success=False,
+                    error=str(exc),
+                )
+            )
+            if is_historical_allowance_error(exc):
+                continue
+            return HistoricalPriceFetchResult(
+                epic=epic,
+                resolution=resolution,
+                requested_max_points=requested_max_points,
+                selected_max_points=None,
+                series=None,
+                attempts=tuple(attempts),
+            )
+        if not series.prices:
+            attempts.append(
+                HistoricalPriceAttempt(
+                    max_points=max_points,
+                    success=False,
+                    error="empty-price-list",
+                )
+            )
+            continue
+        attempts.append(
+            HistoricalPriceAttempt(
+                max_points=max_points,
+                success=True,
+                price_count=len(series.prices),
+            )
+        )
+        return HistoricalPriceFetchResult(
+            epic=epic,
+            resolution=resolution,
+            requested_max_points=requested_max_points,
+            selected_max_points=max_points,
+            series=series,
+            attempts=tuple(attempts),
+        )
+    return HistoricalPriceFetchResult(
+        epic=epic,
+        resolution=resolution,
+        requested_max_points=requested_max_points,
+        selected_max_points=None,
+        series=None,
+        attempts=tuple(attempts),
     )
 
 

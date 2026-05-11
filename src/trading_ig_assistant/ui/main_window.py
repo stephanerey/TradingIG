@@ -11,9 +11,12 @@ from PyQt5 import QtCore, QtWidgets
 
 from trading_ig_assistant.adapters.credentials import build_default_credential_store
 from trading_ig_assistant.adapters.ig_rest import (
+    HistoricalPriceFetchResult,
     IGAPIError,
     IGRestAdapter,
+    is_historical_allowance_error,
     is_invalid_security_token_error,
+    load_prices_with_adaptive_fallback,
 )
 from trading_ig_assistant.adapters.ig_streaming import IGStreamingAdapter
 from trading_ig_assistant.app.config import (
@@ -751,24 +754,60 @@ class MainWindow(QtWidgets.QMainWindow):
             cached_series = self._price_history_cache.get(cache_key)
             if cached_series is not None:
                 series = cached_series
+                fallback_result = HistoricalPriceFetchResult(
+                    epic=product.epic,
+                    resolution=resolution,
+                    requested_max_points=max_points,
+                    selected_max_points=max_points,
+                    series=series,
+                    attempts=(),
+                )
             else:
-                series = self._active_connection.adapter.get_prices(
+                fallback_result = load_prices_with_adaptive_fallback(
+                    self._active_connection.adapter,
                     product.epic,
                     resolution=resolution,
-                    max_points=max_points,
+                    requested_max_points=max_points,
                 )
+                if fallback_result.series is None:
+                    fallback_reason = _history_fallback_reason(fallback_result)
+                    LOGGER.debug(
+                        "Price history fallback exhausted selected_product_epic=%s "
+                        "chart_source_epic=%s history_requested_points=%s "
+                        "history_attempted_points=%s history_final_points=%s "
+                        "historical_candles_loaded=0 fallback_reason=%s",
+                        self._selected_product.epic if self._selected_product else "<none>",
+                        product.epic,
+                        max_points,
+                        [attempt.max_points for attempt in fallback_result.attempts],
+                        None,
+                        fallback_reason,
+                    )
+                    if _history_fallback_is_historical_allowance(fallback_result):
+                        self.statusBar().showMessage(
+                            "Historical backfill unavailable due to IG historical data allowance; "
+                            "live chart is running.",
+                            12000,
+                        )
+                        return
+                    raise RuntimeError(_history_fallback_last_error(fallback_result))
+                series = fallback_result.series
                 self._price_history_cache[cache_key] = series
             anchor_price = _product_anchor_price(product)
             self.chart_view.set_price_series(series, anchor_price=anchor_price)
             LOGGER.debug(
-                "Price history loaded epic=%s resolution=%s range_key=%s max_points=%s "
-                "historical_candles=%s display_candles=%s",
+                "Price history loaded selected_product_epic=%s chart_source_epic=%s "
+                "history_requested_points=%s history_attempted_points=%s history_final_points=%s "
+                "historical_candles_loaded=%s display_candles=%s resolution=%s range_key=%s",
+                self._selected_product.epic if self._selected_product else "<none>",
                 product.epic,
-                resolution,
-                range_key,
                 max_points,
+                [attempt.max_points for attempt in fallback_result.attempts],
+                fallback_result.selected_max_points,
                 len(series.prices),
                 self.chart_view.display_bar_count(),
+                resolution,
+                range_key,
             )
         except Exception as exc:
             if _is_api_allowance_exceeded(exc):
@@ -1156,12 +1195,22 @@ def _resolve_chart_source_product(
         return selected_product
 
     try:
-        search_term = _normalize_chart_base_name(selected_product.name)
         service = ProductDiscoveryService(adapter)
-        live_candidates = [
-            service.classify_product(summary, details=None)
-            for summary in adapter.search_markets(search_term)
-        ]
+        live_candidates: list[TradableProduct] = []
+        for search_term in _chart_source_search_terms(selected_product):
+            try:
+                live_candidates.extend(
+                    service.classify_product(summary, details=None)
+                    for summary in adapter.search_markets(search_term)
+                )
+            except Exception as exc:
+                LOGGER.debug(
+                    "Chart source targeted search term failed "
+                    "selected_epic=%s search_term=%r error=%s",
+                    selected_product.epic,
+                    search_term,
+                    exc,
+                )
         resolved = _resolve_chart_source_from_candidates(selected_product, live_candidates)
         if resolved.epic != selected_product.epic:
             LOGGER.debug(
@@ -1197,31 +1246,59 @@ def _resolve_chart_source_from_candidates(
     candidates: list[TradableProduct],
 ) -> TradableProduct:
     target_name = _normalize_chart_base_name(selected_product.name)
-
-    exact_matches = [
-        product
-        for product in candidates
-        if _normalize_chart_base_name(product.name) == target_name
-        and product.epic != selected_product.epic
-        and product.product_type == ProductType.CASH_OR_DFB
-    ]
-    if exact_matches:
-        return exact_matches[0]
-
-    fallback_matches = [
+    scored_candidates = [
         product
         for product in candidates
         if product.epic != selected_product.epic
-        and _normalize_chart_base_name(product.name).startswith(target_name)
-        and product.product_type == ProductType.CASH_OR_DFB
     ]
-    if fallback_matches:
-        return fallback_matches[0]
+    if not scored_candidates:
+        return selected_product
+    ranked = sorted(
+        scored_candidates,
+        key=lambda product: _chart_source_candidate_rank(product, target_name),
+        reverse=True,
+    )
+    best = ranked[0]
+    if _chart_source_candidate_rank(best, target_name)[0] <= 0:
+        return selected_product
+    return best
 
-    return selected_product
+
+def _chart_source_search_terms(selected_product: TradableProduct) -> list[str]:
+    stripped_name = _strip_chart_suffixes(selected_product.name)
+    normalized_name = _normalize_chart_base_name(selected_product.name)
+    terms = [selected_product.name, stripped_name]
+    if "us tech 100" in normalized_name:
+        terms.insert(0, "US Tech 100")
+    terms.append(normalized_name)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        clean = " ".join(str(term).split()).strip()
+        if not clean:
+            continue
+        key = clean.lower()
+        if key in seen:
+            continue
+        deduped.append(clean)
+        seen.add(key)
+    return deduped
 
 
-def _normalize_chart_base_name(name: str) -> str:
+def _chart_source_candidate_rank(
+    product: TradableProduct,
+    target_name: str,
+) -> tuple[int, int, int, int, int]:
+    normalized_name = _normalize_chart_base_name(product.name)
+    is_cash = 1 if product.product_type == ProductType.CASH_OR_DFB else 0
+    is_indices = 1 if str(product.instrument_type or "").upper() == "INDICES" else 0
+    is_tradeable = 1 if str(product.status or "").upper() == "TRADEABLE" else 0
+    exact_name = 1 if normalized_name == target_name else 0
+    close_name = 1 if target_name in normalized_name or normalized_name in target_name else 0
+    return (is_cash, is_indices, is_tradeable, exact_name, close_name)
+
+
+def _strip_chart_suffixes(name: str) -> str:
     text = " ".join(str(name).split()).strip()
     replacements = [
         " Barrières Achat",
@@ -1240,8 +1317,11 @@ def _normalize_chart_base_name(name: str) -> str:
     for replacement in replacements:
         if text.endswith(replacement):
             text = text[: -len(replacement)]
-    text = text.replace("(S1)", "").replace("(E1)", "").strip()
-    return text.lower()
+    return text.replace("(S1)", "").replace("(E1)", "").strip()
+
+
+def _normalize_chart_base_name(name: str) -> str:
+    return _strip_chart_suffixes(name).lower()
 
 
 def _optional_float(value: object) -> float | None:
@@ -1251,3 +1331,28 @@ def _optional_float(value: object) -> float | None:
         return float(str(value).replace(",", ""))
     except (TypeError, ValueError):
         return None
+
+
+def _history_fallback_reason(result: HistoricalPriceFetchResult) -> str:
+    if _history_fallback_is_historical_allowance(result):
+        return "historical-data-allowance"
+    last_error = _history_fallback_last_error(result)
+    if last_error:
+        return last_error
+    return "empty-price-list"
+
+
+def _history_fallback_is_historical_allowance(result: HistoricalPriceFetchResult) -> bool:
+    return bool(result.attempts) and all(
+        (attempt.error is not None and is_historical_allowance_error(attempt.error))
+        or attempt.error == "empty-price-list"
+        for attempt in result.attempts
+        if not attempt.success
+    )
+
+
+def _history_fallback_last_error(result: HistoricalPriceFetchResult) -> str:
+    for attempt in reversed(result.attempts):
+        if attempt.error:
+            return attempt.error
+    return ""

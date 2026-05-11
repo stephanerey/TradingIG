@@ -10,7 +10,11 @@ import time
 from pathlib import Path
 
 from trading_ig_assistant.adapters.credentials import IGCredentials
-from trading_ig_assistant.adapters.ig_rest import IGAPIError, IGRestAdapter
+from trading_ig_assistant.adapters.ig_rest import (
+    IGAPIError,
+    IGRestAdapter,
+    load_prices_with_adaptive_fallback,
+)
 from trading_ig_assistant.adapters.ig_streaming import IGStreamingAdapter
 from trading_ig_assistant.app.config import AppConfig, IGEnvironment, load_config
 from trading_ig_assistant.domain.streaming import (
@@ -111,6 +115,22 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     )
     stream_market_parser.set_defaults(func=stream_market)
+
+    history_market_parser = subparsers.add_parser(
+        "history-market",
+        help="Run historical backfill diagnostics for a single IG epic.",
+    )
+    add_credential_arguments(history_market_parser)
+    history_market_parser.add_argument("--epic", required=True)
+    history_market_parser.add_argument("--resolution", required=True)
+    history_market_parser.add_argument("--max-points", type=int, required=True)
+    history_market_parser.add_argument("--fallback-ladder", action="store_true")
+    history_market_parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+    )
+    history_market_parser.set_defaults(func=history_market)
 
     gui = subparsers.add_parser("gui", help="Launch the minimal GUI shell.")
     gui.set_defaults(func=launch_gui)
@@ -267,6 +287,81 @@ def stream_market(args: argparse.Namespace) -> int:
         return 0
     except IGAPIError as exc:
         print(f"Streaming diagnostics failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        try:
+            adapter.logout()
+        except IGAPIError:
+            pass
+
+
+def history_market(args: argparse.Namespace) -> int:
+    LOGGER.debug(
+        "CLI history market start environment=%s epic=%s resolution=%s max_points=%s ladder=%s",
+        args.environment,
+        args.epic,
+        args.resolution,
+        args.max_points,
+        args.fallback_ladder,
+    )
+    loaded = load_read_only_runtime(args)
+    if loaded is None:
+        print(
+            "Missing IG credentials. Provide username and set password/API key environment "
+            "variables. No secrets should be placed in config files.",
+            file=sys.stderr,
+        )
+        return 2
+    environment, credentials = loaded
+    adapter = IGRestAdapter(environment=environment, read_only=True)
+    try:
+        session = adapter.login(credentials)
+        print(f"Environment: {environment.value}")
+        print(f"Account: {mask_identifier(session.current_account_id)}")
+        print(f"Epic: {args.epic}")
+        print(f"Resolution: {args.resolution}")
+        print(f"Requested max_points: {args.max_points}")
+        result = load_prices_with_adaptive_fallback(
+            adapter,
+            args.epic,
+            resolution=args.resolution,
+            requested_max_points=args.max_points,
+            use_fallback_ladder=bool(args.fallback_ladder),
+        )
+        for attempt in result.attempts:
+            if attempt.success:
+                print(
+                    f"Attempt {attempt.max_points}: success "
+                    f"({attempt.price_count} candles)"
+                )
+            else:
+                sanitized_error = redact_text(
+                    attempt.error or "unknown",
+                    [credentials.password.reveal(), credentials.api_key.reveal()],
+                )
+                print(
+                    f"Attempt {attempt.max_points}: failed "
+                    f"({sanitized_error})"
+                )
+        print(
+            f"Final selected max_points: "
+            f"{result.selected_max_points if result.selected_max_points is not None else 'none'}"
+        )
+        if result.series is None or not result.series.prices:
+            print("Number of candles returned: 0")
+            return 1
+        first_timestamp = result.series.prices[0].get("snapshotTimeUTC") or result.series.prices[
+            0
+        ].get("snapshotTime")
+        last_timestamp = result.series.prices[-1].get("snapshotTimeUTC") or result.series.prices[
+            -1
+        ].get("snapshotTime")
+        print(f"Number of candles returned: {len(result.series.prices)}")
+        print(f"First timestamp: {first_timestamp}")
+        print(f"Last timestamp: {last_timestamp}")
+        return 0
+    except IGAPIError as exc:
+        print(f"History diagnostics failed: {exc}", file=sys.stderr)
         return 1
     finally:
         try:

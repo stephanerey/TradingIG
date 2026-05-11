@@ -121,3 +121,34 @@ from the CLI first.
   - weekend and market-closed gaps are hidden
   - original timestamps are still preserved for hover/crosshair display and future indicators
 - A `Real` time-axis mode remains available as a fallback/debug display.
+
+## Historical Data Allowance Handling
+
+- IG may reject larger historical requests with:
+  - `error.public-api.exceeded-account-historical-data-allowance`
+- The GUI no longer fails immediately on the first large request.
+- Historical backfill now uses an adaptive fallback ladder:
+  - requested points
+  - `5000`
+  - `3000`
+  - `2000`
+  - `1000`
+  - `600`
+  - `300`
+  - `120`
+- Values larger than the originally requested `max_points` are skipped.
+- The first successful non-empty response is used for display.
+- As a result, the displayed history range may be shorter than requested when IG rejects larger
+  historical requests.
+- Logs now show:
+  - requested points
+  - attempted points
+  - final selected points
+  - loaded candle count
+  - selected product epic
+  - chart source epic
+- If all historical fallback attempts fail because of historical allowance limits, the GUI shows:
+  - `Historical backfill unavailable due to IG historical data allowance; live chart is running.`
+- Live streaming remains independent from historical backfill:
+  - the chart still receives live `CHART` updates
+  - no live trading is implemented
