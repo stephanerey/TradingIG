@@ -31,16 +31,8 @@ class ChartDataModel:
         self._bars = list(bars)
 
     @classmethod
-    def sample(cls) -> ChartDataModel:
-        return cls(
-            [
-                OhlcBar(0, 100.0, 104.0, 98.0, 103.0),
-                OhlcBar(1, 103.0, 105.0, 101.0, 102.0),
-                OhlcBar(2, 102.0, 108.0, 101.0, 107.0),
-                OhlcBar(3, 107.0, 109.0, 104.0, 105.0),
-                OhlcBar(4, 105.0, 111.0, 104.0, 110.0),
-            ]
-        )
+    def sample(cls, anchor_price: float | None = None) -> ChartDataModel:
+        return cls(_build_placeholder_bars(anchor_price or 100.0))
 
 
 class CandlestickItem(pg.GraphicsObject):
@@ -88,6 +80,7 @@ class ChartView(QtWidgets.QWidget):
         super().__init__(parent)
         self._model = model or ChartDataModel.sample()
         self._live_price_line: pg.InfiniteLine | None = None
+        self._last_quote: Quote | None = None
         layout = QtWidgets.QVBoxLayout(self)
         header = QtWidgets.QGridLayout()
         header.setContentsMargins(0, 0, 0, 0)
@@ -153,11 +146,17 @@ class ChartView(QtWidgets.QWidget):
         if product_type or direction:
             label_parts.append(f"{product_type} {direction}".strip())
         self.product_label.setText(" ".join(part for part in label_parts if part))
+        anchor_price = _product_anchor_price(product)
+        if anchor_price is not None:
+            self.set_bars(_build_placeholder_bars(anchor_price))
+            if self._last_quote is not None:
+                self.set_live_quote(self._last_quote)
 
     def set_stream_status(self, status: str) -> None:
         self.stream_status_label.setText(f"Stream: {status}")
 
     def set_live_quote(self, quote: Quote | None) -> None:
+        self._last_quote = quote
         if quote is None:
             self.bid_label.setText("Vente: -")
             self.offer_label.setText("Achat: -")
@@ -170,9 +169,11 @@ class ChartView(QtWidgets.QWidget):
         self.percent_change_label.setText(
             f"% Variation: {_format_signed_number(quote.percent_change)}"
         )
-        if self._live_price_line is not None:
-            live_value = quote.offer if quote.offer is not None else quote.bid
-            if live_value is not None:
+        live_value = quote.offer if quote.offer is not None else quote.bid
+        if live_value is not None:
+            if self._is_out_of_view(live_value):
+                self.set_bars(_build_placeholder_bars(live_value))
+            if self._live_price_line is not None:
                 self._live_price_line.setValue(live_value)
 
     def _add_level(
@@ -196,6 +197,17 @@ class ChartView(QtWidgets.QWidget):
         )
         self._plot.addItem(line)
         return line
+
+    def _is_out_of_view(self, value: float) -> bool:
+        if not self._model.bars:
+            return True
+        lows = [bar.low for bar in self._model.bars]
+        highs = [bar.high for bar in self._model.bars]
+        low = min(lows)
+        high = max(highs)
+        span = max(high - low, 1.0)
+        buffer = span * 0.5
+        return value < low - buffer or value > high + buffer
 
 
 def _format_number(value: float | None) -> str:
@@ -226,3 +238,38 @@ def _chip_label(label: str, value: str) -> QtWidgets.QLabel:
         "}"
     )
     return chip
+
+
+def _product_anchor_price(product: object) -> float | None:
+    for field_name in ("offer", "bid", "strike", "ko_level"):
+        value = getattr(product, field_name, None)
+        if isinstance(value, (int, float)) and value > 0:
+            return float(value)
+    return None
+
+
+def _build_placeholder_bars(anchor_price: float) -> list[OhlcBar]:
+    step = max(abs(anchor_price) * 0.00015, 0.5)
+    patterns = [
+        (-2.8, -1.1, -3.8, 0.6),
+        (-1.2, -2.0, -2.8, 1.0),
+        (-2.1, 1.0, -3.2, 2.0),
+        (0.8, -0.4, -0.8, 2.0),
+        (-0.2, 2.1, -1.0, 3.0),
+    ]
+    bars: list[OhlcBar] = []
+    for index, (open_delta, close_delta, low_delta, high_delta) in enumerate(patterns):
+        open_price = anchor_price + open_delta * step
+        close_price = anchor_price + close_delta * step
+        low_price = min(open_price, close_price) + low_delta * step
+        high_price = max(open_price, close_price) + high_delta * step
+        bars.append(
+            OhlcBar(
+                index=index,
+                open=open_price,
+                high=max(high_price, open_price, close_price),
+                low=min(low_price, open_price, close_price),
+                close=close_price,
+            )
+        )
+    return bars

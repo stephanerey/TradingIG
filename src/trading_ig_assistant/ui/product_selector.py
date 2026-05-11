@@ -309,6 +309,11 @@ class ProductSelectorWidget(QtWidgets.QWidget):
             f"Min size: {_format_number(product.min_size)}",
             f"Max size: {_format_number(product.max_size)}",
             f"Lot size: {_format_number(product.lot_size)}",
+            "",
+            f"Snapshot vente: {_format_number(product.bid)}",
+            f"Snapshot achat: {_format_number(product.offer)}",
+            f"Snapshot variation: {_format_signed_number(product.net_change)}",
+            f"Snapshot % variation: {_format_signed_number(product.percent_change)}",
         ]
         if quote is not None:
             lines.extend(

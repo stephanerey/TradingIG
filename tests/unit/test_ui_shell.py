@@ -37,11 +37,21 @@ def test_chart_view_accepts_live_quote_update() -> None:
     from PyQt5 import QtWidgets
 
     from trading_ig_assistant.domain.market_data import Quote
+    from trading_ig_assistant.domain.products import ProductType, TradableProduct
     from trading_ig_assistant.ui.chart_view import ChartView
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     assert app is not None
     view = ChartView()
+    view.set_selected_product(
+        TradableProduct(
+            epic="EPIC.ONE",
+            name="US Tech 100",
+            product_type=ProductType.BARRIER,
+            bid=29171.2,
+            offer=29172.9,
+        )
+    )
     view.set_live_quote(
         Quote(
             epic="EPIC.ONE",
@@ -55,6 +65,7 @@ def test_chart_view_accepts_live_quote_update() -> None:
 
     assert "2311.9" in view.bid_label.text()
     assert "2313.1" in view.offer_label.text()
+    assert view._model.bars[0].open > 1000
 
 
 def test_account_status_widget_accepts_account_data(qtbot=None) -> None:
@@ -216,4 +227,5 @@ def test_product_selector_updates_live_quote_and_details() -> None:
 
     assert widget.product_table.item(0, 1).text() == "123.4"
     assert widget.product_table.item(0, 2).text() == "124.5"
+    assert "Snapshot vente: 100" in widget.market_summary.toPlainText()
     assert "Live vente: 123.4" in widget.market_summary.toPlainText()
