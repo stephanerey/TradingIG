@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -128,6 +129,9 @@ class ChartView(QtWidgets.QWidget):
         )
         self._live_price_line: pg.InfiniteLine | None = None
         self._live_price_label: pg.TextItem | None = None
+        self._hover_vline: pg.InfiniteLine | None = None
+        self._hover_hline: pg.InfiniteLine | None = None
+        self._hover_label: pg.TextItem | None = None
         self._last_quote: Quote | None = None
         self._selected_anchor_price: float | None = None
         self._display_bars: list[OhlcBar] = []
@@ -172,6 +176,7 @@ class ChartView(QtWidgets.QWidget):
         self._plot.hideButtons()
         self._plot.setMenuEnabled(False)
         self._plot.zoom_requested.connect(self._on_zoom_requested)
+        self._plot.scene().sigMouseMoved.connect(self._on_mouse_moved)
 
         layout.addLayout(header)
         layout.addWidget(self._plot)
@@ -236,14 +241,14 @@ class ChartView(QtWidgets.QWidget):
         self._render_display_bars(self._source_model.resampled(self._current_interval_seconds))
 
     def apply_chart_update(self, chart_update: ChartCandleUpdate) -> None:
-        bar = _bar_from_chart_update(chart_update)
+        bar = _bar_from_chart_update(chart_update, interval_seconds=60)
         if bar is None:
             return
         if not self._source_model.bars:
             self._source_model = ChartDataModel([bar], is_placeholder=False)
         else:
             bars = list(self._source_model.bars)
-            if bars[-1].timestamp_ms == bar.timestamp_ms:
+            if _bucket_timestamp_ms(bars[-1].timestamp_ms, 60) == bar.timestamp_ms:
                 bars[-1] = bar
             elif bar.timestamp_ms > bars[-1].timestamp_ms:
                 bars.append(bar)
@@ -357,6 +362,20 @@ class ChartView(QtWidgets.QWidget):
         self._live_price_line.label = None
         self._live_price_label = _build_live_price_label(_format_number(last_close), "#0b6bcb")
         self._plot.addItem(self._live_price_label)
+        self._hover_vline = pg.InfiniteLine(
+            angle=90,
+            movable=False,
+            pen=pg.mkPen("#3b4a5a", width=1),
+        )
+        self._hover_hline = pg.InfiniteLine(
+            angle=0,
+            movable=False,
+            pen=pg.mkPen("#3b4a5a", width=1),
+        )
+        self._hover_label = _build_hover_label()
+        self._plot.addItem(self._hover_vline)
+        self._plot.addItem(self._hover_hline)
+        self._plot.addItem(self._hover_label)
         if self._view_center_ts is None or self._view_span_seconds is None or not self._manual_zoom:
             first_ts = self._display_bars[0].timestamp_ms / 1000.0
             last_ts = self._display_bars[-1].timestamp_ms / 1000.0
@@ -384,6 +403,7 @@ class ChartView(QtWidgets.QWidget):
         y_padding = max((high - low) * 0.12, 1.0)
         self._plot.setYRange(low - y_padding, high + y_padding)
         self._position_live_price_label()
+        self._position_hover_label()
 
     def _position_live_price_label(self, live_value: float | None = None) -> None:
         if self._live_price_label is None or not self._display_bars:
@@ -393,7 +413,71 @@ class ChartView(QtWidgets.QWidget):
         right_edge = self._display_bars[-1].timestamp_ms / 1000.0
         if self._view_center_ts is not None and self._view_span_seconds is not None:
             right_edge = self._view_center_ts + (self._view_span_seconds / 2)
-        self._live_price_label.setPos(right_edge, live_value)
+        label_margin = max(self._current_interval_seconds * 0.8, 45.0)
+        self._live_price_label.setPos(right_edge - label_margin, live_value)
+
+    def _position_hover_label(self) -> None:
+        if self._hover_label is None or self._hover_label.isVisible() is False:
+            return
+        if not self._display_bars:
+            return
+        if self._view_center_ts is None or self._view_span_seconds is None:
+            return
+        left_edge = self._view_center_ts - self._view_span_seconds / 2
+        top_edge = max(bar.high for bar in self._display_bars)
+        self._hover_label.setPos(left_edge + 20.0, top_edge)
+
+    def _on_mouse_moved(self, scene_pos: QtCore.QPointF) -> None:
+        if not self._display_bars:
+            return
+        if not self._plot.sceneBoundingRect().contains(scene_pos):
+            self._hide_hover_state()
+            return
+        mouse_point = self._plot.plotItem.vb.mapSceneToView(scene_pos)
+        x_value = float(mouse_point.x())
+        y_value = float(mouse_point.y())
+        bar = self._nearest_bar(x_value)
+        if bar is None:
+            self._hide_hover_state()
+            return
+        if self._hover_vline is not None:
+            self._hover_vline.setPos(bar.timestamp_ms / 1000.0)
+            self._hover_vline.show()
+        if self._hover_hline is not None:
+            self._hover_hline.setPos(y_value)
+            self._hover_hline.show()
+        if self._hover_label is not None:
+            self._hover_label.setHtml(_hover_label_html(bar))
+            self._hover_label.setVisible(True)
+            self._hover_label.setPos(
+                bar.timestamp_ms / 1000.0 + max(self._current_interval_seconds * 0.75, 30.0),
+                bar.high,
+            )
+
+    def _nearest_bar(self, x_value: float) -> OhlcBar | None:
+        if not self._display_bars:
+            return None
+        timestamps = [bar.timestamp_ms / 1000.0 for bar in self._display_bars]
+        index = bisect_left(timestamps, x_value)
+        if index <= 0:
+            return self._display_bars[0]
+        if index >= len(self._display_bars):
+            return self._display_bars[-1]
+        previous_bar = self._display_bars[index - 1]
+        next_bar = self._display_bars[index]
+        if abs((previous_bar.timestamp_ms / 1000.0) - x_value) <= abs(
+            (next_bar.timestamp_ms / 1000.0) - x_value
+        ):
+            return previous_bar
+        return next_bar
+
+    def _hide_hover_state(self) -> None:
+        if self._hover_vline is not None:
+            self._hover_vline.hide()
+        if self._hover_hline is not None:
+            self._hover_hline.hide()
+        if self._hover_label is not None:
+            self._hover_label.hide()
 
 
 def _format_number(value: float | None) -> str:
@@ -464,7 +548,11 @@ def _build_placeholder_bars(anchor_price: float, *, count: int = 60) -> list[Ohl
     return bars
 
 
-def _bar_from_chart_update(chart_update: ChartCandleUpdate) -> OhlcBar | None:
+def _bar_from_chart_update(
+    chart_update: ChartCandleUpdate,
+    *,
+    interval_seconds: int,
+) -> OhlcBar | None:
     close_price = chart_update.close
     if close_price is None:
         return None
@@ -476,6 +564,7 @@ def _bar_from_chart_update(chart_update: ChartCandleUpdate) -> OhlcBar | None:
     timestamp_ms = chart_update.timestamp_ms
     if timestamp_ms is None:
         timestamp_ms = int(datetime.now(tz=UTC).timestamp() * 1000)
+    timestamp_ms = _bucket_timestamp_ms(timestamp_ms, interval_seconds)
     return OhlcBar(
         timestamp_ms=timestamp_ms,
         open=open_price,
@@ -496,6 +585,36 @@ def _build_live_price_label(text: str, color: str) -> pg.TextItem:
     )
     label.setZValue(10_000)
     return label
+
+
+def _build_hover_label() -> pg.TextItem:
+    label = pg.TextItem(
+        text="",
+        anchor=(0, 1),
+        fill=QtGui.QColor("#f4f8fc"),
+        border=pg.mkPen("#607080", width=1),
+    )
+    label.setZValue(10_000)
+    label.hide()
+    return label
+
+
+def _hover_label_html(bar: OhlcBar) -> str:
+    timestamp = datetime.fromtimestamp(bar.timestamp_ms / 1000.0).astimezone()
+    return (
+        "<div style='font-size: 10pt; line-height: 1.2; color: #1d2a36;'>"
+        f"<b>{timestamp:%Y-%m-%d %H:%M}</b><br>"
+        f"O: {bar.open:g}<br>"
+        f"H: {bar.high:g}<br>"
+        f"L: {bar.low:g}<br>"
+        f"C: {bar.close:g}"
+        "</div>"
+    )
+
+
+def _bucket_timestamp_ms(timestamp_ms: int, interval_seconds: int) -> int:
+    bucket = (timestamp_ms // 1000 // interval_seconds) * interval_seconds
+    return bucket * 1000
 
 
 def _bars_from_price_series(
