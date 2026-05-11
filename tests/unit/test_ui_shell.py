@@ -22,8 +22,8 @@ def test_chart_model_accepts_sample_ohlc_data() -> None:
     from trading_ig_assistant.ui.chart_view import ChartDataModel, OhlcBar
 
     bars = [
-        OhlcBar(index=0, open=10.0, high=12.0, low=9.5, close=11.5),
-        OhlcBar(index=1, open=11.5, high=13.0, low=11.0, close=12.2),
+        OhlcBar(timestamp_ms=1_000, open=10.0, high=12.0, low=9.5, close=11.5),
+        OhlcBar(timestamp_ms=61_000, open=11.5, high=13.0, low=11.0, close=12.2),
     ]
     model = ChartDataModel()
 
@@ -31,6 +31,30 @@ def test_chart_model_accepts_sample_ohlc_data() -> None:
 
     assert model.bars == bars
     assert len(ChartDataModel.sample().bars) > 0
+
+
+def test_chart_model_builds_bars_from_price_series() -> None:
+    from trading_ig_assistant.domain.market_data import PriceSeries
+    from trading_ig_assistant.ui.chart_view import ChartDataModel
+
+    model = ChartDataModel.from_price_series(
+        PriceSeries(
+            epic="EPIC.ONE",
+            prices=[
+                {
+                    "snapshotTime": "2026/05/11 10:00:00",
+                    "openPrice": {"bid": 10.0},
+                    "highPrice": {"bid": 12.0},
+                    "lowPrice": {"bid": 9.5},
+                    "closePrice": {"bid": 11.5},
+                }
+            ],
+        )
+    )
+
+    assert model.bars[0].timestamp_ms == 1_778_493_600_000
+    assert model.bars[0].open == 10.0
+    assert model.bars[0].close == 11.5
 
 
 def test_chart_view_accepts_live_quote_update() -> None:

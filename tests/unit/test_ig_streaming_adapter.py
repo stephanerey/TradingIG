@@ -100,16 +100,16 @@ def test_streaming_adapter_connects_and_parses_quotes() -> None:
     assert client.connectionDetails.password == "CST-fake-cst|XST-fake-security-token"
     assert client.connect_called is True
     assert len(client.subscriptions) == 1
-    assert client.subscriptions[0].getItems() == ["PRICE:ACC123:EPIC.ONE"]
+    assert client.subscriptions[0].getItems() == ["MARKET:EPIC.ONE"]
 
     listener = client.subscriptions[0].getListeners()[0]
     listener.onItemUpdate(
         FakeUpdate(
             {
-                "BIDPRICE1": "2311.9",
-                "ASKPRICE1": "2313.1",
-                "DAY_NET_CHG_MID": "-38.7",
-                "DAY_PERC_CHG_MID": "-1.64",
+                "BID": "2311.9",
+                "OFFER": "2313.1",
+                "CHANGE": "-38.7",
+                "CHANGE_PCT": "-1.64",
                 "MARKET_STATE": "TRADEABLE",
             },
             snapshot=True,

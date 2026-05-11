@@ -457,7 +457,12 @@ class ProductDiscoveryService:
         direction = _classify_direction(text, product_type)
         asset_class = _classify_asset_class(text, summary)
         details_raw = details.raw if details else {}
-        quote_payload = {"summary": summary.raw, "details": details_raw}
+        snapshot_payload = _first_mapping(
+            details_raw,
+            ["snapshot", "snapshotData", "marketSnapshot", "instrumentSnapshot"],
+        )
+        if snapshot_payload is None:
+            snapshot_payload = details_raw
 
         return TradableProduct(
             epic=summary.epic or (details.epic if details else ""),
@@ -493,15 +498,27 @@ class ProductDiscoveryService:
                 ["strike", "strikePrice", "exercisePrice"],
             ),
             asset_class=asset_class,
-            bid=_first_float(quote_payload, ["bid", "bidPrice", "sell", "sellPrice"]),
-            offer=_first_float(quote_payload, ["offer", "offerPrice", "ask", "buy", "buyPrice"]),
+            bid=_first_float(
+                {"summary": summary.raw, "details": details_raw, "snapshot": snapshot_payload},
+                ["bid", "bidPrice", "sell", "sellPrice", "bidPrice1", "sellPrice"],
+            ),
+            offer=_first_float(
+                {"summary": summary.raw, "details": details_raw, "snapshot": snapshot_payload},
+                ["offer", "offerPrice", "ask", "buy", "buyPrice", "askPrice1", "buyPrice"],
+            ),
             net_change=_first_float(
-                quote_payload,
-                ["netChange", "change", "changeNet", "priceChange"],
+                {"summary": summary.raw, "details": details_raw, "snapshot": snapshot_payload},
+                ["netChange", "change", "changeNet", "priceChange", "dayNetChgMid"],
             ),
             percent_change=_first_float(
-                quote_payload,
-                ["percentageChange", "percentChange", "changePct", "changePercent"],
+                {"summary": summary.raw, "details": details_raw, "snapshot": snapshot_payload},
+                [
+                    "percentageChange",
+                    "percentChange",
+                    "changePct",
+                    "changePercent",
+                    "dayPercChgMid",
+                ],
             ),
             raw=raw_payload,
         )
@@ -646,4 +663,11 @@ def _first_value(payload: Any, keys: list[str]) -> Any:
             nested = _first_value(item, keys)
             if nested is not None:
                 return nested
+    return None
+
+
+def _first_mapping(payload: Any, keys: list[str]) -> dict[str, Any] | None:
+    value = _first_value(payload, keys)
+    if isinstance(value, dict):
+        return value
     return None

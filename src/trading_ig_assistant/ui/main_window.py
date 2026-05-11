@@ -157,6 +157,35 @@ class ProductDiscoveryWorker(QtCore.QObject):
             self.finished.emit()
 
 
+class PriceHistoryWorker(QtCore.QObject):
+    succeeded = QtCore.pyqtSignal(object)
+    failed = QtCore.pyqtSignal(str)
+    finished = QtCore.pyqtSignal()
+
+    def __init__(self, adapter: IGRestAdapter, epic: str) -> None:
+        super().__init__()
+        self._adapter = adapter
+        self._epic = epic
+
+    @QtCore.pyqtSlot()
+    def run(self) -> None:
+        try:
+            LOGGER.debug("Price history worker start epic=%s", self._epic)
+            series = self._adapter.get_prices(self._epic, resolution="MINUTE", max_points=240)
+            LOGGER.debug(
+                "Price history worker success epic=%s points=%s",
+                self._epic,
+                len(series.prices),
+            )
+            self.succeeded.emit(series)
+        except Exception as exc:
+            LOGGER.debug("Price history worker failed epic=%s error=%s", self._epic, exc)
+            self.failed.emit(str(exc))
+        finally:
+            LOGGER.debug("Price history worker finished epic=%s", self._epic)
+            self.finished.emit()
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -171,6 +200,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._connection_worker: ConnectionWorker | None = None
         self._discovery_thread: QtCore.QThread | None = None
         self._discovery_worker: ProductDiscoveryWorker | None = None
+        self._price_history_thread: QtCore.QThread | None = None
+        self._price_history_worker: PriceHistoryWorker | None = None
         self._auth_locked_out = False
         self._selected_product: TradableProduct | None = None
         self._streaming_adapter: IGStreamingAdapter | None = None
@@ -217,6 +248,9 @@ class MainWindow(QtWidgets.QMainWindow):
         body = QtWidgets.QSplitter()
         body.setOrientation(QtCore.Qt.Horizontal)
         self.chart_view = ChartView()
+        self.chart_view.resolution_combo.currentIndexChanged.connect(
+            lambda _index: self._reload_selected_product_history()
+        )
         body.addWidget(self.chart_view)
 
         right_tabs = QtWidgets.QTabWidget()
@@ -538,6 +572,7 @@ class MainWindow(QtWidgets.QMainWindow):
         LOGGER.debug("Product selected epic=%s name=%r", product.epic, product.name)
         self.product_selector.set_selected_product(product)
         self.chart_view.set_selected_product(product)
+        self._load_selected_product_history()
         self._restart_streaming()
 
     @QtCore.pyqtSlot(object)
@@ -588,6 +623,37 @@ class MainWindow(QtWidgets.QMainWindow):
             LOGGER.debug("Streaming restart failed error=%s", exc)
             self.chart_view.set_stream_status("ERROR")
             self.statusBar().showMessage(f"Streaming unavailable: {exc}", 10000)
+
+    def _load_selected_product_history(self) -> None:
+        if self._active_connection is None or self._selected_product is None:
+            return
+        try:
+            series = self._active_connection.adapter.get_prices(
+                self._selected_product.epic,
+                resolution="MINUTE",
+                max_points=240,
+            )
+            anchor_price = _product_anchor_price(self._selected_product)
+            self.chart_view.set_price_series(series, anchor_price=anchor_price)
+            LOGGER.debug(
+                "Price history loaded epic=%s points=%s",
+                self._selected_product.epic,
+                len(series.prices),
+            )
+        except Exception as exc:
+            LOGGER.debug(
+                "Price history load failed epic=%s error=%s",
+                self._selected_product.epic,
+                exc,
+            )
+            self.statusBar().showMessage(
+                f"Price history unavailable: {humanize_ig_error(str(exc))}",
+                10000,
+            )
+
+    @QtCore.pyqtSlot()
+    def _reload_selected_product_history(self) -> None:
+        self._load_selected_product_history()
 
     def _stop_streaming(self) -> None:
         if self._streaming_adapter is None:
@@ -726,4 +792,11 @@ def _first_discovered_product(results: list[ProductDiscoveryResult]) -> Tradable
     for result in results:
         if result.products:
             return result.products[0]
+    return None
+
+
+def _product_anchor_price(product: TradableProduct) -> float | None:
+    for value in (product.offer, product.bid, product.ko_level, product.strike):
+        if isinstance(value, (int, float)) and value > 0:
+            return float(value)
     return None

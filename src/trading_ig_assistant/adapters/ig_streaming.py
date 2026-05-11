@@ -25,10 +25,10 @@ except ImportError:  # pragma: no cover - keep import errors explicit at runtime
 
 LOGGER = logging.getLogger(__name__)
 PRICE_FIELDS = [
-    "BIDPRICE1",
-    "ASKPRICE1",
-    "DAY_NET_CHG_MID",
-    "DAY_PERC_CHG_MID",
+    "BID",
+    "OFFER",
+    "CHANGE",
+    "CHANGE_PCT",
     "MARKET_STATE",
     "UPDATE_TIME",
     "UTM",
@@ -107,7 +107,7 @@ class IGStreamingAdapter:
         if self._subscription is not None:
             self._client.unsubscribe(self._subscription)
             self._subscription = None
-        item_name = f"PRICE:{self.account_id}:{epic}"
+        item_name = f"MARKET:{epic}"
         LOGGER.debug(
             "IG streaming subscribe market account=%s epic=%s item=%s",
             self._mask_account_id(self.account_id),
@@ -225,13 +225,13 @@ def _quote_from_update(update_info: Any, epic: str) -> Quote:
     except Exception:  # pragma: no cover - defensive only
         fields = {}
 
-    bid = _optional_float(_first_value(update_info, ["BIDPRICE1", "BID", "BIDPRICE"]))
-    offer = _optional_float(_first_value(update_info, ["ASKPRICE1", "OFFER", "ASK"]))
+    bid = _optional_float(_first_value(update_info, ["BID", "BIDPRICE1", "BIDPRICE"]))
+    offer = _optional_float(_first_value(update_info, ["OFFER", "ASKPRICE1", "ASK"]))
     net_change = _optional_float(
-        _first_value(update_info, ["DAY_NET_CHG_MID", "CHANGE", "NET_CHANGE"])
+        _first_value(update_info, ["CHANGE", "DAY_NET_CHG_MID", "NET_CHANGE"])
     )
     percent_change = _optional_float(
-        _first_value(update_info, ["DAY_PERC_CHG_MID", "CHANGE_PCT", "PERCENT_CHANGE"])
+        _first_value(update_info, ["CHANGE_PCT", "DAY_PERC_CHG_MID", "PERCENT_CHANGE"])
     )
     market_state = _first_string(update_info, ["MARKET_STATE"])
     timestamp_ms = _optional_int(_first_value(update_info, ["UPDATE_TIME", "UTM"]))
