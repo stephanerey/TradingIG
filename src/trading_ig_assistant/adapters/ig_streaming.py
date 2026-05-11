@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from trading_ig_assistant.adapters.ig_rest import IGSession
-from trading_ig_assistant.domain.market_data import Quote
+from trading_ig_assistant.domain.market_data import ChartCandleUpdate, Quote
 
 try:  # pragma: no cover - exercised in runtime, not in unit tests
     from lightstreamer.client import (
@@ -24,14 +24,46 @@ except ImportError:  # pragma: no cover - keep import errors explicit at runtime
     SubscriptionListener = object  # type: ignore[assignment]
 
 LOGGER = logging.getLogger(__name__)
-MARKET_FIELDS = [
-    "BID",
-    "OFFER",
-    "CHANGE",
-    "CHANGE_PCT",
-    "MARKET_STATE",
-    "UPDATE_TIME",
+PRICE_FIELDS = [
+    "MID_OPEN",
+    "HIGH",
+    "LOW",
+    "BIDQUOTEID",
+    "ASKQUOTEID",
+    "BIDPRICE1",
+    "ASKPRICE1",
+    "BIDSIZE1",
+    "ASKSIZE1",
+    "CURRENCY0",
+    "TIMESTAMP",
+    "DLG_FLAG",
+    "NET_CHG",
+    "NET_CHG_PCT",
+    "DELAY",
+]
+CHART_FIELDS = [
     "UTM",
+    "DAY_OPEN_MID",
+    "DAY_NET_CHG_MID",
+    "DAY_PERC_CHG_MID",
+    "DAY_HIGH",
+    "DAY_LOW",
+    "OFR_OPEN",
+    "OFR_HIGH",
+    "OFR_LOW",
+    "OFR_CLOSE",
+    "BID_OPEN",
+    "BID_HIGH",
+    "BID_LOW",
+    "BID_CLOSE",
+    "LTP_OPEN",
+    "LTP_HIGH",
+    "LTP_LOW",
+    "LTP_CLOSE",
+    "CONS_END",
+    "CONS_TICK_COUNT",
+    "LTV",
+    "TTV",
 ]
 
 
@@ -41,6 +73,9 @@ class StreamingEventSink(Protocol):
 
     def on_quote(self, quote: Quote) -> None:
         """Receive a normalized market quote."""
+
+    def on_chart(self, chart_update: ChartCandleUpdate) -> None:
+        """Receive a normalized chart candle update."""
 
     def on_stream_error(self, message: str) -> None:
         """Receive a stream error message."""
@@ -107,18 +142,35 @@ class IGStreamingAdapter:
         if self._subscription is not None:
             self._client.unsubscribe(self._subscription)
             self._subscription = None
-        item_name = f"MARKET:{epic}"
+        item_name = f"PRICE:{self.account_id}:{epic}"
         LOGGER.debug(
             "IG streaming subscribe market account=%s epic=%s item=%s",
             self._mask_account_id(self.account_id),
             epic,
             item_name,
         )
-        subscription = Subscription("MERGE", [item_name], MARKET_FIELDS)
+        subscription = Subscription("MERGE", [item_name], PRICE_FIELDS)
         subscription.addListener(_SubscriptionListener(self, epic))
         self._subscription = subscription
         self._current_epic = epic
         self._client.subscribe(subscription)
+
+    def subscribe_chart(self, epic: str, scale: str = "1MINUTE") -> None:
+        if self._client is None:
+            self.start()
+        if self._client is None:
+            return
+        item_name = f"CHART:{epic}:{scale}"
+        LOGGER.debug(
+            "IG streaming subscribe chart account=%s epic=%s scale=%s item=%s",
+            self._mask_account_id(self.account_id),
+            epic,
+            scale,
+            item_name,
+        )
+        chart_subscription = Subscription("MERGE", [item_name], CHART_FIELDS)
+        chart_subscription.addListener(_ChartSubscriptionListener(self, epic, scale))
+        self._client.subscribe(chart_subscription)
 
     def _handle_status(self, status: str) -> None:
         LOGGER.debug(
@@ -160,6 +212,22 @@ class IGStreamingAdapter:
             quote.market_state,
         )
         self._emit_quote(quote)
+
+    def _handle_chart_update(self, chart_update: ChartCandleUpdate) -> None:
+        LOGGER.debug(
+            "IG streaming chart account=%s epic=%s interval=%s open=%s high=%s low=%s "
+            "close=%s end=%s",
+            self._mask_account_id(self.account_id),
+            chart_update.epic,
+            chart_update.interval,
+            chart_update.open,
+            chart_update.high,
+            chart_update.low,
+            chart_update.close,
+            chart_update.end_of_candle,
+        )
+        if self.event_sink is not None:
+            self.event_sink.on_chart(chart_update)
 
     def _emit_status(self, status: str) -> None:
         if self.event_sink is not None:
@@ -218,6 +286,31 @@ class _SubscriptionListener(SubscriptionListener):
         self._adapter._handle_quote_update(_quote_from_update(update_info, self._epic))
 
 
+class _ChartSubscriptionListener(SubscriptionListener):
+    def __init__(self, adapter: IGStreamingAdapter, epic: str, interval: str) -> None:
+        self._adapter = adapter
+        self._epic = epic
+        self._interval = interval
+
+    def onSubscription(self) -> None:  # noqa: N802
+        self._adapter._handle_status(f"SUBSCRIBED:CHART:{self._epic}:{self._interval}")
+
+    def onUnsubscription(self) -> None:  # noqa: N802
+        self._adapter._handle_status(f"UNSUBSCRIBED:CHART:{self._epic}:{self._interval}")
+
+    def onSubscriptionError(self, code: int, message: str) -> None:  # noqa: N802
+        self._adapter._handle_subscription_error(
+            code,
+            message,
+            f"CHART:{self._epic}:{self._interval}",
+        )
+
+    def onItemUpdate(self, update_info: Any) -> None:  # noqa: N802
+        self._adapter._handle_chart_update(
+            _chart_update_from_update(update_info, self._epic, self._interval)
+        )
+
+
 def _quote_from_update(update_info: Any, epic: str) -> Quote:
     fields = {}
     try:
@@ -228,10 +321,13 @@ def _quote_from_update(update_info: Any, epic: str) -> Quote:
     bid = _optional_float(_first_value(update_info, ["BID", "BIDPRICE1", "BIDPRICE"]))
     offer = _optional_float(_first_value(update_info, ["OFFER", "ASKPRICE1", "ASK"]))
     net_change = _optional_float(
-        _first_value(update_info, ["CHANGE", "DAY_NET_CHG_MID", "NET_CHANGE"])
+        _first_value(update_info, ["CHANGE", "DAY_NET_CHG_MID", "NET_CHG", "NET_CHANGE"])
     )
     percent_change = _optional_float(
-        _first_value(update_info, ["CHANGE_PCT", "DAY_PERC_CHG_MID", "PERCENT_CHANGE"])
+        _first_value(
+            update_info,
+            ["CHANGE_PCT", "DAY_PERC_CHG_MID", "NET_CHG_PCT", "PERCENT_CHANGE"],
+        )
     )
     market_state = _first_string(update_info, ["MARKET_STATE"])
     timestamp_ms = _optional_int(_first_value(update_info, ["UPDATE_TIME", "UTM"]))
@@ -243,6 +339,39 @@ def _quote_from_update(update_info: Any, epic: str) -> Quote:
         percent_change=percent_change,
         market_state=market_state,
         timestamp_ms=timestamp_ms,
+        snapshot=bool(getattr(update_info, "isSnapshot", lambda: False)()),
+        raw=fields,
+    )
+
+
+def _chart_update_from_update(update_info: Any, epic: str, interval: str) -> ChartCandleUpdate:
+    fields = {}
+    try:
+        fields = dict(update_info.getFields())
+    except Exception:  # pragma: no cover - defensive only
+        fields = {}
+    return ChartCandleUpdate(
+        epic=epic,
+        interval=interval,
+        timestamp_ms=_optional_int(_first_value(update_info, ["UTM"])),
+        open=_optional_float(
+            _first_value(
+                update_info,
+                ["BID_OPEN", "OFR_OPEN", "LTP_OPEN", "DAY_OPEN_MID"],
+            )
+        ),
+        high=_optional_float(
+            _first_value(update_info, ["BID_HIGH", "OFR_HIGH", "LTP_HIGH", "DAY_HIGH"])
+        ),
+        low=_optional_float(
+            _first_value(update_info, ["BID_LOW", "OFR_LOW", "LTP_LOW", "DAY_LOW"])
+        ),
+        close=_optional_float(
+            _first_value(update_info, ["BID_CLOSE", "OFR_CLOSE", "LTP_CLOSE"])
+        ),
+        volume=_optional_float(_first_value(update_info, ["LTV", "TTV"])),
+        tick_count=_optional_int(_first_value(update_info, ["CONS_TICK_COUNT"])),
+        end_of_candle=str(_first_value(update_info, ["CONS_END"])) == "1",
         snapshot=bool(getattr(update_info, "isSnapshot", lambda: False)()),
         raw=fields,
     )

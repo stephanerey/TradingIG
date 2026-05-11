@@ -36,3 +36,19 @@ class Quote:
     timestamp_ms: int | None = None
     snapshot: bool = False
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
+
+
+@dataclass(frozen=True)
+class ChartCandleUpdate:
+    epic: str
+    interval: str
+    timestamp_ms: int | None = None
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    close: float | None = None
+    volume: float | None = None
+    tick_count: int | None = None
+    end_of_candle: bool = False
+    snapshot: bool = False
+    raw: dict[str, Any] = field(default_factory=dict, repr=False)

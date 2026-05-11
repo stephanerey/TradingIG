@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 import pyqtgraph as pg
 from PyQt5 import QtCore, QtGui, QtWidgets
 
-from trading_ig_assistant.domain.market_data import PriceSeries, Quote
+from trading_ig_assistant.domain.market_data import ChartCandleUpdate, PriceSeries, Quote
 
 
 @dataclass(frozen=True)
@@ -222,13 +222,29 @@ class ChartView(QtWidgets.QWidget):
             f"% Variation: {_format_signed_number(quote.percent_change)}"
         )
         live_value = quote.offer if quote.offer is not None else quote.bid
-        if live_value is not None:
-            self._update_display_bars_from_quote(quote, live_value)
-            if self._live_price_line is not None:
-                self._live_price_line.setValue(live_value)
+        if live_value is not None and self._live_price_line is not None:
+            self._live_price_line.setValue(live_value)
 
     def set_price_series(self, series: PriceSeries, anchor_price: float | None = None) -> None:
         self._source_model = ChartDataModel.from_price_series(series, anchor_price=anchor_price)
+        self._manual_zoom = False
+        self._render_display_bars(self._source_model.resampled(self._current_interval_seconds))
+
+    def apply_chart_update(self, chart_update: ChartCandleUpdate) -> None:
+        bar = _bar_from_chart_update(chart_update)
+        if bar is None:
+            return
+        if not self._source_model.bars:
+            self._source_model = ChartDataModel([bar], is_placeholder=False)
+        else:
+            bars = list(self._source_model.bars)
+            if bars[-1].timestamp_ms == bar.timestamp_ms:
+                bars[-1] = bar
+            elif bar.timestamp_ms > bars[-1].timestamp_ms:
+                bars.append(bar)
+            else:
+                return
+            self._source_model.set_bars(bars, placeholder=False)
         self._manual_zoom = False
         self._render_display_bars(self._source_model.resampled(self._current_interval_seconds))
 
@@ -258,7 +274,6 @@ class ChartView(QtWidgets.QWidget):
                 else self._last_quote.bid
             )
             if live_value is not None:
-                self._update_display_bars_from_quote(self._last_quote, live_value)
                 if self._live_price_line is not None:
                     self._live_price_line.setValue(live_value)
 
@@ -357,36 +372,6 @@ class ChartView(QtWidgets.QWidget):
         y_padding = max((high - low) * 0.12, 1.0)
         self._plot.setYRange(low - y_padding, high + y_padding)
 
-    def _update_display_bars_from_quote(self, quote: Quote, live_value: float) -> None:
-        if not self._display_bars:
-            return
-        last_bar = self._display_bars[-1]
-        now_ms = quote.timestamp_ms or int(datetime.now(tz=UTC).timestamp() * 1000)
-        updated_bars = list(self._display_bars)
-        if now_ms - last_bar.timestamp_ms >= self._current_interval_seconds * 1000:
-            updated_bars.append(
-                OhlcBar(
-                    timestamp_ms=now_ms,
-                    open=last_bar.close,
-                    high=max(last_bar.close, live_value),
-                    low=min(last_bar.close, live_value),
-                    close=live_value,
-                    volume=last_bar.volume,
-                )
-            )
-        else:
-            updated_bars[-1] = OhlcBar(
-                timestamp_ms=last_bar.timestamp_ms,
-                open=last_bar.open,
-                high=max(last_bar.high, live_value),
-                low=min(last_bar.low, live_value),
-                close=live_value,
-                volume=last_bar.volume,
-            )
-        self._display_bars = updated_bars
-        self._model.set_bars(updated_bars)
-        self._render_display_bars(updated_bars)
-
 
 def _format_number(value: float | None) -> str:
     if value is None:
@@ -454,6 +439,28 @@ def _build_placeholder_bars(anchor_price: float, *, count: int = 60) -> list[Ohl
             )
         )
     return bars
+
+
+def _bar_from_chart_update(chart_update: ChartCandleUpdate) -> OhlcBar | None:
+    close_price = chart_update.close
+    if close_price is None:
+        return None
+    open_price = chart_update.open if chart_update.open is not None else close_price
+    high_price = (
+        chart_update.high if chart_update.high is not None else max(open_price, close_price)
+    )
+    low_price = chart_update.low if chart_update.low is not None else min(open_price, close_price)
+    timestamp_ms = chart_update.timestamp_ms
+    if timestamp_ms is None:
+        timestamp_ms = int(datetime.now(tz=UTC).timestamp() * 1000)
+    return OhlcBar(
+        timestamp_ms=timestamp_ms,
+        open=open_price,
+        high=max(high_price, open_price, close_price),
+        low=min(low_price, open_price, close_price),
+        close=close_price,
+        volume=chart_update.volume,
+    )
 
 
 def _bars_from_price_series(

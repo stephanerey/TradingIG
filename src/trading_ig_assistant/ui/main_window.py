@@ -25,7 +25,7 @@ from trading_ig_assistant.app.config import (
 )
 from trading_ig_assistant.app.streaming_bridge import StreamingEventBridge
 from trading_ig_assistant.domain.instruments import Account
-from trading_ig_assistant.domain.market_data import PriceSeries, Quote
+from trading_ig_assistant.domain.market_data import ChartCandleUpdate, PriceSeries, Quote
 from trading_ig_assistant.domain.products import ProductType, TradableProduct
 from trading_ig_assistant.services.ig_connection_service import IGConnectionRequest
 from trading_ig_assistant.services.product_discovery_service import (
@@ -212,6 +212,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_menu()
         self._build_layout()
         self._streaming_bridge.quote_received.connect(self._on_stream_quote)
+        self._streaming_bridge.chart_received.connect(self._on_stream_chart)
         self._streaming_bridge.status_changed.connect(self._on_stream_status)
         self._streaming_bridge.error_received.connect(self._on_stream_error)
         LOGGER.debug("MainWindow initialization complete")
@@ -585,6 +586,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.product_selector.set_live_quote(quote)
             self.chart_view.set_live_quote(quote)
 
+    @QtCore.pyqtSlot(object)
+    def _on_stream_chart(self, chart_update: object) -> None:
+        if isinstance(chart_update, ChartCandleUpdate):
+            self.chart_view.apply_chart_update(chart_update)
+
     @QtCore.pyqtSlot(str)
     def _on_stream_status(self, status: str) -> None:
         self.chart_view.set_stream_status(status)
@@ -620,6 +626,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.chart_view.set_stream_status("CONNECTING")
             adapter.start()
             adapter.subscribe_market(stream_product.epic)
+            adapter.subscribe_chart(stream_product.epic, "1MINUTE")
             self._streaming_adapter = adapter
             LOGGER.debug(
                 "Streaming restarted selected_epic=%s source_epic=%s account=%s",
