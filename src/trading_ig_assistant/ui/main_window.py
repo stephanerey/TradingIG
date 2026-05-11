@@ -26,7 +26,7 @@ from trading_ig_assistant.app.config import (
 from trading_ig_assistant.app.streaming_bridge import StreamingEventBridge
 from trading_ig_assistant.domain.instruments import Account
 from trading_ig_assistant.domain.market_data import PriceSeries, Quote
-from trading_ig_assistant.domain.products import TradableProduct
+from trading_ig_assistant.domain.products import ProductType, TradableProduct
 from trading_ig_assistant.services.ig_connection_service import IGConnectionRequest
 from trading_ig_assistant.services.product_discovery_service import (
     ProductDiscoveryResult,
@@ -206,6 +206,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._price_history_blocked_epics: set[str] = set()
         self._auth_locked_out = False
         self._selected_product: TradableProduct | None = None
+        self._chart_product: TradableProduct | None = None
         self._streaming_adapter: IGStreamingAdapter | None = None
         self._streaming_bridge = StreamingEventBridge()
         self._build_menu()
@@ -568,9 +569,13 @@ class MainWindow(QtWidgets.QMainWindow):
         if not isinstance(product, TradableProduct):
             return
         self._selected_product = product
+        self._chart_product = _resolve_chart_source_product(
+            product,
+            self.product_selector.results(),
+        )
         LOGGER.debug("Product selected epic=%s name=%r", product.epic, product.name)
         self.product_selector.set_selected_product(product)
-        self.chart_view.set_selected_product(product)
+        self.chart_view.set_selected_product(self._chart_product or product)
         self._load_selected_product_history()
         self._restart_streaming()
 
@@ -592,7 +597,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _restart_streaming(self) -> None:
         self._stop_streaming()
-        if self._active_connection is None or self._selected_product is None:
+        if self._active_connection is None:
             return
         session = self._active_connection.adapter.session
         if session is None:
@@ -603,6 +608,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self._active_connection.current_account_id:
             self.chart_view.set_stream_status("NO ACTIVE ACCOUNT")
             return
+        stream_product = self._chart_product or self._selected_product
+        if stream_product is None:
+            return
         try:
             adapter = IGStreamingAdapter(
                 session=session,
@@ -611,11 +619,12 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             self.chart_view.set_stream_status("CONNECTING")
             adapter.start()
-            adapter.subscribe_market(self._selected_product.epic)
+            adapter.subscribe_market(stream_product.epic)
             self._streaming_adapter = adapter
             LOGGER.debug(
-                "Streaming restarted epic=%s account=%s",
+                "Streaming restarted selected_epic=%s source_epic=%s account=%s",
                 self._selected_product.epic,
+                stream_product.epic,
                 mask_identifier(self._active_connection.current_account_id),
             )
         except Exception as exc:
@@ -624,10 +633,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"Streaming unavailable: {exc}", 10000)
 
     def _load_selected_product_history(self) -> None:
-        if self._active_connection is None or self._selected_product is None:
+        if self._active_connection is None:
+            return
+        product = self._chart_product or self._selected_product
+        if product is None:
             return
         try:
-            cache_key = self._selected_product.epic
+            cache_key = product.epic
             if cache_key in self._price_history_blocked_epics:
                 LOGGER.debug(
                     "Price history skipped epic=%s due to cached allowance block",
@@ -639,24 +651,24 @@ class MainWindow(QtWidgets.QMainWindow):
                 series = cached_series
             else:
                 series = self._active_connection.adapter.get_prices(
-                    self._selected_product.epic,
+                    product.epic,
                     resolution="MINUTE",
                     max_points=60,
                 )
                 self._price_history_cache[cache_key] = series
-            anchor_price = _product_anchor_price(self._selected_product)
+            anchor_price = _product_anchor_price(product)
             self.chart_view.set_price_series(series, anchor_price=anchor_price)
             LOGGER.debug(
                 "Price history loaded epic=%s points=%s",
-                self._selected_product.epic,
+                product.epic,
                 len(series.prices),
             )
         except Exception as exc:
             if "exceeded-api-key-allowance" in str(exc):
-                self._price_history_blocked_epics.add(self._selected_product.epic)
+                self._price_history_blocked_epics.add(product.epic)
             LOGGER.debug(
                 "Price history load failed epic=%s error=%s",
-                self._selected_product.epic,
+                product.epic,
                 exc,
             )
             self.statusBar().showMessage(
@@ -829,3 +841,57 @@ def _product_anchor_price(product: TradableProduct) -> float | None:
         if isinstance(value, (int, float)) and value > 0:
             return float(value)
     return None
+
+
+def _resolve_chart_source_product(
+    selected_product: TradableProduct,
+    results: list[ProductDiscoveryResult],
+) -> TradableProduct:
+    if selected_product.product_type == ProductType.CASH_OR_DFB:
+        return selected_product
+
+    target_name = _normalize_chart_base_name(selected_product.name)
+    candidates: list[TradableProduct] = []
+    for result in results:
+        candidates.extend(result.products)
+
+    exact_matches = [
+        product
+        for product in candidates
+        if _normalize_chart_base_name(product.name) == target_name
+        and product.epic != selected_product.epic
+        and product.product_type == ProductType.CASH_OR_DFB
+    ]
+    if exact_matches:
+        return exact_matches[0]
+
+    fallback_matches = [
+        product
+        for product in candidates
+        if product.epic != selected_product.epic
+        and _normalize_chart_base_name(product.name).startswith(target_name)
+        and product.product_type == ProductType.CASH_OR_DFB
+    ]
+    if fallback_matches:
+        return fallback_matches[0]
+
+    return selected_product
+
+
+def _normalize_chart_base_name(name: str) -> str:
+    text = " ".join(str(name).split()).strip()
+    replacements = [
+        " Barrières Achat",
+        " Barrières Vente",
+        " Barrier Call",
+        " Barrier Put",
+        " Barrière Achat",
+        " Barrière Vente",
+        " Call",
+        " Put",
+    ]
+    for replacement in replacements:
+        if text.endswith(replacement):
+            text = text[: -len(replacement)]
+    text = text.replace("(S1)", "").replace("(E1)", "").strip()
+    return text.lower()

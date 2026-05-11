@@ -178,6 +178,35 @@ def test_resolve_account_id_prefers_last_selected_account() -> None:
     assert _resolve_account_id(accounts, "MISSING", "OTHER") == "CFD"
 
 
+def test_resolve_chart_source_product_prefers_underlying_cash_market() -> None:
+    from trading_ig_assistant.domain.products import ProductType, TradableProduct
+    from trading_ig_assistant.services.product_discovery_service import ProductDiscoveryResult
+    from trading_ig_assistant.ui.main_window import _resolve_chart_source_product
+
+    selected = TradableProduct(
+        epic="IX.D.NASDAQ.OPTCALL2.IP",
+        name="US Tech 100 Barrières Achat",
+        product_type=ProductType.BARRIER,
+    )
+    underlying = TradableProduct(
+        epic="IX.D.NASDAQ.IFD.IP",
+        name="US Tech 100",
+        product_type=ProductType.CASH_OR_DFB,
+    )
+    results = [
+        ProductDiscoveryResult(
+            search_term="US Tech 100",
+            candidates_count=2,
+            products=[selected, underlying],
+        )
+    ]
+
+    chart_product = _resolve_chart_source_product(selected, results)
+
+    assert chart_product.epic == "IX.D.NASDAQ.IFD.IP"
+    assert chart_product.product_type == ProductType.CASH_OR_DFB
+
+
 def test_product_selector_displays_discovery_results() -> None:
     from PyQt5 import QtWidgets
 
