@@ -244,14 +244,13 @@ class ChartView(QtWidgets.QWidget):
             self._source_model = ChartDataModel([bar], is_placeholder=False)
         else:
             bars = list(self._source_model.bars)
-            if _bucket_timestamp_ms(bars[-1].timestamp_ms, 60) == bar.timestamp_ms:
-                bars[-1] = bar
-            elif bar.timestamp_ms > bars[-1].timestamp_ms:
-                bars.append(bar)
+            timestamps = [existing_bar.timestamp_ms for existing_bar in bars]
+            index = bisect_left(timestamps, bar.timestamp_ms)
+            if index < len(bars) and bars[index].timestamp_ms == bar.timestamp_ms:
+                bars[index] = bar
             else:
-                return
+                bars.insert(index, bar)
             self._source_model.set_bars(bars, placeholder=False)
-        self._manual_zoom = False
         self._render_display_bars(self._source_model.resampled(self._current_interval_seconds))
 
     def _refresh_snapshot_labels(self, product: object) -> None:
@@ -397,7 +396,12 @@ class ChartView(QtWidgets.QWidget):
             self._view_center_ts = (first_ts + last_ts) / 2
             self._view_span_seconds = max(last_ts - first_ts, 60.0)
         half_span = self._view_span_seconds / 2
-        self._plot.setXRange(self._view_center_ts - half_span, self._view_center_ts + half_span)
+        left_padding = max(self._current_interval_seconds * 1.5, 30.0)
+        right_padding = max(self._current_interval_seconds * 0.6, 15.0)
+        self._plot.setXRange(
+            self._view_center_ts - half_span - left_padding,
+            self._view_center_ts + half_span + right_padding,
+        )
         lows = [bar.low for bar in self._display_bars]
         highs = [bar.high for bar in self._display_bars]
         low = min(lows)
@@ -416,7 +420,7 @@ class ChartView(QtWidgets.QWidget):
         if self._view_center_ts is not None and self._view_span_seconds is not None:
             left_edge = self._view_center_ts - (self._view_span_seconds / 2)
         self._live_price_label.setPos(
-            left_edge + max(self._current_interval_seconds * 0.15, 6.0),
+            left_edge + max(self._current_interval_seconds * 0.05, 2.0),
             live_value,
         )
 
@@ -649,7 +653,7 @@ def _build_live_price_label(text: str, color: str) -> pg.TextItem:
     label = pg.TextItem(
         text=text,
         color=color,
-        anchor=(0, 0.5),
+        anchor=(1, 0.5),
         fill=QtGui.QColor("#f4f8fc"),
         border=pg.mkPen(color, width=1),
     )

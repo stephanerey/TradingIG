@@ -62,7 +62,7 @@ def test_chart_view_accepts_live_quote_update() -> None:
 
     from trading_ig_assistant.domain.market_data import ChartCandleUpdate, Quote
     from trading_ig_assistant.domain.products import ProductType, TradableProduct
-    from trading_ig_assistant.ui.chart_view import ChartView
+    from trading_ig_assistant.ui.chart_view import ChartView, OhlcBar
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     assert app is not None
@@ -90,6 +90,27 @@ def test_chart_view_accepts_live_quote_update() -> None:
     assert "2311.9" in view.bid_label.text()
     assert "2313.1" in view.offer_label.text()
     assert view._model.bars == []
+    view.set_bars(
+        [
+            OhlcBar(
+                timestamp_ms=1_778_496_600_000,
+                open=29190.0,
+                high=29200.0,
+                low=29180.0,
+                close=29195.0,
+            ),
+            OhlcBar(
+                timestamp_ms=1_778_496_660_000,
+                open=29195.0,
+                high=29205.0,
+                low=29190.0,
+                close=29200.0,
+            ),
+        ]
+    )
+
+    view._on_zoom_requested(0.85)
+    assert view._manual_zoom is True
 
     view.apply_chart_update(
         ChartCandleUpdate(
@@ -104,8 +125,10 @@ def test_chart_view_accepts_live_quote_update() -> None:
         )
     )
 
-    assert view._model.bars[-1].close == 29200.0
-    assert view._model.bars[-1].open == 29190.0
+    assert view._model.bars[0].close == 29200.0
+    assert view._model.bars[0].high == 29210.0
+    assert view._manual_zoom is True
+    assert view._live_price_label is not None
 
 
 def test_account_status_widget_accepts_account_data(qtbot=None) -> None:
