@@ -178,6 +178,15 @@ class ChartView(QtWidgets.QWidget):
         layout.addLayout(header)
         layout.addWidget(self._plot)
 
+    def _detach_live_price_label(self) -> None:
+        if self._live_price_label is None:
+            return
+        try:
+            self._plot.scene().removeItem(self._live_price_label)
+        except Exception:
+            pass
+        self._live_price_label = None
+
     def set_bars(self, bars: list[OhlcBar]) -> None:
         self._source_model.set_bars(bars, placeholder=False)
         self._manual_zoom = False
@@ -201,7 +210,7 @@ class ChartView(QtWidgets.QWidget):
         else:
             self._plot.clear()
             self._live_price_line = None
-            self._live_price_label = None
+            self._detach_live_price_label()
             self._hover_vline = None
             self._hover_hline = None
             self._hover_label = None
@@ -345,7 +354,7 @@ class ChartView(QtWidgets.QWidget):
         self._model.set_bars(self._display_bars)
         self._plot.clear()
         self._live_price_line = None
-        self._live_price_label = None
+        self._detach_live_price_label()
         self._hover_vline = None
         self._hover_hline = None
         self._hover_label = None
@@ -361,7 +370,7 @@ class ChartView(QtWidgets.QWidget):
         self._live_price_line = self._add_level("Live", last_close, "#0b6bcb", dashed=False)
         self._live_price_line.label = None
         self._live_price_label = _build_live_price_label(_format_number(last_close), "#0b6bcb")
-        self._plot.addItem(self._live_price_label)
+        self._plot.scene().addItem(self._live_price_label)
         self._hover_vline = pg.InfiniteLine(
             angle=90,
             movable=False,
@@ -416,13 +425,12 @@ class ChartView(QtWidgets.QWidget):
             return
         if live_value is None:
             live_value = self._display_bars[-1].close
-        left_edge = self._display_bars[0].timestamp_ms / 1000.0
-        if self._view_center_ts is not None and self._view_span_seconds is not None:
-            left_edge = self._view_center_ts - (self._view_span_seconds / 2)
-        self._live_price_label.setPos(
-            left_edge + max(self._current_interval_seconds * 0.05, 2.0),
-            live_value,
+        view_box = self._plot.plotItem.vb
+        scene_point = view_box.mapViewToScene(
+            QtCore.QPointF(self._display_bars[-1].timestamp_ms / 1000.0, live_value)
         )
+        scene_x = view_box.sceneBoundingRect().left() - 6.0
+        self._live_price_label.setPos(scene_x, scene_point.y())
 
     def _position_hover_label(self) -> None:
         if self._hover_label is None or self._hover_label.isVisible() is False:

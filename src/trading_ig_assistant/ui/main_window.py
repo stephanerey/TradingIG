@@ -578,6 +578,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._chart_product = _resolve_chart_source_product(
             product,
             self.product_selector.results(),
+            self._active_connection.adapter if self._active_connection is not None else None,
         )
         LOGGER.debug("Product selected epic=%s name=%r", product.epic, product.name)
         self.product_selector.set_selected_product(product)
@@ -872,14 +873,52 @@ def _product_anchor_price(product: TradableProduct) -> float | None:
 def _resolve_chart_source_product(
     selected_product: TradableProduct,
     results: list[ProductDiscoveryResult],
+    adapter: IGRestAdapter | None = None,
 ) -> TradableProduct:
     if selected_product.product_type == ProductType.CASH_OR_DFB:
         return selected_product
 
-    target_name = _normalize_chart_base_name(selected_product.name)
     candidates: list[TradableProduct] = []
     for result in results:
         candidates.extend(result.products)
+
+    resolved = _resolve_chart_source_from_candidates(selected_product, candidates)
+    if resolved.epic != selected_product.epic:
+        return resolved
+
+    if adapter is None:
+        return selected_product
+
+    try:
+        search_term = _normalize_chart_base_name(selected_product.name)
+        service = ProductDiscoveryService(adapter)
+        live_candidates = [
+            service.classify_product(summary, details=None)
+            for summary in adapter.search_markets(search_term)
+        ]
+        resolved = _resolve_chart_source_from_candidates(selected_product, live_candidates)
+        if resolved.epic != selected_product.epic:
+            LOGGER.debug(
+                "Chart source resolved via targeted search selected_epic=%s source_epic=%s",
+                selected_product.epic,
+                resolved.epic,
+            )
+            return resolved
+    except Exception as exc:
+        LOGGER.debug(
+            "Chart source targeted search failed selected_epic=%s error=%s",
+            selected_product.epic,
+            exc,
+        )
+
+    return selected_product
+
+
+def _resolve_chart_source_from_candidates(
+    selected_product: TradableProduct,
+    candidates: list[TradableProduct],
+) -> TradableProduct:
+    target_name = _normalize_chart_base_name(selected_product.name)
 
     exact_matches = [
         product

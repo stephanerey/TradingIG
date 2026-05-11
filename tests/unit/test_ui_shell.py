@@ -245,6 +245,36 @@ def test_resolve_chart_source_product_prefers_underlying_cash_market() -> None:
     assert chart_product.product_type == ProductType.CASH_OR_DFB
 
 
+def test_resolve_chart_source_product_uses_targeted_search_when_results_miss_cash_market() -> None:
+    from trading_ig_assistant.domain.instruments import MarketSummary
+    from trading_ig_assistant.domain.products import ProductDirection, ProductType, TradableProduct
+    from trading_ig_assistant.ui.main_window import _resolve_chart_source_product
+
+    class FakeAdapter:
+        def search_markets(self, query: str):
+            assert query == "us tech 100"
+            return [
+                MarketSummary(
+                    epic="IX.D.NASDAQ.IFD.IP",
+                    instrument_name="US Tech 100",
+                    instrument_type="INDICES",
+                    market_status="TRADEABLE",
+                )
+            ]
+
+    selected = TradableProduct(
+        epic="IX.D.NASDAQ.OPTCALL2.IP",
+        name="US Tech 100 Barrières Achat",
+        product_type=ProductType.BARRIER,
+        direction=ProductDirection.BUY,
+    )
+
+    chart_product = _resolve_chart_source_product(selected, [], FakeAdapter())
+
+    assert chart_product.epic == "IX.D.NASDAQ.IFD.IP"
+    assert chart_product.product_type == ProductType.CASH_OR_DFB
+
+
 def test_product_selector_displays_discovery_results() -> None:
     from PyQt5 import QtWidgets
 
