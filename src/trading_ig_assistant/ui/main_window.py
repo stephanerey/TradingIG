@@ -47,7 +47,7 @@ from trading_ig_assistant.utils.redaction import mask_identifier
 
 LOGGER = logging.getLogger(__name__)
 PRICE_HISTORY_POINTS = 240
-PRODUCT_STREAM_ITEMS_LIMIT = 80
+PRODUCT_STREAM_ITEMS_LIMIT = 20
 
 
 @dataclass
@@ -429,8 +429,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_profile_account(result.environment, selected_account_id)
         if self._loaded_cache_environment != result.environment:
             self._load_cached_discovery_results()
-        self.chart_view.set_stream_status("STREAM READY")
-        self._restart_streaming()
+        if self._selected_product is not None:
+            self._refresh_selected_product_after_connection()
+        else:
+            self.chart_view.set_stream_status("STREAM READY")
+            self._restart_streaming()
         message = (
             f"Connected to IG {result.environment.value}. "
             f"Accounts fetched: {len(result.accounts)}."
@@ -595,25 +598,14 @@ class MainWindow(QtWidgets.QMainWindow):
         if not isinstance(product, TradableProduct):
             return
         self._selected_product = product
-        self._chart_product = _resolve_chart_source_product(
-            product,
-            self.product_selector.results(),
-            self._active_connection.adapter
-            if self._active_connection is not None and not self._api_allowance_exceeded
-            else None,
-        )
         LOGGER.debug(
-            "Product selected epic=%s source_epic=%s name=%r",
+            "Product selected epic=%s name=%r",
             product.epic,
-            (self._chart_product or product).epic,
             product.name,
         )
         self._config.last_selected_product_epic = product.epic
         save_config(self._config, self._config_path)
-        self.product_selector.set_selected_product(product)
-        self.chart_view.set_selected_product(self._chart_product or product)
-        self._load_selected_product_history()
-        self._restart_streaming()
+        self._apply_selected_product_state()
 
     @QtCore.pyqtSlot(object)
     def _on_visible_epics_changed(self, epics: object) -> None:
@@ -686,6 +678,15 @@ class MainWindow(QtWidgets.QMainWindow):
             LOGGER.debug("Streaming restart failed error=%s", exc)
             self.chart_view.set_stream_status("ERROR")
             self.statusBar().showMessage(f"Streaming unavailable: {exc}", 10000)
+
+    def _refresh_selected_product_after_connection(self) -> None:
+        if self._selected_product is None:
+            return
+        LOGGER.debug(
+            "Refreshing selected product after connection epic=%s",
+            self._selected_product.epic,
+        )
+        self._apply_selected_product_state()
 
     def _load_selected_product_history(self) -> None:
         if self._active_connection is None:
@@ -816,6 +817,27 @@ class MainWindow(QtWidgets.QMainWindow):
             cache_path,
             len(results),
         )
+
+    def _apply_selected_product_state(self) -> None:
+        if self._selected_product is None:
+            return
+        product = self._selected_product
+        self._chart_product = _resolve_chart_source_product(
+            product,
+            self.product_selector.results(),
+            self._active_connection.adapter
+            if self._active_connection is not None and not self._api_allowance_exceeded
+            else None,
+        )
+        LOGGER.debug(
+            "Selected product state applied selected_epic=%s source_epic=%s",
+            product.epic,
+            (self._chart_product or product).epic,
+        )
+        self.product_selector.set_selected_product(product)
+        self.chart_view.set_selected_product(self._chart_product or product)
+        self._load_selected_product_history()
+        self._restart_streaming()
 
 
 def run_gui() -> int:
