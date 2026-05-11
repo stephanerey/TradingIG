@@ -25,7 +25,7 @@ from trading_ig_assistant.app.config import (
 )
 from trading_ig_assistant.app.streaming_bridge import StreamingEventBridge
 from trading_ig_assistant.domain.instruments import Account
-from trading_ig_assistant.domain.market_data import Quote
+from trading_ig_assistant.domain.market_data import PriceSeries, Quote
 from trading_ig_assistant.domain.products import TradableProduct
 from trading_ig_assistant.services.ig_connection_service import IGConnectionRequest
 from trading_ig_assistant.services.product_discovery_service import (
@@ -171,7 +171,7 @@ class PriceHistoryWorker(QtCore.QObject):
     def run(self) -> None:
         try:
             LOGGER.debug("Price history worker start epic=%s", self._epic)
-            series = self._adapter.get_prices(self._epic, resolution="MINUTE", max_points=240)
+            series = self._adapter.get_prices(self._epic, resolution="MINUTE", max_points=60)
             LOGGER.debug(
                 "Price history worker success epic=%s points=%s",
                 self._epic,
@@ -202,6 +202,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._discovery_worker: ProductDiscoveryWorker | None = None
         self._price_history_thread: QtCore.QThread | None = None
         self._price_history_worker: PriceHistoryWorker | None = None
+        self._price_history_cache: dict[str, PriceSeries] = {}
+        self._price_history_blocked_epics: set[str] = set()
         self._auth_locked_out = False
         self._selected_product: TradableProduct | None = None
         self._streaming_adapter: IGStreamingAdapter | None = None
@@ -248,9 +250,6 @@ class MainWindow(QtWidgets.QMainWindow):
         body = QtWidgets.QSplitter()
         body.setOrientation(QtCore.Qt.Horizontal)
         self.chart_view = ChartView()
-        self.chart_view.resolution_combo.currentIndexChanged.connect(
-            lambda _index: self._reload_selected_product_history()
-        )
         body.addWidget(self.chart_view)
 
         right_tabs = QtWidgets.QTabWidget()
@@ -628,12 +627,23 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._active_connection is None or self._selected_product is None:
             return
         try:
-            interval_seconds = self.chart_view.current_interval_seconds()
-            series = self._active_connection.adapter.get_prices(
-                self._selected_product.epic,
-                resolution=_api_resolution_for_interval(interval_seconds),
-                max_points=240,
-            )
+            cache_key = self._selected_product.epic
+            if cache_key in self._price_history_blocked_epics:
+                LOGGER.debug(
+                    "Price history skipped epic=%s due to cached allowance block",
+                    cache_key,
+                )
+                return
+            cached_series = self._price_history_cache.get(cache_key)
+            if cached_series is not None:
+                series = cached_series
+            else:
+                series = self._active_connection.adapter.get_prices(
+                    self._selected_product.epic,
+                    resolution="MINUTE",
+                    max_points=60,
+                )
+                self._price_history_cache[cache_key] = series
             anchor_price = _product_anchor_price(self._selected_product)
             self.chart_view.set_price_series(series, anchor_price=anchor_price)
             LOGGER.debug(
@@ -642,6 +652,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 len(series.prices),
             )
         except Exception as exc:
+            if "exceeded-api-key-allowance" in str(exc):
+                self._price_history_blocked_epics.add(self._selected_product.epic)
             LOGGER.debug(
                 "Price history load failed epic=%s error=%s",
                 self._selected_product.epic,
