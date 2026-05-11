@@ -26,7 +26,11 @@ from trading_ig_assistant.app.config import (
 )
 from trading_ig_assistant.app.streaming_bridge import StreamingEventBridge
 from trading_ig_assistant.domain.instruments import Account
-from trading_ig_assistant.domain.market_data import ChartCandleUpdate, PriceSeries, Quote
+from trading_ig_assistant.domain.market_data import (
+    ChartCandleUpdate,
+    PriceSeries,
+    Quote,
+)
 from trading_ig_assistant.domain.products import ProductType, TradableProduct
 from trading_ig_assistant.services.ig_connection_service import IGConnectionRequest
 from trading_ig_assistant.services.product_discovery_service import (
@@ -210,7 +214,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._discovery_worker: ProductDiscoveryWorker | None = None
         self._price_history_thread: QtCore.QThread | None = None
         self._price_history_worker: PriceHistoryWorker | None = None
-        self._price_history_cache: dict[tuple[str, str, int], PriceSeries] = {}
+        self._price_history_cache: dict[tuple[str, str, str, int], PriceSeries] = {}
         self._price_history_blocked_epics: set[str] = set()
         self._api_allowance_exceeded = False
         self._auth_locked_out = False
@@ -265,6 +269,7 @@ class MainWindow(QtWidgets.QMainWindow):
         body.setOrientation(QtCore.Qt.Horizontal)
         self.chart_view = ChartView()
         self.chart_view.resolution_changed.connect(self._on_chart_resolution_changed)
+        self.chart_view.history_range_changed.connect(self._on_chart_range_changed)
         body.addWidget(self.chart_view)
 
         right_tabs = QtWidgets.QTabWidget()
@@ -705,11 +710,15 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         try:
             interval_seconds = self.chart_view.current_interval_seconds()
-            resolution, max_points = _history_request_spec(interval_seconds)
-            cache_key = (product.epic, resolution, max_points)
+            range_key = self.chart_view.current_range_key()
+            price_basis = self.chart_view.current_price_basis()
+            time_axis_mode = self.chart_view.current_time_axis_mode()
+            resolution, max_points = _history_request_spec(interval_seconds, range_key)
+            cache_key = (product.epic, resolution, range_key, max_points)
             LOGGER.debug(
                 "History request selected_product_epic=%s selected_product_type=%s "
                 "chart_source_epic=%s chart_source_type=%s history_request_epic=%s "
+                "timeframe_seconds=%s range_key=%s price_basis=%s time_axis_mode=%s "
                 "history_resolution=%s history_max_points=%s",
                 self._selected_product.epic if self._selected_product else "<none>",
                 getattr(
@@ -720,6 +729,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 product.epic,
                 getattr(getattr(product, "product_type", None), "value", "unknown"),
                 product.epic,
+                interval_seconds,
+                range_key,
+                price_basis.value,
+                time_axis_mode.value,
                 resolution,
                 max_points,
             )
@@ -748,11 +761,14 @@ class MainWindow(QtWidgets.QMainWindow):
             anchor_price = _product_anchor_price(product)
             self.chart_view.set_price_series(series, anchor_price=anchor_price)
             LOGGER.debug(
-                "Price history loaded epic=%s resolution=%s max_points=%s points=%s",
+                "Price history loaded epic=%s resolution=%s range_key=%s max_points=%s "
+                "historical_candles=%s display_candles=%s",
                 product.epic,
                 resolution,
+                range_key,
                 max_points,
                 len(series.prices),
+                self.chart_view.display_bar_count(),
             )
         except Exception as exc:
             if _is_api_allowance_exceeded(exc):
@@ -774,6 +790,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(int)
     def _on_chart_resolution_changed(self, _interval_seconds: int) -> None:
+        if self._selected_product is None:
+            return
+        self._load_selected_product_history()
+
+    @QtCore.pyqtSlot(str)
+    def _on_chart_range_changed(self, _range_key: str) -> None:
         if self._selected_product is None:
             return
         self._load_selected_product_history()
@@ -990,19 +1012,31 @@ def _api_resolution_for_interval(interval_seconds: int) -> str:
     return mapping.get(interval_seconds, "MINUTE")
 
 
-def _history_request_spec(interval_seconds: int) -> tuple[str, int]:
-    mapping = {
-        60: ("MINUTE", 500),
-        300: ("MINUTE_5", 600),
-        600: ("MINUTE_10", 600),
-        900: ("MINUTE_15", 600),
-        1800: ("MINUTE_30", 600),
-        3600: ("HOUR", 500),
-        7200: ("HOUR_2", 500),
-        14_400: ("HOUR_4", 500),
-        86_400: ("DAY", 500),
-    }
-    return mapping.get(interval_seconds, ("MINUTE", 500))
+def _history_request_spec(interval_seconds: int, range_key: str) -> tuple[str, int]:
+    range_days = {
+        "1D": 1,
+        "5D": 5,
+        "1M": 30,
+        "3M": 90,
+        "6M": 180,
+        "1Y": 365,
+        "Max": 3650,
+    }.get(range_key, 30)
+    resolution = _api_resolution_for_interval(interval_seconds)
+    target_points = int((range_days * 86_400) / max(interval_seconds, 60))
+    minimum_points = {
+        60: 500,
+        300: 600,
+        600: 600,
+        900: 600,
+        1800: 600,
+        3600: 500,
+        7200: 500,
+        14_400: 500,
+        86_400: 500,
+    }.get(interval_seconds, 500)
+    max_points = min(max(target_points, minimum_points), 10_000)
+    return (resolution, max_points)
 
 
 def _resolve_account_id(

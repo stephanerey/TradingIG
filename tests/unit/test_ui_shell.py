@@ -34,7 +34,7 @@ def test_chart_model_accepts_sample_ohlc_data() -> None:
 
 
 def test_chart_model_builds_bars_from_price_series() -> None:
-    from trading_ig_assistant.domain.market_data import PriceSeries
+    from trading_ig_assistant.domain.market_data import ChartPriceBasis, PriceSeries
     from trading_ig_assistant.ui.chart_view import ChartDataModel
 
     model = ChartDataModel.from_price_series(
@@ -43,26 +43,58 @@ def test_chart_model_builds_bars_from_price_series() -> None:
             prices=[
                 {
                     "snapshotTimeUTC": "2026-05-11T10:00:00Z",
-                    "openPrice": {"bid": 10.0},
-                    "highPrice": {"bid": 12.0},
-                    "lowPrice": {"bid": 9.5},
-                    "closePrice": {"bid": 11.5},
+                    "openPrice": {"bid": 10.0, "offer": 10.4},
+                    "highPrice": {"bid": 12.0, "offer": 12.4},
+                    "lowPrice": {"bid": 9.5, "offer": 9.9},
+                    "closePrice": {"bid": 11.5, "offer": 11.9},
                 }
             ],
-        )
+        ),
+        price_basis=ChartPriceBasis.MID,
     )
 
     assert model.bars[0].timestamp_ms == 1_778_493_600_000
-    assert model.bars[0].open == 10.0
-    assert model.bars[0].close == 11.5
+    assert model.bars[0].open == 10.2
+    assert model.bars[0].close == 11.7
 
 
 def test_history_request_spec_targets_longer_windows() -> None:
     from trading_ig_assistant.ui.main_window import _history_request_spec
 
-    assert _history_request_spec(60) == ("MINUTE", 500)
-    assert _history_request_spec(300) == ("MINUTE_5", 600)
-    assert _history_request_spec(3600) == ("HOUR", 500)
+    assert _history_request_spec(60, "1M") == ("MINUTE", 10_000)
+    assert _history_request_spec(300, "1M") == ("MINUTE_5", 8_640)
+    assert _history_request_spec(3600, "1Y") == ("HOUR", 8_760)
+
+
+def test_chart_view_defaults_to_five_minutes_internally() -> None:
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.ui.chart_view import ChartView
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    view = ChartView()
+
+    assert view.current_interval_seconds() == 300
+    assert view.resolution_combo.currentData() == 300
+    assert view.current_range_key() == "1M"
+
+
+def test_chart_view_history_range_selector_emits_changes() -> None:
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.ui.chart_view import ChartView
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    view = ChartView()
+    seen = []
+    view.history_range_changed.connect(seen.append)
+
+    view.range_combo.setCurrentIndex(view.range_combo.findData("3M"))
+
+    assert view.current_range_key() == "3M"
+    assert seen[-1] == "3M"
 
 
 def test_chart_view_accepts_live_quote_update() -> None:
@@ -75,6 +107,7 @@ def test_chart_view_accepts_live_quote_update() -> None:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     assert app is not None
     view = ChartView()
+    view.resolution_combo.setCurrentIndex(view.resolution_combo.findData(60))
     view.set_selected_product(
         TradableProduct(
             epic="EPIC.ONE",
@@ -138,6 +171,66 @@ def test_chart_view_accepts_live_quote_update() -> None:
     assert view._model.bars[0].high == 29210.0
     assert view._manual_zoom is True
     assert view._live_price_label is not None
+
+
+def test_chart_view_live_line_uses_selected_price_basis() -> None:
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.domain.market_data import ChartPriceBasis, Quote
+    from trading_ig_assistant.ui.chart_view import ChartView, OhlcBar
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    view = ChartView()
+    view.set_bars(
+        [
+            OhlcBar(
+                timestamp_ms=1_778_496_600_000,
+                open=100.0,
+                high=102.0,
+                low=99.0,
+                close=101.0,
+            )
+        ]
+    )
+    quote = Quote(epic="EPIC.ONE", bid=100.0, offer=101.0)
+
+    view.price_basis_combo.setCurrentIndex(view.price_basis_combo.findData(ChartPriceBasis.BID))
+    view.set_live_quote(quote)
+    assert view._live_price_line is not None
+    assert view._live_price_line.value() == 100.0
+
+    view.price_basis_combo.setCurrentIndex(view.price_basis_combo.findData(ChartPriceBasis.ASK))
+    view.set_live_quote(quote)
+    assert view._live_price_line.value() == 101.0
+
+    view.price_basis_combo.setCurrentIndex(view.price_basis_combo.findData(ChartPriceBasis.MID))
+    view.set_live_quote(quote)
+    assert view._live_price_line.value() == 100.5
+
+
+def test_compressed_axis_maps_candles_without_time_gaps() -> None:
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.ui.chart_view import ChartView, OhlcBar
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    view = ChartView()
+    first = OhlcBar(timestamp_ms=1_778_496_600_000, open=100.0, high=102.0, low=99.0, close=101.0)
+    second = OhlcBar(
+        timestamp_ms=1_779_101_400_000,
+        open=101.0,
+        high=103.0,
+        low=100.0,
+        close=102.0,
+    )
+
+    view.set_bars([first, second])
+
+    assert view._display_bars[0].display_x == 0.0
+    assert view._display_bars[1].display_x == 1.0
+    assert view._timestamp_ms_for_x(1.0) == second.timestamp_ms
 
 
 def test_quote_from_chart_update_uses_day_change_fields() -> None:

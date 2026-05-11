@@ -89,3 +89,35 @@ from the CLI first.
 - Live streaming remains independent from history backfill:
   - if REST history fails, the live chart still runs
   - the GUI shows: `Historical backfill unavailable; live chart is running.`
+
+## Chart History / Axis / Price Basis
+
+- The chart timeframe now defaults to `5 Min` both visually and internally.
+- The first history request for a newly selected product uses `MINUTE_5` immediately when the
+  dropdown shows `5 Min`.
+- A history range selector is available:
+  - `1D`
+  - `5D`
+  - `1M`
+  - `3M`
+  - `6M`
+  - `1Y`
+  - `Max`
+- The default history range is `1M`.
+- History depth is calculated from `timeframe + range` and capped conservatively at `10,000`
+  points for IG REST max-points requests.
+- The default chart price basis is `MID`.
+- Price basis can be switched between:
+  - `Bid`
+  - `Mid`
+  - `Ask`
+- The selected price basis is applied consistently to:
+  - historical REST candle conversion
+  - live `CHART` candle updates
+  - the blue live price line
+- The time axis now defaults to `Compressed`.
+- In compressed mode:
+  - candles are rendered on sequential X positions
+  - weekend and market-closed gaps are hidden
+  - original timestamps are still preserved for hover/crosshair display and future indicators
+- A `Real` time-axis mode remains available as a fallback/debug display.

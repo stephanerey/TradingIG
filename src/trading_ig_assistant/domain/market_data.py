@@ -5,7 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
+from enum import StrEnum
 from typing import Any
+
+
+class ChartPriceBasis(StrEnum):
+    BID = "bid"
+    MID = "mid"
+    ASK = "ask"
 
 
 @dataclass(frozen=True)

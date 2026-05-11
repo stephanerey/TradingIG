@@ -1,7 +1,19 @@
 from __future__ import annotations
 
-from trading_ig_assistant.domain.market_data import ChartCandleUpdate, PriceSeries, Quote
+from decimal import Decimal
+
+from trading_ig_assistant.domain.market_data import (
+    ChartCandleUpdate,
+    ChartPriceBasis,
+    PriceSeries,
+    Quote,
+)
 from trading_ig_assistant.domain.streaming import PRICE_QUOTE_SPEC, StreamState
+from trading_ig_assistant.services.candle_aggregation_service import (
+    chart_update_ohlc,
+    live_price_for_quote,
+    price_ohlc_from_payload,
+)
 from trading_ig_assistant.services.market_data_service import MarketDataService
 
 
@@ -95,3 +107,67 @@ def test_market_data_service_handles_stream_lifecycle_and_stale_detection() -> N
     service.stop()
     assert fake_stream.stopped is True
     assert service.snapshot.stream_state == StreamState.DISCONNECTED
+
+
+def test_live_price_for_quote_uses_selected_basis() -> None:
+    quote = Quote(epic="EPIC.ONE", bid=100.0, offer=101.0)
+
+    assert live_price_for_quote(quote, ChartPriceBasis.BID) == 100.0
+    assert live_price_for_quote(quote, ChartPriceBasis.ASK) == 101.0
+    assert live_price_for_quote(quote, ChartPriceBasis.MID) == 100.5
+
+
+def test_chart_update_mid_basis_averages_bid_and_offer_fields() -> None:
+    update = ChartCandleUpdate(
+        epic="EPIC.ONE",
+        interval="1MINUTE",
+        timestamp_ms=1_778_493_600_000,
+        raw={
+            "BID_OPEN": "100.0",
+            "BID_HIGH": "102.0",
+            "BID_LOW": "99.0",
+            "BID_CLOSE": "101.0",
+            "OFR_OPEN": "100.4",
+            "OFR_HIGH": "102.4",
+            "OFR_LOW": "99.4",
+            "OFR_CLOSE": "101.4",
+        },
+    )
+
+    open_value, high_value, low_value, close_value = chart_update_ohlc(
+        update,
+        price_basis=ChartPriceBasis.MID,
+    ) or (None, None, None, None)
+
+    assert open_value == 100.2
+    assert high_value == 102.2
+    assert low_value == 99.2
+    assert close_value == 101.2
+
+
+def test_historical_price_conversion_uses_selected_basis() -> None:
+    payload = {
+        "openPrice": {"bid": 100.0, "offer": 100.6},
+        "highPrice": {"bid": 102.0, "offer": 102.6},
+        "lowPrice": {"bid": 99.0, "offer": 99.6},
+        "closePrice": {"bid": 101.0, "offer": 101.6},
+    }
+
+    assert price_ohlc_from_payload(payload, ChartPriceBasis.BID) == (
+        Decimal("100.0"),
+        Decimal("102.0"),
+        Decimal("99.0"),
+        Decimal("101.0"),
+    )
+    assert price_ohlc_from_payload(payload, ChartPriceBasis.ASK) == (
+        Decimal("100.6"),
+        Decimal("102.6"),
+        Decimal("99.6"),
+        Decimal("101.6"),
+    )
+    assert price_ohlc_from_payload(payload, ChartPriceBasis.MID) == (
+        Decimal("100.3"),
+        Decimal("102.3"),
+        Decimal("99.3"),
+        Decimal("101.3"),
+    )
