@@ -226,3 +226,47 @@ def test_logout_ignores_invalid_security_token() -> None:
     adapter.logout()
 
     assert adapter.session is None
+
+
+def test_get_prices_max_points_mode_uses_expected_path() -> None:
+    http_client = FakeHttpClient()
+    adapter = IGRestAdapter(environment=IGEnvironment.DEMO, http_client=http_client)
+    adapter.login(IGCredentials("demo-user", "fake-password", "fake-api-key"))
+
+    prices = adapter.get_prices("IX.D.NASDAQ.IFD.IP", resolution="MINUTE", max_points=2)
+
+    assert len(prices.prices) == 1
+    assert http_client.requests[-1]["url"].endswith("/prices/IX.D.NASDAQ.IFD.IP/MINUTE/2")
+
+
+def test_get_prices_falls_back_from_malformed_date_to_max_points() -> None:
+    class RangeFallbackClient(FakeHttpClient):
+        def request(self, method, url, *, headers, json_body=None, timeout):
+            if "/prices/IX.D.NASDAQ.IFD.IP/MINUTE?" in url:
+                return HttpResponse(
+                    status_code=400,
+                    headers={},
+                    body={"errorCode": "error.malformed.date"},
+                )
+            return super().request(
+                method,
+                url,
+                headers=headers,
+                json_body=json_body,
+                timeout=timeout,
+            )
+
+    http_client = RangeFallbackClient()
+    adapter = IGRestAdapter(environment=IGEnvironment.DEMO, http_client=http_client)
+    adapter.login(IGCredentials("demo-user", "fake-password", "fake-api-key"))
+
+    prices = adapter.get_prices(
+        "IX.D.NASDAQ.IFD.IP",
+        resolution="MINUTE",
+        start_time=__import__("datetime").datetime(2026, 5, 11, 10, 0, 0),
+        end_time=__import__("datetime").datetime(2026, 5, 11, 11, 0, 0),
+        max_points=2,
+    )
+
+    assert len(prices.prices) == 1
+    assert "/prices/IX.D.NASDAQ.IFD.IP/MINUTE/2" in http_client.requests[-1]["url"]

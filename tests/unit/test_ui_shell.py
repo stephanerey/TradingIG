@@ -60,9 +60,9 @@ def test_chart_model_builds_bars_from_price_series() -> None:
 def test_history_request_spec_targets_longer_windows() -> None:
     from trading_ig_assistant.ui.main_window import _history_request_spec
 
-    assert _history_request_spec(60) == ("MINUTE", 6)
-    assert _history_request_spec(300) == ("MINUTE_5", 31)
-    assert _history_request_spec(3600) == ("HOUR", 360)
+    assert _history_request_spec(60) == ("MINUTE", 500)
+    assert _history_request_spec(300) == ("MINUTE_5", 600)
+    assert _history_request_spec(3600) == ("HOUR", 500)
 
 
 def test_chart_view_accepts_live_quote_update() -> None:
@@ -133,6 +133,7 @@ def test_chart_view_accepts_live_quote_update() -> None:
         )
     )
 
+    assert len(view._model.bars) == 2
     assert view._model.bars[0].close == 29200.0
     assert view._model.bars[0].high == 29210.0
     assert view._manual_zoom is True
@@ -258,7 +259,7 @@ def test_resolve_chart_source_product_prefers_underlying_cash_market() -> None:
 
     selected = TradableProduct(
         epic="IX.D.NASDAQ.OPTCALL2.IP",
-        name="US Tech 100 Barrières Achat",
+        name="US Tech 100 BarriÃ¨res Achat",
         product_type=ProductType.BARRIER,
     )
     underlying = TradableProduct(
@@ -308,6 +309,80 @@ def test_resolve_chart_source_product_uses_targeted_search_when_results_miss_cas
 
     assert chart_product.epic == "IX.D.NASDAQ.IFD.IP"
     assert chart_product.product_type == ProductType.CASH_OR_DFB
+
+
+def test_resolve_chart_source_product_logs_selected_and_chart_source(caplog) -> None:
+    from trading_ig_assistant.domain.products import ProductType, TradableProduct
+    from trading_ig_assistant.services.product_discovery_service import ProductDiscoveryResult
+    from trading_ig_assistant.ui.main_window import _resolve_chart_source_product
+
+    selected = TradableProduct(
+        epic="IX.D.NASDAQ.OPTCALL2.IP",
+        name="US Tech 100 BarriÃ¨res Achat",
+        product_type=ProductType.BARRIER,
+    )
+    underlying = TradableProduct(
+        epic="IX.D.NASDAQ.IFD.IP",
+        name="US Tech 100",
+        product_type=ProductType.CASH_OR_DFB,
+    )
+    results = [
+        ProductDiscoveryResult(
+            search_term="US Tech 100",
+            candidates_count=2,
+            products=[selected, underlying],
+        )
+    ]
+
+    caplog.set_level("DEBUG")
+    resolved = _resolve_chart_source_product(selected, results)
+
+    assert resolved.epic == "IX.D.NASDAQ.IFD.IP"
+    assert "selected_product_epic=IX.D.NASDAQ.OPTCALL2.IP" in caplog.text
+    assert "chart_source_epic=IX.D.NASDAQ.IFD.IP" in caplog.text
+
+
+def test_historical_rest_failure_does_not_prevent_streaming_start(monkeypatch) -> None:
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.app.config import IGEnvironment
+    from trading_ig_assistant.domain.products import ProductType, TradableProduct
+    from trading_ig_assistant.ui.main_window import ActiveIGConnection, MainWindow
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    window = MainWindow()
+
+    class FailingAdapter:
+        session = object()
+
+        def get_prices(self, epic, **kwargs):
+            raise RuntimeError("history failed")
+
+    product = TradableProduct(
+        epic="EPIC.ONE",
+        name="US Tech 100 BarriÃ¨res Achat",
+        product_type=ProductType.BARRIER,
+    )
+    restarted = {"called": False}
+
+    monkeypatch.setattr(window, "_restart_streaming", lambda: restarted.__setitem__("called", True))
+    window._selected_product = product
+    window._chart_product = product
+    window._active_connection = ActiveIGConnection(
+        environment=IGEnvironment.LIVE,
+        current_account_id="ACC123",
+        accounts=[],
+        adapter=FailingAdapter(),
+    )
+
+    window._apply_selected_product_state()
+
+    assert restarted["called"] is True
+    assert (
+        "Historical backfill unavailable; live chart is running."
+        in window.statusBar().currentMessage()
+    )
 
 
 def test_product_selector_displays_discovery_results() -> None:

@@ -76,3 +76,16 @@ from the CLI first.
 - Whether `MARKET:{epic}` is supported for the same EPICs as `PRICE:{account_id}:{epic}`.
 - Whether some products stream only chart updates and not quote updates.
 - Which subscriptions are account-permission dependent versus market-type dependent.
+
+## Historical Backfill Fix
+
+- The previous GUI backfill path used date-range REST requests.
+- IG returned `error.malformed.date` on those historical `/prices/{epic}/{resolution}` calls.
+- The GUI now uses max-points REST backfill by default:
+  - `/prices/{epic}/{resolution}/{max_points}`
+- Date-range mode remains available for diagnostics and can fall back automatically to max-points
+  mode when IG returns `error.malformed.date`, `HTTP 400`, or an empty price list and
+  `max_points` is available.
+- Live streaming remains independent from history backfill:
+  - if REST history fails, the live chart still runs
+  - the GUI shows: `Historical backfill unavailable; live chart is running.`

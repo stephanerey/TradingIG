@@ -380,6 +380,7 @@ class IGRestAdapter:
         start_time: datetime | None = None,
         end_time: datetime | None = None,
     ) -> PriceSeries:
+        request_mode = "snapshot"
         LOGGER.debug(
             "IG prices start epic=%s resolution=%s max_points=%s start=%s end=%s",
             epic,
@@ -390,20 +391,60 @@ class IGRestAdapter:
         )
         encoded_epic = urllib.parse.quote(epic, safe="")
         if resolution is None and start_time is None and end_time is None and max_points is None:
+            request_mode = "snapshot"
             response = self._request("GET", f"/prices/{encoded_epic}", version="3")
         elif start_time is not None and end_time is not None and resolution is not None:
-            query = urllib.parse.urlencode(
-                {
-                    "startdate": _format_ig_datetime(start_time),
-                    "enddate": _format_ig_datetime(end_time),
-                }
-            )
-            response = self._request(
-                "GET",
-                f"/prices/{encoded_epic}/{resolution}?{query}",
-                version="1",
-            )
+            request_mode = "date-range"
+            try:
+                query = urllib.parse.urlencode(
+                    {
+                        "startdate": _format_ig_datetime(start_time),
+                        "enddate": _format_ig_datetime(end_time),
+                    }
+                )
+                response = self._request(
+                    "GET",
+                    f"/prices/{encoded_epic}/{resolution}?{query}",
+                    version="1",
+                )
+                if not response.body.get("prices") and max_points is not None:
+                    LOGGER.debug(
+                        "IG prices fallback epic=%s resolution=%s requested_mode=%s "
+                        "fallback_mode=max-points reason=empty-price-list max_points=%s",
+                        epic,
+                        resolution,
+                        request_mode,
+                        max_points,
+                    )
+                    response = self._request(
+                        "GET",
+                        f"/prices/{encoded_epic}/{resolution}/{max_points}",
+                        version="2",
+                    )
+                    request_mode = "max-points-fallback"
+            except IGAPIError as exc:
+                if not (
+                    max_points is not None
+                    and _is_malformed_date_error(exc)
+                ):
+                    raise
+                LOGGER.debug(
+                    "IG prices fallback epic=%s resolution=%s requested_mode=%s "
+                    "fallback_mode=max-points reason=malformed-date max_points=%s error=%s",
+                    epic,
+                    resolution,
+                    request_mode,
+                    max_points,
+                    exc,
+                )
+                response = self._request(
+                    "GET",
+                    f"/prices/{encoded_epic}/{resolution}/{max_points}",
+                    version="2",
+                )
+                request_mode = "max-points-fallback"
         else:
+            request_mode = "max-points"
             response = self._request(
                 "GET",
                 f"/prices/{encoded_epic}/{resolution}/{max_points}",
@@ -414,7 +455,13 @@ class IGRestAdapter:
             prices=list(response.body.get("prices", [])),
             raw=response.body,
         )
-        LOGGER.debug("IG prices success epic=%s count=%s", epic, len(series.prices))
+        LOGGER.debug(
+            "IG prices success epic=%s resolution=%s mode=%s count=%s",
+            epic,
+            resolution,
+            request_mode,
+            len(series.prices),
+        )
         return series
 
     def create_otc_position(self, *_args: Any, **_kwargs: Any) -> None:
@@ -510,3 +557,8 @@ def _market_summary_from_mapping(item: dict[str, Any]) -> MarketSummary:
 
 def _format_ig_datetime(value: datetime) -> str:
     return value.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _is_malformed_date_error(error: Exception | str) -> bool:
+    message = str(error).lower()
+    return "malformed.date" in message and "http 400" in message

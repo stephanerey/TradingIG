@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import sys
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from PyQt5 import QtCore, QtWidgets
@@ -706,8 +705,24 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         try:
             interval_seconds = self.chart_view.current_interval_seconds()
-            resolution, lookback_days = _history_request_spec(interval_seconds)
-            cache_key = (product.epic, resolution, lookback_days)
+            resolution, max_points = _history_request_spec(interval_seconds)
+            cache_key = (product.epic, resolution, max_points)
+            LOGGER.debug(
+                "History request selected_product_epic=%s selected_product_type=%s "
+                "chart_source_epic=%s chart_source_type=%s history_request_epic=%s "
+                "history_resolution=%s history_max_points=%s",
+                self._selected_product.epic if self._selected_product else "<none>",
+                getattr(
+                    getattr(self._selected_product, "product_type", None),
+                    "value",
+                    "unknown",
+                ),
+                product.epic,
+                getattr(getattr(product, "product_type", None), "value", "unknown"),
+                product.epic,
+                resolution,
+                max_points,
+            )
             if self._api_allowance_exceeded:
                 LOGGER.debug(
                     "Price history skipped epic=%s due to global allowance block",
@@ -724,22 +739,19 @@ class MainWindow(QtWidgets.QMainWindow):
             if cached_series is not None:
                 series = cached_series
             else:
-                end_time = datetime.now(tz=UTC)
-                start_time = end_time - timedelta(days=lookback_days)
                 series = self._active_connection.adapter.get_prices(
                     product.epic,
                     resolution=resolution,
-                    start_time=start_time,
-                    end_time=end_time,
+                    max_points=max_points,
                 )
                 self._price_history_cache[cache_key] = series
             anchor_price = _product_anchor_price(product)
             self.chart_view.set_price_series(series, anchor_price=anchor_price)
             LOGGER.debug(
-                "Price history loaded epic=%s resolution=%s days=%s points=%s",
+                "Price history loaded epic=%s resolution=%s max_points=%s points=%s",
                 product.epic,
                 resolution,
-                lookback_days,
+                max_points,
                 len(series.prices),
             )
         except Exception as exc:
@@ -752,7 +764,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 exc,
             )
             self.statusBar().showMessage(
-                f"Price history unavailable: {humanize_ig_error(str(exc))}",
+                "Historical backfill unavailable; live chart is running.",
                 10000,
             )
 
@@ -853,9 +865,16 @@ class MainWindow(QtWidgets.QMainWindow):
             else None,
         )
         LOGGER.debug(
-            "Selected product state applied selected_epic=%s source_epic=%s",
+            "Selected product state applied selected_epic=%s selected_product_type=%s "
+            "chart_source_epic=%s chart_source_type=%s",
             product.epic,
+            getattr(getattr(product, "product_type", None), "value", "unknown"),
             (self._chart_product or product).epic,
+            getattr(
+                getattr((self._chart_product or product), "product_type", None),
+                "value",
+                "unknown",
+            ),
         )
         self.product_selector.set_selected_product(product)
         self.chart_view.set_selected_product(self._chart_product or product)
@@ -972,22 +991,18 @@ def _api_resolution_for_interval(interval_seconds: int) -> str:
 
 
 def _history_request_spec(interval_seconds: int) -> tuple[str, int]:
-    resolution = _api_resolution_for_interval(interval_seconds)
-    max_available_days = {
-        60: 40,
-        300: 360,
-        600: 360,
-        900: 360,
-        1800: 360,
-        3600: 360,
-        7200: 360,
-        14_400: 360,
-        86_400: 3650,
-    }.get(interval_seconds, 40)
-    target_points = 9000
-    days_for_target_points = max(1, int((interval_seconds * target_points) / 86_400))
-    lookback_days = min(max_available_days, days_for_target_points)
-    return resolution, lookback_days
+    mapping = {
+        60: ("MINUTE", 500),
+        300: ("MINUTE_5", 600),
+        600: ("MINUTE_10", 600),
+        900: ("MINUTE_15", 600),
+        1800: ("MINUTE_30", 600),
+        3600: ("HOUR", 500),
+        7200: ("HOUR_2", 500),
+        14_400: ("HOUR_4", 500),
+        86_400: ("DAY", 500),
+    }
+    return mapping.get(interval_seconds, ("MINUTE", 500))
 
 
 def _resolve_account_id(
@@ -1077,6 +1092,14 @@ def _resolve_chart_source_product(
     adapter: IGRestAdapter | None = None,
 ) -> TradableProduct:
     if selected_product.product_type == ProductType.CASH_OR_DFB:
+        LOGGER.debug(
+            "Chart source already cash selected_product_epic=%s selected_product_type=%s "
+            "chart_source_epic=%s chart_source_type=%s",
+            selected_product.epic,
+            selected_product.product_type.value,
+            selected_product.epic,
+            selected_product.product_type.value,
+        )
         return selected_product
 
     candidates: list[TradableProduct] = []
@@ -1085,6 +1108,14 @@ def _resolve_chart_source_product(
 
     resolved = _resolve_chart_source_from_candidates(selected_product, candidates)
     if resolved.epic != selected_product.epic:
+        LOGGER.debug(
+            "Chart source resolved from cached candidates selected_product_epic=%s "
+            "selected_product_type=%s chart_source_epic=%s chart_source_type=%s",
+            selected_product.epic,
+            selected_product.product_type.value,
+            resolved.epic,
+            resolved.product_type.value,
+        )
         return resolved
 
     if adapter is None:
@@ -1100,9 +1131,12 @@ def _resolve_chart_source_product(
         resolved = _resolve_chart_source_from_candidates(selected_product, live_candidates)
         if resolved.epic != selected_product.epic:
             LOGGER.debug(
-                "Chart source resolved via targeted search selected_epic=%s source_epic=%s",
+                "Chart source resolved via targeted search selected_product_epic=%s "
+                "selected_product_type=%s chart_source_epic=%s chart_source_type=%s",
                 selected_product.epic,
+                selected_product.product_type.value,
                 resolved.epic,
+                resolved.product_type.value,
             )
             return resolved
     except Exception as exc:
@@ -1112,6 +1146,15 @@ def _resolve_chart_source_product(
             exc,
         )
 
+    LOGGER.debug(
+        "No underlying chart source found; using selected product EPIC for chart "
+        "selected_product_epic=%s selected_product_type=%s chart_source_epic=%s "
+        "chart_source_type=%s",
+        selected_product.epic,
+        selected_product.product_type.value,
+        selected_product.epic,
+        selected_product.product_type.value,
+    )
     return selected_product
 
 
@@ -1149,10 +1192,14 @@ def _normalize_chart_base_name(name: str) -> str:
     replacements = [
         " Barrières Achat",
         " Barrières Vente",
+        " BarriÃ¨res Achat",
+        " BarriÃ¨res Vente",
         " Barrier Call",
         " Barrier Put",
         " Barrière Achat",
         " Barrière Vente",
+        " BarriÃ¨re Achat",
+        " BarriÃ¨re Vente",
         " Call",
         " Put",
     ]
