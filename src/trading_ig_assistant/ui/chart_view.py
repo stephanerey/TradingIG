@@ -208,6 +208,7 @@ class ChartPlotWidget(pg.PlotWidget):
 class ChartView(QtWidgets.QWidget):
     resolution_changed = QtCore.pyqtSignal(int)
     history_range_changed = QtCore.pyqtSignal(str)
+    price_basis_changed = QtCore.pyqtSignal(object)
 
     def __init__(
         self,
@@ -457,7 +458,10 @@ class ChartView(QtWidgets.QWidget):
         self.history_range_changed.emit(self._current_range_key)
 
     def _on_price_basis_changed(self, _index: int) -> None:
-        self._current_price_basis = self.price_basis_combo.currentData() or ChartPriceBasis.MID
+        price_basis = self.price_basis_combo.currentData() or ChartPriceBasis.MID
+        if price_basis == self._current_price_basis:
+            return
+        self._current_price_basis = price_basis
         if self._last_price_series is not None:
             self._source_model = ChartDataModel.from_price_series(
                 self._last_price_series,
@@ -467,6 +471,7 @@ class ChartView(QtWidgets.QWidget):
         self._render_display_bars(self._source_model.bars)
         if self._last_quote is not None:
             self.set_live_quote(self._last_quote)
+        self.price_basis_changed.emit(self._current_price_basis)
 
     def _on_axis_mode_changed(self, _index: int) -> None:
         self._time_axis_mode = self.axis_mode_combo.currentData() or TimeAxisMode.COMPRESSED

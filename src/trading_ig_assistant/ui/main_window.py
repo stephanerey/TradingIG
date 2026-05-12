@@ -286,6 +286,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._live_chart_scale_actual = "1MINUTE"
         self._aggregation_mode = "direct"
         self._chart_stream_scale_fallback_attempted = False
+        self._last_history_reload_price_basis: object | None = None
         self._history_allowance_state = HistoricalAllowanceState()
         self._api_allowance_exceeded = False
         self._auth_locked_out = False
@@ -339,8 +340,10 @@ class MainWindow(QtWidgets.QMainWindow):
         body = QtWidgets.QSplitter()
         body.setOrientation(QtCore.Qt.Horizontal)
         self.chart_view = ChartView()
+        self._last_history_reload_price_basis = self.chart_view.current_price_basis()
         self.chart_view.resolution_changed.connect(self._on_chart_resolution_changed)
         self.chart_view.history_range_changed.connect(self._on_chart_range_changed)
+        self.chart_view.price_basis_changed.connect(self._on_chart_price_basis_changed)
         body.addWidget(self.chart_view)
 
         right_tabs = QtWidgets.QTabWidget()
@@ -915,6 +918,7 @@ class MainWindow(QtWidgets.QMainWindow):
             interval_seconds = self.chart_view.current_interval_seconds()
             range_key = self.chart_view.current_range_key()
             price_basis = self.chart_view.current_price_basis()
+            self._last_history_reload_price_basis = price_basis
             time_axis_mode = self.chart_view.current_time_axis_mode()
             resolution, max_points = _history_request_spec(interval_seconds, range_key)
             account_id = self._active_connection.current_account_id
@@ -1179,6 +1183,22 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_chart_range_changed(self, _range_key: str) -> None:
         if self._selected_product is None:
             return
+        self._load_selected_product_history()
+
+    @QtCore.pyqtSlot(object)
+    def _on_chart_price_basis_changed(self, price_basis: object) -> None:
+        if not hasattr(self, "chart_view"):
+            return
+        if self._active_connection is None:
+            return
+        if self._selected_product is None:
+            return
+        current_price_basis = self.chart_view.current_price_basis()
+        if price_basis != current_price_basis:
+            return
+        if current_price_basis == self._last_history_reload_price_basis:
+            return
+        self._last_history_reload_price_basis = current_price_basis
         self._load_selected_product_history()
 
     def _stop_streaming(self) -> None:

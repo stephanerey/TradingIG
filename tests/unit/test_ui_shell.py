@@ -217,6 +217,121 @@ def test_chart_view_live_line_uses_selected_price_basis() -> None:
     assert view._live_price_line.value() == 100.5
 
 
+def test_price_basis_change_reloads_selected_product_history_once(monkeypatch, tmp_path) -> None:
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.app.config import IGEnvironment
+    from trading_ig_assistant.domain.market_data import ChartPriceBasis
+    from trading_ig_assistant.domain.products import ProductType, TradableProduct
+    from trading_ig_assistant.ui.main_window import ActiveIGConnection, MainWindow
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    monkeypatch.setattr(
+        "trading_ig_assistant.ui.main_window.default_config_path",
+        lambda: tmp_path / "config.json",
+    )
+    monkeypatch.setattr(
+        "trading_ig_assistant.ui.main_window._discovery_cache_path",
+        lambda _environment: tmp_path / "discovery.json",
+    )
+    window = MainWindow()
+    calls = []
+
+    class Adapter:
+        session = object()
+
+    window._active_connection = ActiveIGConnection(
+        environment=IGEnvironment.LIVE,
+        current_account_id="ACC123",
+        accounts=[],
+        adapter=Adapter(),
+    )
+    window._selected_product = TradableProduct(
+        epic="IX.D.NASDAQ.IFD.IP",
+        name="US Tech 100",
+        product_type=ProductType.CASH_OR_DFB,
+    )
+    monkeypatch.setattr(window, "_load_selected_product_history", lambda: calls.append("reload"))
+
+    window.chart_view.price_basis_combo.setCurrentIndex(
+        window.chart_view.price_basis_combo.findData(ChartPriceBasis.BID)
+    )
+
+    assert calls == ["reload"]
+
+
+def test_price_basis_change_without_connection_does_not_reload(monkeypatch, tmp_path) -> None:
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.domain.market_data import ChartPriceBasis
+    from trading_ig_assistant.domain.products import ProductType, TradableProduct
+    from trading_ig_assistant.ui.main_window import MainWindow
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    monkeypatch.setattr(
+        "trading_ig_assistant.ui.main_window.default_config_path",
+        lambda: tmp_path / "config.json",
+    )
+    monkeypatch.setattr(
+        "trading_ig_assistant.ui.main_window._discovery_cache_path",
+        lambda _environment: tmp_path / "discovery.json",
+    )
+    window = MainWindow()
+    calls = []
+    window._selected_product = TradableProduct(
+        epic="IX.D.NASDAQ.IFD.IP",
+        name="US Tech 100",
+        product_type=ProductType.CASH_OR_DFB,
+    )
+    monkeypatch.setattr(window, "_load_selected_product_history", lambda: calls.append("reload"))
+
+    window.chart_view.price_basis_combo.setCurrentIndex(
+        window.chart_view.price_basis_combo.findData(ChartPriceBasis.BID)
+    )
+
+    assert calls == []
+
+
+def test_price_basis_change_without_selected_product_does_not_reload(monkeypatch, tmp_path) -> None:
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.app.config import IGEnvironment
+    from trading_ig_assistant.domain.market_data import ChartPriceBasis
+    from trading_ig_assistant.ui.main_window import ActiveIGConnection, MainWindow
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    monkeypatch.setattr(
+        "trading_ig_assistant.ui.main_window.default_config_path",
+        lambda: tmp_path / "config.json",
+    )
+    monkeypatch.setattr(
+        "trading_ig_assistant.ui.main_window._discovery_cache_path",
+        lambda _environment: tmp_path / "discovery.json",
+    )
+    window = MainWindow()
+    calls = []
+
+    class Adapter:
+        session = object()
+
+    window._active_connection = ActiveIGConnection(
+        environment=IGEnvironment.LIVE,
+        current_account_id="ACC123",
+        accounts=[],
+        adapter=Adapter(),
+    )
+    monkeypatch.setattr(window, "_load_selected_product_history", lambda: calls.append("reload"))
+
+    window.chart_view.price_basis_combo.setCurrentIndex(
+        window.chart_view.price_basis_combo.findData(ChartPriceBasis.BID)
+    )
+
+    assert calls == []
+
+
 def test_compressed_axis_maps_candles_without_time_gaps() -> None:
     from PyQt5 import QtWidgets
 
