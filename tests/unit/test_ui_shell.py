@@ -479,9 +479,9 @@ def test_chart_source_search_terms_include_safe_underlying_candidates() -> None:
     from trading_ig_assistant.ui.main_window import _chart_source_search_terms
 
     product = TradableProduct(
-        epic="IX.D.NASDAQ.OPTCALL2.IP",
-        name="US Tech 100 BarriÃ¨res Achat",
-        product_type=ProductType.BARRIER,
+        epic="IX.D.NASDAQ.IFD.IP",
+        name="US Tech 100",
+        product_type=ProductType.CASH_OR_DFB,
     )
 
     terms = _chart_source_search_terms(product)
@@ -534,6 +534,10 @@ def test_historical_rest_failure_does_not_prevent_streaming_start(monkeypatch, t
         "trading_ig_assistant.ui.main_window._history_cache_root",
         lambda: tmp_path,
     )
+    monkeypatch.setattr(
+        "trading_ig_assistant.ui.main_window._stream_candle_cache_root",
+        lambda: tmp_path,
+    )
     window = MainWindow()
 
     class FailingAdapter:
@@ -543,9 +547,9 @@ def test_historical_rest_failure_does_not_prevent_streaming_start(monkeypatch, t
             raise RuntimeError("history failed")
 
     product = TradableProduct(
-        epic="EPIC.ONE",
-        name="US Tech 100 BarriÃ¨res Achat",
-        product_type=ProductType.BARRIER,
+        epic="IX.D.NASDAQ.IFD.IP",
+        name="US Tech 100",
+        product_type=ProductType.CASH_OR_DFB,
     )
     restarted = {"called": False}
 
@@ -563,7 +567,7 @@ def test_historical_rest_failure_does_not_prevent_streaming_start(monkeypatch, t
 
     assert restarted["called"] is True
     assert (
-        "Historical backfill unavailable; live chart is running."
+        "No historical cache yet. Live candles will be stored from now on."
         in window.statusBar().currentMessage()
     )
 
@@ -580,6 +584,10 @@ def test_historical_allowance_failure_keeps_streaming_start(monkeypatch, tmp_pat
     assert app is not None
     monkeypatch.setattr(
         "trading_ig_assistant.ui.main_window._history_cache_root",
+        lambda: tmp_path,
+    )
+    monkeypatch.setattr(
+        "trading_ig_assistant.ui.main_window._stream_candle_cache_root",
         lambda: tmp_path,
     )
     window = MainWindow()
@@ -614,7 +622,7 @@ def test_historical_allowance_failure_keeps_streaming_start(monkeypatch, tmp_pat
 
     assert restarted["called"] is True
     assert (
-        "historical data allowance" in window.statusBar().currentMessage().lower()
+        "historical rest allowance" in window.statusBar().currentMessage().lower()
     )
 
 
@@ -629,6 +637,10 @@ def test_historical_allowance_pause_prevents_automatic_retry(monkeypatch, tmp_pa
     assert app is not None
     monkeypatch.setattr(
         "trading_ig_assistant.ui.main_window._history_cache_root",
+        lambda: tmp_path,
+    )
+    monkeypatch.setattr(
+        "trading_ig_assistant.ui.main_window._stream_candle_cache_root",
         lambda: tmp_path,
     )
     window = MainWindow()
@@ -667,7 +679,7 @@ def test_historical_allowance_pause_prevents_automatic_retry(monkeypatch, tmp_pa
 
     assert first_call_count > 0
     assert adapter.calls == first_call_count
-    assert "retry later or use cached history" in window.statusBar().currentMessage().lower()
+    assert "historical rest allowance reached" in window.statusBar().currentMessage().lower()
 
 
 def test_cached_history_is_used_when_allowance_is_exhausted(monkeypatch, tmp_path) -> None:
@@ -690,6 +702,10 @@ def test_cached_history_is_used_when_allowance_is_exhausted(monkeypatch, tmp_pat
     assert app is not None
     monkeypatch.setattr(
         "trading_ig_assistant.ui.main_window._history_cache_root",
+        lambda: tmp_path,
+    )
+    monkeypatch.setattr(
+        "trading_ig_assistant.ui.main_window._stream_candle_cache_root",
         lambda: tmp_path,
     )
     window = MainWindow()
@@ -782,6 +798,10 @@ def test_cached_history_for_chart_source_is_used_when_selected_product_is_barrie
         "trading_ig_assistant.ui.main_window._history_cache_root",
         lambda: tmp_path,
     )
+    monkeypatch.setattr(
+        "trading_ig_assistant.ui.main_window._stream_candle_cache_root",
+        lambda: tmp_path,
+    )
     window = MainWindow()
 
     class SilentAdapter:
@@ -852,7 +872,7 @@ def test_cached_history_for_chart_source_is_used_when_selected_product_is_barrie
     assert "using cached history" in window.statusBar().currentMessage().lower()
 
 
-def test_barrier_history_failure_falls_back_to_underlying_cash_epic(monkeypatch) -> None:
+def test_barrier_history_allowance_failure_falls_back_to_underlying_cash_epic(monkeypatch) -> None:
     from PyQt5 import QtWidgets
 
     from trading_ig_assistant.app.config import IGEnvironment
@@ -883,7 +903,10 @@ def test_barrier_history_failure_falls_back_to_underlying_cash_epic(monkeypatch)
         def get_prices(self, epic, **kwargs):
             self.calls.append(epic)
             if epic == "IX.D.NASDAQ.OPTCALL2.IP":
-                raise RuntimeError("product-history-unavailable")
+                raise RuntimeError(
+                    "HTTP 403 {'errorCode': "
+                    "'error.public-api.exceeded-account-historical-data-allowance'}"
+                )
             return type(
                 "Series",
                 (),
@@ -949,6 +972,10 @@ def test_stream_updates_extend_cached_history_series(monkeypatch, tmp_path) -> N
     assert app is not None
     monkeypatch.setattr(
         "trading_ig_assistant.ui.main_window._history_cache_root",
+        lambda: tmp_path,
+    )
+    monkeypatch.setattr(
+        "trading_ig_assistant.ui.main_window._stream_candle_cache_root",
         lambda: tmp_path,
     )
     window = MainWindow()

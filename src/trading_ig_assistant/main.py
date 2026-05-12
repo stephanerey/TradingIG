@@ -13,6 +13,7 @@ from trading_ig_assistant.adapters.credentials import IGCredentials
 from trading_ig_assistant.adapters.ig_rest import (
     IGAPIError,
     IGRestAdapter,
+    is_historical_allowance_error,
     load_prices_with_adaptive_fallback,
 )
 from trading_ig_assistant.adapters.ig_streaming import IGStreamingAdapter
@@ -132,6 +133,33 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     )
     history_market_parser.set_defaults(func=history_market)
+
+    history_smoke_parser = subparsers.add_parser(
+        "history-smoke",
+        help="Run low-cost historical REST smoke tests across accounts/epics/resolutions.",
+    )
+    add_credential_arguments(history_smoke_parser)
+    history_smoke_parser.add_argument("--account-id")
+    history_smoke_parser.add_argument("--epic", action="append", required=True)
+    history_smoke_parser.add_argument(
+        "--resolution",
+        action="append",
+        dest="resolutions",
+        default=[],
+    )
+    history_smoke_parser.add_argument(
+        "--points",
+        action="append",
+        dest="points",
+        type=int,
+        default=[],
+    )
+    history_smoke_parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+    )
+    history_smoke_parser.set_defaults(func=history_smoke)
 
     gui = subparsers.add_parser("gui", help="Launch the minimal GUI shell.")
     gui.set_defaults(func=launch_gui)
@@ -319,15 +347,7 @@ def history_market(args: argparse.Namespace) -> int:
         session = adapter.login(credentials)
         accounts = adapter.get_accounts() if hasattr(adapter, "get_accounts") else []
         print(f"Environment: {environment.value}")
-        print("Accounts:")
-        for account in accounts:
-            print(
-                "- "
-                f"{mask_identifier(account.account_id)} | "
-                f"{account.account_name or 'unknown'} | "
-                f"{account.account_type or 'unknown'} | "
-                f"{account.currency or 'unknown'}"
-            )
+        _print_accounts(accounts)
         if args.account_id:
             if not hasattr(adapter, "switch_account"):
                 print(
@@ -391,6 +411,97 @@ def history_market(args: argparse.Namespace) -> int:
             pass
 
 
+def history_smoke(args: argparse.Namespace) -> int:
+    LOGGER.debug(
+        "CLI history smoke start environment=%s epics=%s resolutions=%s points=%s account=%s",
+        args.environment,
+        args.epic,
+        args.resolutions,
+        args.points,
+        args.account_id,
+    )
+    loaded = load_read_only_runtime(args)
+    if loaded is None:
+        print(
+            "Missing IG credentials. Provide username and set password/API key environment "
+            "variables. No secrets should be placed in config files.",
+            file=sys.stderr,
+        )
+        return 2
+    environment, credentials = loaded
+    resolutions = args.resolutions or ["MINUTE", "MINUTE_5", "HOUR", "DAY"]
+    points_list = args.points or [10, 120]
+    adapter = IGRestAdapter(environment=environment, read_only=True)
+    try:
+        session = adapter.login(credentials)
+        accounts = adapter.get_accounts() if hasattr(adapter, "get_accounts") else []
+        print(f"Environment: {environment.value}")
+        _print_accounts(accounts)
+        if args.account_id:
+            if not hasattr(adapter, "switch_account"):
+                print("History smoke failed: account switching is unavailable.", file=sys.stderr)
+                return 1
+            session = adapter.switch_account(args.account_id)
+        account_masked = mask_identifier(session.current_account_id)
+        print(f"Selected account: {account_masked}")
+        exit_code = 0
+        allowance_blocked = False
+        for epic in args.epic:
+            for resolution in resolutions:
+                for points in points_list:
+                    print(
+                        f"Test | account={account_masked} | epic={epic} | "
+                        f"resolution={resolution} | points={points}"
+                    )
+                    try:
+                        series = adapter.get_prices(epic, resolution=resolution, max_points=points)
+                    except Exception as exc:
+                        sanitized_error = redact_text(
+                            str(exc),
+                            [credentials.password.reveal(), credentials.api_key.reveal()],
+                        )
+                        print(f"Result: failed | error={sanitized_error}")
+                        exit_code = 1
+                        if is_historical_allowance_error(exc):
+                            allowance_blocked = True
+                            print(
+                                "Allowance status: blocked for this account; "
+                                "stopping remaining smoke tests."
+                            )
+                            break
+                        continue
+                    price_count = len(series.prices)
+                    first_timestamp = (
+                        series.prices[0].get("snapshotTimeUTC")
+                        or series.prices[0].get("snapshotTime")
+                        if series.prices
+                        else None
+                    )
+                    last_timestamp = (
+                        series.prices[-1].get("snapshotTimeUTC")
+                        or series.prices[-1].get("snapshotTime")
+                        if series.prices
+                        else None
+                    )
+                    print(
+                        f"Result: success | candles={price_count} | "
+                        f"first={first_timestamp or '-'} | last={last_timestamp or '-'}"
+                    )
+                if allowance_blocked:
+                    break
+            if allowance_blocked:
+                break
+        return exit_code
+    except IGAPIError as exc:
+        print(f"History smoke failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        try:
+            adapter.logout()
+        except IGAPIError:
+            pass
+
+
 def launch_gui(_args: argparse.Namespace) -> int:
     LOGGER.debug("CLI launch GUI")
     try:
@@ -441,6 +552,19 @@ def print_discovery_results(results: list[ProductDiscoveryResult]) -> None:
             )
         for error in result.errors[:5]:
             print(f"- discovery error epic={error.epic or 'unknown'}: {error.message}")
+
+
+def _print_accounts(accounts: list[object]) -> None:
+    print("Accounts:")
+    for account in accounts:
+        print(
+            "- "
+            f"{mask_identifier(getattr(account, 'account_id', None))} | "
+            f"{getattr(account, 'account_name', None) or 'unknown'} | "
+            f"{getattr(account, 'account_type', None) or 'unknown'} | "
+            f"{getattr(account, 'currency', None) or 'unknown'} | "
+            f"preferred={'yes' if getattr(account, 'preferred', False) else 'no'}"
+        )
 
 
 def apply_log_level(level_name: str | None) -> None:

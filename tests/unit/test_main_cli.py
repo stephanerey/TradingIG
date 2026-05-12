@@ -262,6 +262,7 @@ def test_history_market_can_switch_account(monkeypatch, capsys) -> None:
                         "account_name": "Primary",
                         "account_type": "CFD",
                         "currency": "EUR",
+                        "preferred": True,
                     },
                 )(),
                 type(
@@ -272,6 +273,7 @@ def test_history_market_can_switch_account(monkeypatch, capsys) -> None:
                         "account_name": "Secondary",
                         "account_type": "CFD",
                         "currency": "USD",
+                        "preferred": False,
                     },
                 )(),
             ]
@@ -329,3 +331,54 @@ def test_history_market_can_switch_account(monkeypatch, capsys) -> None:
     assert "UV...76" in captured.out
     assert "Selected account: UV...76" in captured.out
     assert "UVWXYZ9876" not in captured.out
+    assert "preferred=yes" in captured.out
+
+
+def test_history_smoke_stops_after_allowance_error(monkeypatch, capsys) -> None:
+    class FakeRestAdapter:
+        def __init__(self, environment, read_only=True):
+            self.environment = environment
+            self.read_only = read_only
+
+        def login(self, credentials):
+            return IGSession(
+                cst="secret-cst",
+                security_token="secret-xst",
+                current_account_id="ABCDEF1234",
+                lightstreamer_endpoint="https://stream.example",
+            )
+
+        def get_accounts(self):
+            return []
+
+        def get_prices(self, epic, **kwargs):
+            raise RuntimeError(
+                "HTTP 403 {'errorCode': "
+                "'error.public-api.exceeded-account-historical-data-allowance'}"
+            )
+
+        def logout(self):
+            return None
+
+    monkeypatch.setattr(main_module, "IGRestAdapter", FakeRestAdapter)
+    monkeypatch.setenv("TRADING_IG_PASSWORD", "pass123")
+    monkeypatch.setenv("TRADING_IG_API_KEY", "key123")
+
+    exit_code = main_module.main(
+        [
+            "history-smoke",
+            "--environment",
+            "live",
+            "--username",
+            "user",
+            "--epic",
+            "IX.D.TEST.ONE",
+        ]
+    )
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "Selected account: AB...34" in captured.out
+    assert "Allowance status: blocked for this account" in captured.out
+    assert "ABCDEF1234" not in captured.out
+    assert "pass123" not in captured.out

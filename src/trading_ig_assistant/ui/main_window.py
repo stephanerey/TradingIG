@@ -45,6 +45,12 @@ from trading_ig_assistant.services.candle_aggregation_service import (
     CandleAggregationService,
     chart_scale_for_interval,
 )
+from trading_ig_assistant.services.candle_history_service import (
+    CandleHistoryService,
+)
+from trading_ig_assistant.services.candle_history_service import (
+    _stream_cache_root as _stream_candle_cache_root,
+)
 from trading_ig_assistant.services.ig_connection_service import IGConnectionRequest
 from trading_ig_assistant.services.product_discovery_service import (
     ProductDiscoveryResult,
@@ -270,6 +276,10 @@ class MainWindow(QtWidgets.QMainWindow):
             CachedHistoryEntry,
         ] = {}
         self._candle_aggregation_service = CandleAggregationService()
+        self._candle_history_service = CandleHistoryService(
+            candle_aggregation_service=self._candle_aggregation_service,
+            cache_root_provider=_stream_candle_cache_root,
+        )
         self._chart_candle_series: ChartCandleSeries | None = None
         self._chart_source_resolution_method = "selected fallback"
         self._live_chart_scale_requested = "1MINUTE"
@@ -494,6 +504,21 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self._active_connection = result
         self._active_connection.current_account_id = selected_account_id
+        LOGGER.debug(
+            "Connected IG accounts environment=%s accounts=%s selected_account=%s",
+            result.environment.value,
+            [
+                {
+                    "account": mask_identifier(account.account_id),
+                    "name": account.account_name,
+                    "type": account.account_type,
+                    "currency": account.currency,
+                    "preferred": account.preferred,
+                }
+                for account in result.accounts
+            ],
+            mask_identifier(selected_account_id),
+        )
         self._set_profile_account(result.environment, selected_account_id)
         if self._loaded_cache_environment != result.environment:
             self._load_cached_discovery_results()
@@ -700,25 +725,19 @@ class MainWindow(QtWidgets.QMainWindow):
             chart_product = self._chart_product or self._selected_product
             if chart_product is None or chart_update.epic != chart_product.epic:
                 return
-            current_candles = self._chart_candle_series.candles if self._chart_candle_series else ()
-            candle_event = self._candle_aggregation_service.apply_chart_update(
-                current_candles,
-                chart_update,
-                price_basis=self.chart_view.current_price_basis(),
-                interval_seconds=self.chart_view.current_interval_seconds(),
-            )
-            self._chart_candle_series = ChartCandleSeries(
-                selected_product_epic=self._selected_product.epic if self._selected_product else "",
+            if self._active_connection is None or self._selected_product is None:
+                return
+            chart_series = self._candle_history_service.apply_stream_update(
+                environment=self._active_connection.environment,
+                account_id=self._active_connection.current_account_id,
+                selected_product_epic=self._selected_product.epic,
                 chart_source_epic=chart_product.epic,
                 resolution_seconds=self.chart_view.current_interval_seconds(),
                 price_basis=self.chart_view.current_price_basis(),
-                candles=candle_event.candles,
-                sources=_merge_candle_sources(
-                    self._chart_candle_series.sources if self._chart_candle_series else (),
-                    CandleSource.STREAM,
-                ),
+                chart_update=chart_update,
             )
-            self.chart_view.set_candles(candle_event.candles, preserve_view=True)
+            self._chart_candle_series = chart_series
+            self.chart_view.set_candles(chart_series.candles, preserve_view=True)
             live_quote = _quote_from_chart_update(chart_update)
             if live_quote is not None:
                 self.chart_view.set_live_quote(live_quote)
@@ -829,25 +848,6 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self._apply_selected_product_state()
 
-    def _set_chart_candle_series(
-        self,
-        *,
-        chart_source_epic: str,
-        candles: tuple,
-        source: CandleSource,
-    ) -> None:
-        if self._selected_product is None:
-            return
-        existing_sources = self._chart_candle_series.sources if self._chart_candle_series else ()
-        self._chart_candle_series = ChartCandleSeries(
-            selected_product_epic=self._selected_product.epic,
-            chart_source_epic=chart_source_epic,
-            resolution_seconds=self.chart_view.current_interval_seconds(),
-            price_basis=self.chart_view.current_price_basis(),
-            candles=candles,
-            sources=_merge_candle_sources(existing_sources, source),
-        )
-
     def _render_history_entry(
         self,
         product: TradableProduct,
@@ -857,17 +857,27 @@ class MainWindow(QtWidgets.QMainWindow):
         anchor_price: float | None,
         status_message: str | None = None,
     ) -> None:
-        candle_event = self._candle_aggregation_service.from_price_series(
-            cached_entry.series,
+        if self._selected_product is None:
+            return
+        chart_series = self._candle_history_service.merge_price_series(
+            selected_product_epic=self._selected_product.epic,
+            chart_source_epic=product.epic,
+            resolution_seconds=self.chart_view.current_interval_seconds(),
             resolution=_api_resolution_for_interval(self.chart_view.current_interval_seconds()),
             price_basis=self.chart_view.current_price_basis(),
-        )
-        self._set_chart_candle_series(
-            chart_source_epic=product.epic,
-            candles=candle_event.candles,
+            series=cached_entry.series,
             source=source,
         )
-        self.chart_view.set_price_series(cached_entry.series, anchor_price=anchor_price)
+        self._chart_candle_series = chart_series
+        self.chart_view.set_candles(chart_series.candles)
+        if anchor_price is not None:
+            self.chart_view.set_live_quote(
+                Quote(
+                    epic=product.epic,
+                    bid=anchor_price,
+                    offer=anchor_price,
+                )
+            )
         if status_message:
             self.statusBar().showMessage(status_message, 12000)
 
@@ -911,6 +921,7 @@ class MainWindow(QtWidgets.QMainWindow):
             history_candidates = self._history_candidate_products()
             if not history_candidates:
                 return
+            self._chart_candle_series = None
             if self._api_allowance_exceeded:
                 LOGGER.debug(
                     "Price history skipped selected_product_epic=%s due to global allowance block",
@@ -921,6 +932,29 @@ class MainWindow(QtWidgets.QMainWindow):
             for product in history_candidates:
                 anchor_price = _product_anchor_price(product)
                 cache_key = (product.epic, resolution, range_key, price_basis.value, max_points)
+                stream_cache_loaded = self._candle_history_service.load_stream_cache(
+                    environment=self._active_connection.environment,
+                    account_id=account_id,
+                    selected_product_epic=self._selected_product.epic,
+                    chart_source_epic=product.epic,
+                    resolution_seconds=interval_seconds,
+                    price_basis=price_basis,
+                )
+                if stream_cache_loaded is not None and not displayed_from_cache:
+                    self._chart_candle_series = stream_cache_loaded.series
+                    self.chart_view.set_candles(stream_cache_loaded.series.candles)
+                    displayed_from_cache = True
+                    self.statusBar().showMessage(
+                        "Using cached history; live chart continues.",
+                        12000,
+                    )
+                    LOGGER.debug(
+                        "Stream candle cache hit selected_product_epic=%s chart_source_epic=%s "
+                        "cache_hit=true source=stream-cache historical_candles_loaded=%s",
+                        self._selected_product.epic,
+                        product.epic,
+                        stream_cache_loaded.loaded_count,
+                    )
                 LOGGER.debug(
                     "History request selected_product_epic=%s selected_product_type=%s "
                     "chart_source_epic=%s chart_source_type=%s "
@@ -1013,8 +1047,8 @@ class MainWindow(QtWidgets.QMainWindow):
                         )
                     else:
                         self.statusBar().showMessage(
-                            "IG historical data allowance reached; live chart continues. "
-                            "Retry later or use cached history.",
+                            "IG historical REST allowance reached. "
+                            "Live chart continues and candles will be cached locally.",
                             15000,
                         )
                     return
@@ -1024,6 +1058,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     product.epic,
                     resolution=resolution,
                     requested_max_points=max_points,
+                    stop_on_allowance_error=product.product_type == ProductType.CASH_OR_DFB,
                 )
                 if fallback_result.series is None:
                     fallback_reason = _history_fallback_reason(fallback_result)
@@ -1044,6 +1079,18 @@ class MainWindow(QtWidgets.QMainWindow):
                         _history_fallback_is_historical_allowance(fallback_result)
                         and product.product_type == ProductType.CASH_OR_DFB
                     ):
+                        failed_points = (
+                            fallback_result.attempts[0].max_points
+                            if fallback_result.attempts
+                            else max_points
+                        )
+                        LOGGER.debug(
+                            "historical_rest_blocked=true reason=historical-data-allowance "
+                            "failed_epic=%s failed_resolution=%s failed_points=%s",
+                            product.epic,
+                            resolution,
+                            failed_points,
+                        )
                         self._history_allowance_state = HistoricalAllowanceState(
                             exhausted=True,
                             exhausted_at=datetime.now(UTC),
@@ -1051,17 +1098,11 @@ class MainWindow(QtWidgets.QMainWindow):
                             affected_account_id=account_id,
                             affected_epic="*",
                         )
-                        if displayed_from_cache:
-                            self.statusBar().showMessage(
-                                "Using cached history; live chart continues.",
-                                15000,
-                            )
-                        else:
-                            self.statusBar().showMessage(
-                                "IG historical data allowance reached; live chart continues. "
-                                "Retry later or use cached history.",
-                                15000,
-                            )
+                        self.statusBar().showMessage(
+                            "IG historical REST allowance reached. "
+                            "Live chart continues and candles will be cached locally.",
+                            15000,
+                        )
                         return
                     continue
 
@@ -1108,7 +1149,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.statusBar().showMessage("Using cached history; live chart continues.", 15000)
                 return
             self.statusBar().showMessage(
-                "Historical backfill unavailable; live chart is running.",
+                "No historical cache yet. Live candles will be stored from now on.",
                 10000,
             )
         except Exception as exc:

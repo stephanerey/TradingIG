@@ -363,3 +363,38 @@ def test_adaptive_history_fallback_allows_all_fail_result() -> None:
     assert result.series is None
     assert result.selected_max_points is None
     assert len(result.attempts) == len(build_historical_fallback_ladder(8640))
+
+
+def test_adaptive_history_fallback_can_stop_immediately_on_allowance_error() -> None:
+    class FailingFallbackClient(FakeHttpClient):
+        def request(self, method, url, *, headers, json_body=None, timeout):
+            if "/prices/IX.D.NASDAQ.IFD.IP/MINUTE_5/" in url:
+                return HttpResponse(
+                    status_code=403,
+                    headers={},
+                    body={
+                        "errorCode": "error.public-api.exceeded-account-historical-data-allowance"
+                    },
+                )
+            return super().request(
+                method,
+                url,
+                headers=headers,
+                json_body=json_body,
+                timeout=timeout,
+            )
+
+    adapter = IGRestAdapter(environment=IGEnvironment.DEMO, http_client=FailingFallbackClient())
+    adapter.login(IGCredentials("demo-user", "fake-password", "fake-api-key"))
+
+    result = load_prices_with_adaptive_fallback(
+        adapter,
+        "IX.D.NASDAQ.IFD.IP",
+        resolution="MINUTE_5",
+        requested_max_points=8640,
+        stop_on_allowance_error=True,
+    )
+
+    assert result.succeeded is False
+    assert len(result.attempts) == 1
+    assert result.attempts[0].max_points == 8640

@@ -221,3 +221,43 @@ from the CLI first.
   - `HOUR`
 - If the direct scale is rejected, the app falls back to `1MINUTE` stream data and aggregates
   locally into the selected timeframe, without displaying raw 1-minute candles on a 5-minute UI.
+
+## Historical REST unavailable / local streaming cache
+
+- IG historical REST may still return:
+  - `error.public-api.exceeded-account-historical-data-allowance`
+  even for very small requests on a valid cash/DFB chart EPIC.
+- When this happens on a `CASH_OR_DFB` chart source, the GUI stops retrying historical REST for
+  that account/session instead of burning the full fallback ladder repeatedly.
+- Logs explicitly show:
+  - `historical_rest_blocked=true`
+  - `reason=historical-data-allowance`
+  - failed epic / resolution / points
+- Live `CHART` streaming remains usable even when historical REST is unavailable.
+- Completed live candles are now stored locally under:
+  - `~/.trading_ig_assistant/cache/stream_candles/`
+- The local stream-candle cache is keyed by:
+  - environment
+  - account marker/hash
+  - chart source epic
+  - interval seconds
+  - price basis
+- No credentials, CST/XST tokens, API keys, passwords, or raw account IDs are written to this
+  cache.
+- On product selection/startup, the app now:
+  1. resolves `chart_source_epic`
+  2. loads cached stream candles first if present
+  3. displays cached candles immediately
+  4. attempts REST backfill only if historical REST is not paused
+  5. starts/continues live streaming
+- If REST history succeeds, it is merged with cached/local stream candles without duplicates.
+- If REST history fails and no cache exists yet, the UI reports:
+  - `No historical cache yet. Live candles will be stored from now on.`
+- If REST history is blocked but cache exists, the UI reports:
+  - `Using cached history; live chart continues.`
+- CLI diagnostics now include:
+  - `history-market --account-id ...`
+  - `history-smoke`
+- Recommended manual smoke test:
+  - `trading-ig-assistant history-smoke --environment live --epic IX.D.NASDAQ.IFD.IP`
+  - `trading-ig-assistant history-market --environment live --epic IX.D.NASDAQ.IFD.IP --resolution MINUTE_5 --max-points 120 --account-id <masked-account>`

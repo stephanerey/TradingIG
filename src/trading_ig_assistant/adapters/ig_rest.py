@@ -574,6 +574,7 @@ def load_prices_with_adaptive_fallback(
     resolution: str,
     requested_max_points: int,
     use_fallback_ladder: bool = True,
+    stop_on_allowance_error: bool = False,
 ) -> HistoricalPriceFetchResult:
     attempts: list[HistoricalPriceAttempt] = []
     ladder = (
@@ -593,6 +594,15 @@ def load_prices_with_adaptive_fallback(
                 )
             )
             if is_historical_allowance_error(exc):
+                if stop_on_allowance_error:
+                    return HistoricalPriceFetchResult(
+                        epic=epic,
+                        resolution=resolution,
+                        requested_max_points=requested_max_points,
+                        selected_max_points=None,
+                        series=None,
+                        attempts=tuple(attempts),
+                    )
                 continue
             return HistoricalPriceFetchResult(
                 epic=epic,
