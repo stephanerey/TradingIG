@@ -61,6 +61,7 @@ class CandleAggregationService:
         chart_update: ChartCandleUpdate,
         *,
         price_basis: ChartPriceBasis = ChartPriceBasis.MID,
+        interval_seconds: int | None = None,
     ) -> CandleSeriesUpdated:
         ohlc = chart_update_ohlc(chart_update, price_basis=price_basis)
         if chart_update.timestamp_ms is None or ohlc is None:
@@ -70,7 +71,10 @@ class CandleAggregationService:
                 candles=current,
                 source="stream",
             )
-        timestamp = datetime.fromtimestamp(chart_update.timestamp_ms / 1000.0, tz=UTC)
+        timestamp_ms = chart_update.timestamp_ms
+        if interval_seconds is not None and interval_seconds > 0:
+            timestamp_ms = _bucket_timestamp_ms(timestamp_ms, interval_seconds)
+        timestamp = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=UTC)
         open_value, high_value, low_value, close_value = ohlc
         candle = Candle(
             timestamp=timestamp,
@@ -141,6 +145,17 @@ def price_ohlc_from_payload(
     )
 
 
+def chart_scale_for_interval(interval_seconds: int) -> str:
+    mapping = {
+        60: "1MINUTE",
+        300: "5MINUTE",
+        900: "15MINUTE",
+        1800: "30MINUTE",
+        3600: "HOUR",
+    }
+    return mapping.get(interval_seconds, "1MINUTE")
+
+
 def chart_update_ohlc(
     chart_update: ChartCandleUpdate,
     price_basis: ChartPriceBasis = ChartPriceBasis.MID,
@@ -203,6 +218,13 @@ def _price_timestamp(price: dict[str, object]) -> datetime:
             except ValueError:
                 continue
     return datetime.fromtimestamp(0, tz=UTC)
+
+
+def _bucket_timestamp_ms(timestamp_ms: int, interval_seconds: int) -> int:
+    if interval_seconds <= 1:
+        return timestamp_ms
+    bucket_seconds = (timestamp_ms // 1000 // interval_seconds) * interval_seconds
+    return int(bucket_seconds * 1000)
 
 
 def _first_decimal(payload: dict[str, object], keys: list[str]) -> Decimal | None:

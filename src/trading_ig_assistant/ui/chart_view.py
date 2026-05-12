@@ -12,6 +12,7 @@ import pyqtgraph as pg
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 from trading_ig_assistant.domain.market_data import (
+    Candle,
     ChartCandleUpdate,
     ChartPriceBasis,
     PriceSeries,
@@ -342,6 +343,18 @@ class ChartView(QtWidgets.QWidget):
     def set_bars(self, bars: list[OhlcBar]) -> None:
         self._source_model.set_bars(bars, placeholder=False)
         self._manual_zoom = False
+        self._render_display_bars(self._source_model.bars)
+
+    def set_candles(
+        self,
+        candles: tuple[Candle, ...] | list[Candle],
+        *,
+        preserve_view: bool = False,
+    ) -> None:
+        bars = _bars_from_candles(candles)
+        self._source_model.set_bars(bars, placeholder=False)
+        if not preserve_view:
+            self._manual_zoom = False
         self._render_display_bars(self._source_model.bars)
 
     def set_selected_product(self, product: object) -> None:
@@ -947,6 +960,23 @@ def _bars_from_price_series(
                 low=float(low_price),
                 close=float(close_price),
                 volume=_first_float_value(price, ["volume", "volumeTraded", "LTV", "TTV"]),
+            )
+        )
+    return bars
+
+
+def _bars_from_candles(candles: tuple[Candle, ...] | list[Candle]) -> list[OhlcBar]:
+    bars: list[OhlcBar] = []
+    for candle in candles:
+        timestamp_ms = int(candle.timestamp.timestamp() * 1000)
+        bars.append(
+            OhlcBar(
+                timestamp_ms=timestamp_ms,
+                open=float(candle.open),
+                high=float(candle.high),
+                low=float(candle.low),
+                close=float(candle.close),
+                volume=float(candle.volume) if candle.volume is not None else None,
             )
         )
     return bars

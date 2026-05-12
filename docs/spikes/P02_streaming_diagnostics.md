@@ -184,3 +184,40 @@ from the CLI first.
   - cached discovery candidates
   - targeted market search
   - fallback to the selected product EPIC
+
+## Historical Candle Foundation
+
+- Historical candles are now treated as a separate market-data foundation from the tradable
+  barrier/option product.
+- The app distinguishes between:
+  - `selected_product_epic`
+  - `chart_source_epic`
+  - cached/REST historical candles
+  - live streaming candles merged into the same series
+- For barrier/option products, historical REST on the product EPIC may fail even with very small
+  requests such as `120` points.
+- The chart therefore prefers an underlying cash/DFB EPIC when one can be resolved.
+- Config now supports default and user-editable chart-source overrides, including:
+  - `US Tech 100 -> IX.D.NASDAQ.IFD.IP`
+- When a chart-source override is used, logs explicitly report:
+  - `Chart source resolved via override`
+- Successful history loads are cached by:
+  - environment
+  - account marker
+  - `chart_source_epic`
+  - resolution
+  - price basis
+  - range key
+  - max points
+- If REST history later fails, cached history remains displayable and the UI reports:
+  - `Using cached history; live chart continues.`
+- The canonical candle series is now owned outside the chart widget and is intended to be the
+  basis for future indicators.
+- Live chart fidelity now prefers the direct IG chart scale matching the UI interval:
+  - `1MINUTE`
+  - `5MINUTE`
+  - `15MINUTE`
+  - `30MINUTE`
+  - `HOUR`
+- If the direct scale is rejected, the app falls back to `1MINUTE` stream data and aggregates
+  locally into the selected timeframe, without displaying raw 1-minute candles on a 5-minute UI.

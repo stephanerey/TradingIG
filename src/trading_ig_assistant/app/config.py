@@ -63,6 +63,9 @@ class AppConfig:
     def __post_init__(self) -> None:
         if isinstance(self.environment, str):
             self.environment = IGEnvironment(self.environment.lower())
+        self.chart_source_overrides = _normalize_chart_source_overrides(
+            self.chart_source_overrides
+        )
         self.connection_profiles = _normalize_profiles(
             self.connection_profiles,
             legacy_environment=self.environment,
@@ -174,4 +177,21 @@ def _normalize_profiles(
             identifier=legacy_identifier,
             selected_account_id=legacy_account_id,
         )
+    return normalized
+
+
+def _default_chart_source_overrides() -> dict[str, str]:
+    return {
+        "US Tech 100": "IX.D.NASDAQ.IFD.IP",
+    }
+
+
+def _normalize_chart_source_overrides(overrides: dict[str, str] | object) -> dict[str, str]:
+    normalized = _default_chart_source_overrides()
+    if isinstance(overrides, dict):
+        for key, value in overrides.items():
+            key_text = str(key).strip()
+            value_text = str(value).strip()
+            if key_text and value_text:
+                normalized[key_text] = value_text
     return normalized

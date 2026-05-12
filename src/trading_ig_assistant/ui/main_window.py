@@ -34,11 +34,17 @@ from trading_ig_assistant.app.config import (
 from trading_ig_assistant.app.streaming_bridge import StreamingEventBridge
 from trading_ig_assistant.domain.instruments import Account
 from trading_ig_assistant.domain.market_data import (
+    CandleSource,
+    ChartCandleSeries,
     ChartCandleUpdate,
     PriceSeries,
     Quote,
 )
 from trading_ig_assistant.domain.products import ProductType, TradableProduct
+from trading_ig_assistant.services.candle_aggregation_service import (
+    CandleAggregationService,
+    chart_scale_for_interval,
+)
 from trading_ig_assistant.services.ig_connection_service import IGConnectionRequest
 from trading_ig_assistant.services.product_discovery_service import (
     ProductDiscoveryResult,
@@ -99,6 +105,12 @@ class HistoricalAllowanceState:
         if self.affected_epic in (None, "*"):
             return True
         return epic == self.affected_epic
+
+
+@dataclass(frozen=True)
+class ResolvedChartSource:
+    product: TradableProduct
+    method: str
 
 
 class ConnectionWorker(QtCore.QObject):
@@ -257,6 +269,13 @@ class MainWindow(QtWidgets.QMainWindow):
             tuple[str, str, str, str, int],
             CachedHistoryEntry,
         ] = {}
+        self._candle_aggregation_service = CandleAggregationService()
+        self._chart_candle_series: ChartCandleSeries | None = None
+        self._chart_source_resolution_method = "selected fallback"
+        self._live_chart_scale_requested = "1MINUTE"
+        self._live_chart_scale_actual = "1MINUTE"
+        self._aggregation_mode = "direct"
+        self._chart_stream_scale_fallback_attempted = False
         self._history_allowance_state = HistoricalAllowanceState()
         self._api_allowance_exceeded = False
         self._auth_locked_out = False
@@ -671,12 +690,35 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_stream_quote(self, quote: object) -> None:
         if isinstance(quote, Quote):
             self.product_selector.set_live_quote(quote)
-            self.chart_view.set_live_quote(quote)
+            chart_product = self._chart_product or self._selected_product
+            if chart_product is not None and quote.epic == chart_product.epic:
+                self.chart_view.set_live_quote(quote)
 
     @QtCore.pyqtSlot(object)
     def _on_stream_chart(self, chart_update: object) -> None:
         if isinstance(chart_update, ChartCandleUpdate):
-            self.chart_view.apply_chart_update(chart_update)
+            chart_product = self._chart_product or self._selected_product
+            if chart_product is None or chart_update.epic != chart_product.epic:
+                return
+            current_candles = self._chart_candle_series.candles if self._chart_candle_series else ()
+            candle_event = self._candle_aggregation_service.apply_chart_update(
+                current_candles,
+                chart_update,
+                price_basis=self.chart_view.current_price_basis(),
+                interval_seconds=self.chart_view.current_interval_seconds(),
+            )
+            self._chart_candle_series = ChartCandleSeries(
+                selected_product_epic=self._selected_product.epic if self._selected_product else "",
+                chart_source_epic=chart_product.epic,
+                resolution_seconds=self.chart_view.current_interval_seconds(),
+                price_basis=self.chart_view.current_price_basis(),
+                candles=candle_event.candles,
+                sources=_merge_candle_sources(
+                    self._chart_candle_series.sources if self._chart_candle_series else (),
+                    CandleSource.STREAM,
+                ),
+            )
+            self.chart_view.set_candles(candle_event.candles, preserve_view=True)
             live_quote = _quote_from_chart_update(chart_update)
             if live_quote is not None:
                 self.chart_view.set_live_quote(live_quote)
@@ -694,6 +736,39 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(str)
     def _on_stream_error(self, message: str) -> None:
         LOGGER.debug("Streaming error message=%s", message)
+        if (
+            self._streaming_adapter is not None
+            and "CHART:" in message.upper()
+            and self._live_chart_scale_actual != "1MINUTE"
+            and not self._chart_stream_scale_fallback_attempted
+        ):
+            chart_product = self._chart_product or self._selected_product
+            if chart_product is not None:
+                self._chart_stream_scale_fallback_attempted = True
+                self._live_chart_scale_actual = "1MINUTE"
+                self._aggregation_mode = _aggregation_mode_for_interval(
+                    self.chart_view.current_interval_seconds()
+                )
+                LOGGER.debug(
+                    "Streaming chart scale fallback selected_product_epic=%s "
+                    "chart_source_epic=%s live_chart_scale_requested=%s "
+                    "live_chart_scale_actual=%s aggregation_mode=%s",
+                    self._selected_product.epic if self._selected_product else "<none>",
+                    chart_product.epic,
+                    self._live_chart_scale_requested,
+                    self._live_chart_scale_actual,
+                    self._aggregation_mode,
+                )
+                try:
+                    self._streaming_adapter.subscribe_chart(chart_product.epic, "1MINUTE")
+                    self.statusBar().showMessage(
+                        "Direct chart scale unavailable; "
+                        "using 1-minute stream with local aggregation.",
+                        12000,
+                    )
+                    return
+                except Exception as exc:
+                    LOGGER.debug("Streaming chart fallback subscribe failed error=%s", exc)
         self.statusBar().showMessage(f"Streaming: {message}", 12000)
 
     def _restart_streaming(self) -> None:
@@ -713,6 +788,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if stream_product is None:
             return
         try:
+            requested_scale = chart_scale_for_interval(self.chart_view.current_interval_seconds())
+            self._live_chart_scale_requested = requested_scale
+            self._live_chart_scale_actual = requested_scale
+            self._aggregation_mode = "direct"
+            self._chart_stream_scale_fallback_attempted = False
             adapter = IGStreamingAdapter(
                 session=session,
                 account_id=self._active_connection.current_account_id,
@@ -722,14 +802,18 @@ class MainWindow(QtWidgets.QMainWindow):
             adapter.start()
             price_epics = list(dict.fromkeys([*self._visible_price_epics, stream_product.epic]))
             adapter.subscribe_markets(price_epics[:PRODUCT_STREAM_ITEMS_LIMIT])
-            adapter.subscribe_chart(stream_product.epic, "1MINUTE")
+            adapter.subscribe_chart(stream_product.epic, requested_scale)
             self._streaming_adapter = adapter
             LOGGER.debug(
-                "Streaming restarted selected_epic=%s source_epic=%s visible_prices=%s account=%s",
+                "Streaming restarted selected_epic=%s source_epic=%s visible_prices=%s account=%s "
+                "live_chart_scale_requested=%s live_chart_scale_actual=%s aggregation_mode=%s",
                 self._selected_product.epic,
                 stream_product.epic,
                 len(price_epics[:PRODUCT_STREAM_ITEMS_LIMIT]),
                 mask_identifier(self._active_connection.current_account_id),
+                self._live_chart_scale_requested,
+                self._live_chart_scale_actual,
+                self._aggregation_mode,
             )
         except Exception as exc:
             LOGGER.debug("Streaming restart failed error=%s", exc)
@@ -745,11 +829,77 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self._apply_selected_product_state()
 
+    def _set_chart_candle_series(
+        self,
+        *,
+        chart_source_epic: str,
+        candles: tuple,
+        source: CandleSource,
+    ) -> None:
+        if self._selected_product is None:
+            return
+        existing_sources = self._chart_candle_series.sources if self._chart_candle_series else ()
+        self._chart_candle_series = ChartCandleSeries(
+            selected_product_epic=self._selected_product.epic,
+            chart_source_epic=chart_source_epic,
+            resolution_seconds=self.chart_view.current_interval_seconds(),
+            price_basis=self.chart_view.current_price_basis(),
+            candles=candles,
+            sources=_merge_candle_sources(existing_sources, source),
+        )
+
+    def _render_history_entry(
+        self,
+        product: TradableProduct,
+        *,
+        cached_entry: CachedHistoryEntry,
+        source: CandleSource,
+        anchor_price: float | None,
+        status_message: str | None = None,
+    ) -> None:
+        candle_event = self._candle_aggregation_service.from_price_series(
+            cached_entry.series,
+            resolution=_api_resolution_for_interval(self.chart_view.current_interval_seconds()),
+            price_basis=self.chart_view.current_price_basis(),
+        )
+        self._set_chart_candle_series(
+            chart_source_epic=product.epic,
+            candles=candle_event.candles,
+            source=source,
+        )
+        self.chart_view.set_price_series(cached_entry.series, anchor_price=anchor_price)
+        if status_message:
+            self.statusBar().showMessage(status_message, 12000)
+
+    def _history_candidate_products(self) -> list[TradableProduct]:
+        if self._selected_product is None:
+            return []
+        candidates: list[TradableProduct] = []
+        if self._chart_product is not None:
+            candidates.append(self._chart_product)
+        if all(product.epic != self._selected_product.epic for product in candidates):
+            candidates.append(self._selected_product)
+        if (
+            self._active_connection is not None
+            and self._selected_product.product_type in {ProductType.BARRIER, ProductType.OPTION}
+            and all(product.product_type != ProductType.CASH_OR_DFB for product in candidates)
+        ):
+            resolved = _resolve_chart_source(
+                self._selected_product,
+                self.product_selector.results(),
+                self._active_connection.adapter,
+                chart_source_overrides=self._config.chart_source_overrides,
+            )
+            if all(product.epic != resolved.product.epic for product in candidates):
+                candidates.insert(0, resolved.product)
+            self._chart_product = resolved.product
+            self._chart_source_resolution_method = resolved.method
+        return candidates
+
     def _load_selected_product_history(self) -> None:
         if self._active_connection is None:
             return
-        product = self._chart_product or self._selected_product
-        if product is None:
+        if self._selected_product is None:
             return
         try:
             interval_seconds = self.chart_view.current_interval_seconds()
@@ -758,37 +908,169 @@ class MainWindow(QtWidgets.QMainWindow):
             time_axis_mode = self.chart_view.current_time_axis_mode()
             resolution, max_points = _history_request_spec(interval_seconds, range_key)
             account_id = self._active_connection.current_account_id
-            cache_key = (product.epic, resolution, range_key, price_basis.value, max_points)
-            LOGGER.debug(
-                "History request selected_product_epic=%s selected_product_type=%s "
-                "chart_source_epic=%s chart_source_type=%s history_request_epic=%s "
-                "timeframe_seconds=%s range_key=%s price_basis=%s time_axis_mode=%s "
-                "history_resolution=%s history_max_points=%s",
-                self._selected_product.epic if self._selected_product else "<none>",
-                getattr(
-                    getattr(self._selected_product, "product_type", None),
-                    "value",
-                    "unknown",
-                ),
-                product.epic,
-                getattr(getattr(product, "product_type", None), "value", "unknown"),
-                product.epic,
-                interval_seconds,
-                range_key,
-                price_basis.value,
-                time_axis_mode.value,
-                resolution,
-                max_points,
-            )
+            history_candidates = self._history_candidate_products()
+            if not history_candidates:
+                return
             if self._api_allowance_exceeded:
                 LOGGER.debug(
-                    "Price history skipped epic=%s due to global allowance block",
-                    product.epic,
+                    "Price history skipped selected_product_epic=%s due to global allowance block",
+                    self._selected_product.epic,
                 )
                 return
-            cached_entry = self._price_history_cache.get(cache_key)
-            if cached_entry is None:
-                cached_entry = _load_history_cache(
+            displayed_from_cache = False
+            for product in history_candidates:
+                anchor_price = _product_anchor_price(product)
+                cache_key = (product.epic, resolution, range_key, price_basis.value, max_points)
+                LOGGER.debug(
+                    "History request selected_product_epic=%s selected_product_type=%s "
+                    "chart_source_epic=%s chart_source_type=%s "
+                    "chart_source_resolution_method=%s history_epic=%s history_account=%s "
+                    "timeframe_seconds=%s range_key=%s price_basis=%s time_axis_mode=%s "
+                    "history_resolution=%s history_max_points=%s",
+                    self._selected_product.epic,
+                    getattr(self._selected_product.product_type, "value", "unknown"),
+                    (self._chart_product or self._selected_product).epic,
+                    getattr(
+                        getattr(
+                            self._chart_product or self._selected_product,
+                            "product_type",
+                            None,
+                        ),
+                        "value",
+                        "unknown",
+                    ),
+                    self._chart_source_resolution_method,
+                    product.epic,
+                    mask_identifier(account_id),
+                    interval_seconds,
+                    range_key,
+                    price_basis.value,
+                    time_axis_mode.value,
+                    resolution,
+                    max_points,
+                )
+                cached_entry = self._price_history_cache.get(cache_key)
+                if cached_entry is None:
+                    cached_entry = _load_history_cache(
+                        environment=self._active_connection.environment,
+                        account_id=account_id,
+                        epic=product.epic,
+                        resolution=resolution,
+                        range_key=range_key,
+                        price_basis=price_basis.value,
+                        max_points=max_points,
+                    )
+                    if cached_entry is not None:
+                        self._price_history_cache[cache_key] = cached_entry
+                if cached_entry is not None and not displayed_from_cache:
+                    self._render_history_entry(
+                        product,
+                        cached_entry=cached_entry,
+                        source=CandleSource.CACHE,
+                        anchor_price=anchor_price,
+                        status_message=(
+                            "Using cached history from "
+                            f"{cached_entry.saved_at.strftime('%Y-%m-%d %H:%M:%S')}."
+                        ),
+                    )
+                    displayed_from_cache = True
+                    LOGGER.debug(
+                        "History cache hit selected_product_epic=%s chart_source_epic=%s "
+                        "cache_hit=true cache_miss=false historical_candles_loaded=%s "
+                        "display_candles=%s cached_at=%s",
+                        self._selected_product.epic,
+                        product.epic,
+                        len(cached_entry.series.prices),
+                        self.chart_view.display_bar_count(),
+                        cached_entry.saved_at.isoformat(),
+                    )
+                else:
+                    LOGGER.debug(
+                        "History cache miss selected_product_epic=%s chart_source_epic=%s "
+                        "cache_hit=false cache_miss=true",
+                        self._selected_product.epic,
+                        product.epic,
+                    )
+
+                if self._history_allowance_state.is_blocked(
+                    account_id=account_id,
+                    epic=product.epic,
+                ):
+                    LOGGER.debug(
+                        "Price history skipped epic=%s due to historical allowance pause "
+                        "account=%s exhausted_at=%s last_error=%s",
+                        product.epic,
+                        mask_identifier(account_id),
+                        self._history_allowance_state.exhausted_at.isoformat()
+                        if self._history_allowance_state.exhausted_at
+                        else None,
+                        self._history_allowance_state.last_error,
+                    )
+                    if displayed_from_cache:
+                        self.statusBar().showMessage(
+                            "Using cached history; live chart continues.",
+                            15000,
+                        )
+                    else:
+                        self.statusBar().showMessage(
+                            "IG historical data allowance reached; live chart continues. "
+                            "Retry later or use cached history.",
+                            15000,
+                        )
+                    return
+
+                fallback_result = load_prices_with_adaptive_fallback(
+                    self._active_connection.adapter,
+                    product.epic,
+                    resolution=resolution,
+                    requested_max_points=max_points,
+                )
+                if fallback_result.series is None:
+                    fallback_reason = _history_fallback_reason(fallback_result)
+                    LOGGER.debug(
+                        "Price history fallback exhausted selected_product_epic=%s "
+                        "chart_source_epic=%s history_epic=%s history_requested_points=%s "
+                        "history_attempted_points=%s history_final_points=%s "
+                        "historical_candles_loaded=0 fallback_reason=%s history_success=false",
+                        self._selected_product.epic,
+                        (self._chart_product or self._selected_product).epic,
+                        product.epic,
+                        max_points,
+                        [attempt.max_points for attempt in fallback_result.attempts],
+                        None,
+                        fallback_reason,
+                    )
+                    if (
+                        _history_fallback_is_historical_allowance(fallback_result)
+                        and product.product_type == ProductType.CASH_OR_DFB
+                    ):
+                        self._history_allowance_state = HistoricalAllowanceState(
+                            exhausted=True,
+                            exhausted_at=datetime.now(UTC),
+                            last_error=_history_fallback_last_error(fallback_result),
+                            affected_account_id=account_id,
+                            affected_epic="*",
+                        )
+                        if displayed_from_cache:
+                            self.statusBar().showMessage(
+                                "Using cached history; live chart continues.",
+                                15000,
+                            )
+                        else:
+                            self.statusBar().showMessage(
+                                "IG historical data allowance reached; live chart continues. "
+                                "Retry later or use cached history.",
+                                15000,
+                            )
+                        return
+                    continue
+
+                cached_entry = CachedHistoryEntry(
+                    series=fallback_result.series,
+                    saved_at=datetime.now(UTC),
+                )
+                self._price_history_cache[cache_key] = cached_entry
+                _save_history_cache(
                     environment=self._active_connection.environment,
                     account_id=account_id,
                     epic=product.epic,
@@ -796,126 +1078,38 @@ class MainWindow(QtWidgets.QMainWindow):
                     range_key=range_key,
                     price_basis=price_basis.value,
                     max_points=max_points,
+                    entry=cached_entry,
                 )
-                if cached_entry is not None:
-                    self._price_history_cache[cache_key] = cached_entry
-
-            anchor_price = _product_anchor_price(product)
-            if self._history_allowance_state.is_blocked(account_id=account_id, epic=product.epic):
+                self._render_history_entry(
+                    product,
+                    cached_entry=cached_entry,
+                    source=CandleSource.REST,
+                    anchor_price=anchor_price,
+                )
                 LOGGER.debug(
-                    "Price history skipped epic=%s due to historical allowance pause "
-                    "account=%s exhausted_at=%s last_error=%s",
-                    product.epic,
-                    mask_identifier(account_id),
-                    self._history_allowance_state.exhausted_at.isoformat()
-                    if self._history_allowance_state.exhausted_at
-                    else None,
-                    self._history_allowance_state.last_error,
-                )
-                if cached_entry is not None:
-                    self.chart_view.set_price_series(cached_entry.series, anchor_price=anchor_price)
-                    self.statusBar().showMessage(
-                        "IG historical data allowance reached; live chart continues. "
-                        "Using cached history from "
-                        f"{cached_entry.saved_at.strftime('%Y-%m-%d %H:%M:%S')}.",
-                        15000,
-                    )
-                else:
-                    self.statusBar().showMessage(
-                        "IG historical data allowance reached; live chart continues. "
-                        "Retry later or use cached history.",
-                        15000,
-                    )
-                return
-
-            if cached_entry is not None:
-                self.chart_view.set_price_series(cached_entry.series, anchor_price=anchor_price)
-                LOGGER.debug(
-                    "History cache hit selected_product_epic=%s chart_source_epic=%s "
-                    "history_requested_points=%s history_attempted_points=%s "
-                    "history_final_points=%s historical_candles_loaded=%s "
-                    "display_candles=%s cached_at=%s",
-                    self._selected_product.epic if self._selected_product else "<none>",
-                    product.epic,
-                    max_points,
-                    [],
-                    max_points,
-                    len(cached_entry.series.prices),
-                    self.chart_view.display_bar_count(),
-                    cached_entry.saved_at.isoformat(),
-                )
-                self.statusBar().showMessage(
-                    "Using cached history from "
-                    f"{cached_entry.saved_at.strftime('%Y-%m-%d %H:%M:%S')}.",
-                    7000,
-                )
-                return
-
-            fallback_result = load_prices_with_adaptive_fallback(
-                self._active_connection.adapter,
-                product.epic,
-                resolution=resolution,
-                requested_max_points=max_points,
-            )
-            if fallback_result.series is None:
-                fallback_reason = _history_fallback_reason(fallback_result)
-                LOGGER.debug(
-                    "Price history fallback exhausted selected_product_epic=%s "
-                    "chart_source_epic=%s history_requested_points=%s "
-                    "history_attempted_points=%s history_final_points=%s "
-                    "historical_candles_loaded=0 fallback_reason=%s",
-                    self._selected_product.epic if self._selected_product else "<none>",
+                    "Price history loaded selected_product_epic=%s chart_source_epic=%s "
+                    "history_epic=%s history_requested_points=%s history_attempted_points=%s "
+                    "history_final_points=%s historical_candles_loaded=%s display_candles=%s "
+                    "resolution=%s range_key=%s history_success=true",
+                    self._selected_product.epic,
+                    (self._chart_product or self._selected_product).epic,
                     product.epic,
                     max_points,
                     [attempt.max_points for attempt in fallback_result.attempts],
-                    None,
-                    fallback_reason,
+                    fallback_result.selected_max_points,
+                    len(cached_entry.series.prices),
+                    self.chart_view.display_bar_count(),
+                    resolution,
+                    range_key,
                 )
-                if _history_fallback_is_historical_allowance(fallback_result):
-                    self._history_allowance_state = HistoricalAllowanceState(
-                        exhausted=True,
-                        exhausted_at=datetime.now(UTC),
-                        last_error=_history_fallback_last_error(fallback_result),
-                        affected_account_id=account_id,
-                        affected_epic="*",
-                    )
-                    self.statusBar().showMessage(
-                        "IG historical data allowance reached; live chart continues. "
-                        "Retry later or use cached history.",
-                        15000,
-                    )
-                    return
-                raise RuntimeError(_history_fallback_last_error(fallback_result))
-            series = fallback_result.series
-            cached_entry = CachedHistoryEntry(
-                series=series,
-                saved_at=datetime.now(UTC),
-            )
-            self._price_history_cache[cache_key] = cached_entry
-            _save_history_cache(
-                environment=self._active_connection.environment,
-                account_id=account_id,
-                epic=product.epic,
-                resolution=resolution,
-                range_key=range_key,
-                price_basis=price_basis.value,
-                max_points=max_points,
-                entry=cached_entry,
-            )
-            self.chart_view.set_price_series(series, anchor_price=anchor_price)
-            LOGGER.debug(
-                "Price history loaded selected_product_epic=%s chart_source_epic=%s "
-                "history_requested_points=%s history_attempted_points=%s history_final_points=%s "
-                "historical_candles_loaded=%s display_candles=%s resolution=%s range_key=%s",
-                self._selected_product.epic if self._selected_product else "<none>",
-                product.epic,
-                max_points,
-                [attempt.max_points for attempt in fallback_result.attempts],
-                fallback_result.selected_max_points,
-                len(series.prices),
-                self.chart_view.display_bar_count(),
-                resolution,
-                range_key,
+                return
+
+            if displayed_from_cache:
+                self.statusBar().showMessage("Using cached history; live chart continues.", 15000)
+                return
+            self.statusBar().showMessage(
+                "Historical backfill unavailable; live chart is running.",
+                10000,
             )
         except Exception as exc:
             if _is_api_allowance_exceeded(exc):
@@ -1025,7 +1219,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._selected_product is None:
             return
         product = self._selected_product
-        self._chart_product = _resolve_chart_source_product(
+        resolved_chart_source = _resolve_chart_source(
             product,
             self.product_selector.results(),
             self._active_connection.adapter
@@ -1033,9 +1227,12 @@ class MainWindow(QtWidgets.QMainWindow):
             else None,
             chart_source_overrides=self._config.chart_source_overrides,
         )
+        self._chart_product = resolved_chart_source.product
+        self._chart_source_resolution_method = resolved_chart_source.method
+        self._chart_candle_series = None
         LOGGER.debug(
             "Selected product state applied selected_epic=%s selected_product_type=%s "
-            "chart_source_epic=%s chart_source_type=%s",
+            "chart_source_epic=%s chart_source_type=%s chart_source_resolution_method=%s",
             product.epic,
             getattr(getattr(product, "product_type", None), "value", "unknown"),
             (self._chart_product or product).epic,
@@ -1044,6 +1241,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 "value",
                 "unknown",
             ),
+            self._chart_source_resolution_method,
         )
         self.product_selector.set_selected_product(product)
         self.chart_view.set_selected_product(self._chart_product or product)
@@ -1377,6 +1575,28 @@ def _quote_from_chart_update(chart_update: ChartCandleUpdate) -> Quote | None:
     )
 
 
+def _resolve_chart_source(
+    selected_product: TradableProduct,
+    results: list[ProductDiscoveryResult],
+    adapter: IGRestAdapter | None = None,
+    *,
+    chart_source_overrides: dict[str, str] | None = None,
+) -> ResolvedChartSource:
+    resolved_product = _resolve_chart_source_product(
+        selected_product,
+        results,
+        adapter,
+        chart_source_overrides=chart_source_overrides,
+    )
+    method = _chart_source_resolution_method(
+        selected_product,
+        resolved_product,
+        results,
+        chart_source_overrides or {},
+    )
+    return ResolvedChartSource(product=resolved_product, method=method)
+
+
 def _resolve_chart_source_product(
     selected_product: TradableProduct,
     results: list[ProductDiscoveryResult],
@@ -1481,6 +1701,23 @@ def _resolve_chart_source_product(
         selected_product.product_type.value,
     )
     return selected_product
+
+
+def _chart_source_resolution_method(
+    selected_product: TradableProduct,
+    resolved_product: TradableProduct,
+    results: list[ProductDiscoveryResult],
+    chart_source_overrides: dict[str, str],
+) -> str:
+    override_product = _resolve_chart_source_override(selected_product, [], chart_source_overrides)
+    if override_product is not None and override_product.epic == resolved_product.epic:
+        return "override"
+    for result in results:
+        if any(product.epic == resolved_product.epic for product in result.products):
+            return "cached candidates"
+    if resolved_product.epic != selected_product.epic:
+        return "targeted search"
+    return "selected fallback"
 
 
 def _resolve_chart_source_from_candidates(
@@ -1664,3 +1901,22 @@ def _history_fallback_last_error(result: HistoricalPriceFetchResult) -> str:
         if attempt.error:
             return attempt.error
     return ""
+
+
+def _merge_candle_sources(
+    existing_sources: tuple[CandleSource, ...],
+    new_source: CandleSource,
+) -> tuple[CandleSource, ...]:
+    merged = list(existing_sources)
+    if new_source not in merged:
+        merged.append(new_source)
+    return tuple(merged)
+
+
+def _aggregation_mode_for_interval(interval_seconds: int) -> str:
+    if interval_seconds <= 60:
+        return "direct"
+    whole_minutes = max(1, interval_seconds // 60)
+    if interval_seconds % 3600 == 0:
+        return f"local_1min_to_{max(1, interval_seconds // 3600)}h"
+    return f"local_1min_to_{whole_minutes}min"

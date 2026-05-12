@@ -80,6 +80,14 @@ def test_chart_view_defaults_to_five_minutes_internally() -> None:
     assert view.current_range_key() == "1M"
 
 
+def test_chart_scale_for_interval_uses_true_five_minute_stream() -> None:
+    from trading_ig_assistant.services.candle_aggregation_service import chart_scale_for_interval
+
+    assert chart_scale_for_interval(60) == "1MINUTE"
+    assert chart_scale_for_interval(300) == "5MINUTE"
+    assert chart_scale_for_interval(900) == "15MINUTE"
+
+
 def test_chart_view_history_range_selector_emits_changes() -> None:
     from PyQt5 import QtWidgets
 
@@ -513,7 +521,7 @@ def test_resolve_chart_source_product_logs_selected_and_chart_source(caplog) -> 
     assert "chart_source_epic=IX.D.NASDAQ.IFD.IP" in caplog.text
 
 
-def test_historical_rest_failure_does_not_prevent_streaming_start(monkeypatch) -> None:
+def test_historical_rest_failure_does_not_prevent_streaming_start(monkeypatch, tmp_path) -> None:
     from PyQt5 import QtWidgets
 
     from trading_ig_assistant.app.config import IGEnvironment
@@ -522,6 +530,10 @@ def test_historical_rest_failure_does_not_prevent_streaming_start(monkeypatch) -
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     assert app is not None
+    monkeypatch.setattr(
+        "trading_ig_assistant.ui.main_window._history_cache_root",
+        lambda: tmp_path,
+    )
     window = MainWindow()
 
     class FailingAdapter:
@@ -556,7 +568,7 @@ def test_historical_rest_failure_does_not_prevent_streaming_start(monkeypatch) -
     )
 
 
-def test_historical_allowance_failure_keeps_streaming_start(monkeypatch) -> None:
+def test_historical_allowance_failure_keeps_streaming_start(monkeypatch, tmp_path) -> None:
     from PyQt5 import QtWidgets
 
     from trading_ig_assistant.adapters.ig_rest import IGAPIError
@@ -566,6 +578,10 @@ def test_historical_allowance_failure_keeps_streaming_start(monkeypatch) -> None
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     assert app is not None
+    monkeypatch.setattr(
+        "trading_ig_assistant.ui.main_window._history_cache_root",
+        lambda: tmp_path,
+    )
     window = MainWindow()
 
     class FailingAdapter:
@@ -602,7 +618,7 @@ def test_historical_allowance_failure_keeps_streaming_start(monkeypatch) -> None
     )
 
 
-def test_historical_allowance_pause_prevents_automatic_retry(monkeypatch) -> None:
+def test_historical_allowance_pause_prevents_automatic_retry(monkeypatch, tmp_path) -> None:
     from PyQt5 import QtWidgets
 
     from trading_ig_assistant.app.config import IGEnvironment
@@ -611,6 +627,10 @@ def test_historical_allowance_pause_prevents_automatic_retry(monkeypatch) -> Non
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     assert app is not None
+    monkeypatch.setattr(
+        "trading_ig_assistant.ui.main_window._history_cache_root",
+        lambda: tmp_path,
+    )
     window = MainWindow()
 
     class FailingAdapter:
@@ -736,6 +756,286 @@ def test_cached_history_is_used_when_allowance_is_exhausted(monkeypatch, tmp_pat
     assert adapter.calls == 0
     assert window.chart_view.display_bar_count() == 1
     assert "using cached history" in window.statusBar().currentMessage().lower()
+
+
+def test_cached_history_for_chart_source_is_used_when_selected_product_is_barrier(
+    monkeypatch, tmp_path
+) -> None:
+    from datetime import UTC, datetime
+
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.app.config import IGEnvironment
+    from trading_ig_assistant.domain.market_data import ChartPriceBasis, PriceSeries
+    from trading_ig_assistant.domain.products import ProductType, TradableProduct
+    from trading_ig_assistant.ui.main_window import (
+        ActiveIGConnection,
+        CachedHistoryEntry,
+        HistoricalAllowanceState,
+        MainWindow,
+        _save_history_cache,
+    )
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    monkeypatch.setattr(
+        "trading_ig_assistant.ui.main_window._history_cache_root",
+        lambda: tmp_path,
+    )
+    window = MainWindow()
+
+    class SilentAdapter:
+        session = object()
+
+        def get_prices(self, epic, **kwargs):
+            raise AssertionError("REST history should not be called while allowance is exhausted")
+
+    selected = TradableProduct(
+        epic="IX.D.NASDAQ.OPTCALL2.IP",
+        name="US Tech 100 BarriÃ¨res Achat",
+        product_type=ProductType.BARRIER,
+    )
+    chart_source = TradableProduct(
+        epic="IX.D.NASDAQ.IFD.IP",
+        name="US Tech 100",
+        product_type=ProductType.CASH_OR_DFB,
+        instrument_type="INDICES",
+        status="TRADEABLE",
+    )
+    entry = CachedHistoryEntry(
+        series=PriceSeries(
+            epic=chart_source.epic,
+            prices=[
+                {
+                    "snapshotTimeUTC": "2026-05-11T10:00:00Z",
+                    "openPrice": {"bid": 100.0, "offer": 100.2},
+                    "highPrice": {"bid": 101.0, "offer": 101.2},
+                    "lowPrice": {"bid": 99.5, "offer": 99.7},
+                    "closePrice": {"bid": 100.5, "offer": 100.7},
+                }
+            ],
+        ),
+        saved_at=datetime(2026, 5, 11, 10, 30, tzinfo=UTC),
+    )
+    _save_history_cache(
+        environment=IGEnvironment.LIVE,
+        account_id="ACC123",
+        epic=chart_source.epic,
+        resolution="MINUTE_5",
+        range_key="1M",
+        price_basis=ChartPriceBasis.MID.value,
+        max_points=8640,
+        entry=entry,
+    )
+    window._selected_product = selected
+    window._chart_product = chart_source
+    window._active_connection = ActiveIGConnection(
+        environment=IGEnvironment.LIVE,
+        current_account_id="ACC123",
+        accounts=[],
+        adapter=SilentAdapter(),
+    )
+    window._history_allowance_state = HistoricalAllowanceState(
+        exhausted=True,
+        exhausted_at=datetime.now(UTC),
+        last_error="historical allowance",
+        affected_account_id="ACC123",
+        affected_epic="*",
+    )
+
+    window._load_selected_product_history()
+
+    assert window.chart_view.display_bar_count() == 1
+    assert window._chart_candle_series is not None
+    assert window._chart_candle_series.chart_source_epic == "IX.D.NASDAQ.IFD.IP"
+    assert window._chart_candle_series.selected_product_epic == "IX.D.NASDAQ.OPTCALL2.IP"
+    assert "using cached history" in window.statusBar().currentMessage().lower()
+
+
+def test_barrier_history_failure_falls_back_to_underlying_cash_epic(monkeypatch) -> None:
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.app.config import IGEnvironment
+    from trading_ig_assistant.domain.instruments import MarketSummary
+    from trading_ig_assistant.domain.products import ProductType, TradableProduct
+    from trading_ig_assistant.ui.main_window import ActiveIGConnection, MainWindow
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    window = MainWindow()
+
+    class Adapter:
+        session = object()
+
+        def __init__(self):
+            self.calls = []
+
+        def search_markets(self, query):
+            return [
+                MarketSummary(
+                    epic="IX.D.NASDAQ.IFD.IP",
+                    instrument_name="US Tech 100",
+                    instrument_type="INDICES",
+                    market_status="TRADEABLE",
+                )
+            ]
+
+        def get_prices(self, epic, **kwargs):
+            self.calls.append(epic)
+            if epic == "IX.D.NASDAQ.OPTCALL2.IP":
+                raise RuntimeError("product-history-unavailable")
+            return type(
+                "Series",
+                (),
+                {
+                    "epic": epic,
+                    "prices": [
+                        {
+                            "snapshotTimeUTC": "2026-05-11T10:00:00Z",
+                            "openPrice": {"bid": 100.0, "offer": 100.2},
+                            "highPrice": {"bid": 101.0, "offer": 101.2},
+                            "lowPrice": {"bid": 99.5, "offer": 99.7},
+                            "closePrice": {"bid": 100.5, "offer": 100.7},
+                        }
+                    ],
+                },
+            )()
+
+    adapter = Adapter()
+    selected = TradableProduct(
+        epic="IX.D.NASDAQ.OPTCALL2.IP",
+        name="US Tech 100 BarriÃ¨res Achat",
+        product_type=ProductType.BARRIER,
+    )
+    window._selected_product = selected
+    window._chart_product = selected
+    window._active_connection = ActiveIGConnection(
+        environment=IGEnvironment.LIVE,
+        current_account_id="ACC123",
+        accounts=[],
+        adapter=adapter,
+    )
+
+    window._load_selected_product_history()
+
+    assert "IX.D.NASDAQ.IFD.IP" in adapter.calls
+    assert window._chart_candle_series is not None
+    assert window._chart_candle_series.chart_source_epic == "IX.D.NASDAQ.IFD.IP"
+    assert window._chart_candle_series.selected_product_epic == "IX.D.NASDAQ.OPTCALL2.IP"
+
+
+def test_stream_updates_extend_cached_history_series(monkeypatch, tmp_path) -> None:
+    from datetime import UTC, datetime
+
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.app.config import IGEnvironment
+    from trading_ig_assistant.domain.market_data import (
+        CandleSource,
+        ChartCandleUpdate,
+        ChartPriceBasis,
+        PriceSeries,
+    )
+    from trading_ig_assistant.domain.products import ProductType, TradableProduct
+    from trading_ig_assistant.ui.main_window import (
+        ActiveIGConnection,
+        CachedHistoryEntry,
+        HistoricalAllowanceState,
+        MainWindow,
+        _save_history_cache,
+    )
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    monkeypatch.setattr(
+        "trading_ig_assistant.ui.main_window._history_cache_root",
+        lambda: tmp_path,
+    )
+    window = MainWindow()
+    window.chart_view.resolution_combo.setCurrentIndex(window.chart_view.resolution_combo.findData(300))
+
+    class SilentAdapter:
+        session = object()
+
+        def get_prices(self, epic, **kwargs):
+            raise AssertionError("REST history should not be called while allowance is exhausted")
+
+    product = TradableProduct(
+        epic="IX.D.NASDAQ.IFD.IP",
+        name="US Tech 100",
+        product_type=ProductType.CASH_OR_DFB,
+    )
+    entry = CachedHistoryEntry(
+        series=PriceSeries(
+            epic=product.epic,
+            prices=[
+                {
+                    "snapshotTimeUTC": "2026-05-11T10:00:00Z",
+                    "openPrice": {"bid": 100.0, "offer": 100.2},
+                    "highPrice": {"bid": 101.0, "offer": 101.2},
+                    "lowPrice": {"bid": 99.5, "offer": 99.7},
+                    "closePrice": {"bid": 100.5, "offer": 100.7},
+                }
+            ],
+        ),
+        saved_at=datetime(2026, 5, 11, 10, 30, tzinfo=UTC),
+    )
+    _save_history_cache(
+        environment=IGEnvironment.LIVE,
+        account_id="ACC123",
+        epic=product.epic,
+        resolution="MINUTE_5",
+        range_key="1M",
+        price_basis=ChartPriceBasis.MID.value,
+        max_points=8640,
+        entry=entry,
+    )
+    window._selected_product = product
+    window._chart_product = product
+    window._active_connection = ActiveIGConnection(
+        environment=IGEnvironment.LIVE,
+        current_account_id="ACC123",
+        accounts=[],
+        adapter=SilentAdapter(),
+    )
+    window._history_allowance_state = HistoricalAllowanceState(
+        exhausted=True,
+        exhausted_at=datetime.now(UTC),
+        last_error="historical allowance",
+        affected_account_id="ACC123",
+        affected_epic="*",
+    )
+
+    window._load_selected_product_history()
+    initial_count = len(window._chart_candle_series.candles if window._chart_candle_series else ())
+
+    window._on_stream_chart(
+        ChartCandleUpdate(
+            epic=product.epic,
+            interval="1MINUTE",
+            timestamp_ms=1_778_493_720_000,
+            open=100.8,
+            high=101.5,
+            low=100.7,
+            close=101.3,
+            end_of_candle=True,
+            raw={
+                "BID_OPEN": "100.8",
+                "BID_HIGH": "101.4",
+                "BID_LOW": "100.7",
+                "BID_CLOSE": "101.2",
+                "OFR_OPEN": "101.0",
+                "OFR_HIGH": "101.6",
+                "OFR_LOW": "100.9",
+                "OFR_CLOSE": "101.4",
+            },
+        )
+    )
+
+    assert window._chart_candle_series is not None
+    assert len(window._chart_candle_series.candles) == initial_count
+    assert CandleSource.CACHE in window._chart_candle_series.sources
+    assert CandleSource.STREAM in window._chart_candle_series.sources
 
 
 def test_product_selector_displays_discovery_results() -> None:

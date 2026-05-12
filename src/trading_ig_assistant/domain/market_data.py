@@ -15,6 +15,12 @@ class ChartPriceBasis(StrEnum):
     ASK = "ask"
 
 
+class CandleSource(StrEnum):
+    REST = "REST"
+    CACHE = "CACHE"
+    STREAM = "STREAM"
+
+
 @dataclass(frozen=True)
 class Candle:
     timestamp: datetime
@@ -59,3 +65,13 @@ class ChartCandleUpdate:
     end_of_candle: bool = False
     snapshot: bool = False
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
+
+
+@dataclass(frozen=True)
+class ChartCandleSeries:
+    selected_product_epic: str
+    chart_source_epic: str
+    resolution_seconds: int
+    price_basis: ChartPriceBasis
+    candles: tuple[Candle, ...] = ()
+    sources: tuple[CandleSource, ...] = ()

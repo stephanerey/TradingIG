@@ -109,4 +109,5 @@ def test_config_persists_chart_source_overrides(tmp_path: Path) -> None:
     save_config(config, config_path)
     loaded = load_config(config_path)
 
-    assert loaded.chart_source_overrides == {"us tech 100": "IX.D.NASDAQ.IFD.IP"}
+    assert loaded.chart_source_overrides["us tech 100"] == "IX.D.NASDAQ.IFD.IP"
+    assert loaded.chart_source_overrides["US Tech 100"] == "IX.D.NASDAQ.IFD.IP"

@@ -234,3 +234,98 @@ def test_history_market_accepts_multiple_epics(monkeypatch, capsys) -> None:
     captured = capsys.readouterr()
     assert "Epic: IX.D.TEST.ONE" in captured.out
     assert "Epic: IX.D.TEST.TWO" in captured.out
+
+
+def test_history_market_can_switch_account(monkeypatch, capsys) -> None:
+    class FakeRestAdapter:
+        def __init__(self, environment, read_only=True):
+            self.environment = environment
+            self.read_only = read_only
+            self.session = None
+
+        def login(self, credentials):
+            self.session = IGSession(
+                cst="secret-cst",
+                security_token="secret-xst",
+                current_account_id="ABCDEF1234",
+                lightstreamer_endpoint="https://stream.example",
+            )
+            return self.session
+
+        def get_accounts(self):
+            return [
+                type(
+                    "AccountLike",
+                    (),
+                    {
+                        "account_id": "ABCDEF1234",
+                        "account_name": "Primary",
+                        "account_type": "CFD",
+                        "currency": "EUR",
+                    },
+                )(),
+                type(
+                    "AccountLike",
+                    (),
+                    {
+                        "account_id": "UVWXYZ9876",
+                        "account_name": "Secondary",
+                        "account_type": "CFD",
+                        "currency": "USD",
+                    },
+                )(),
+            ]
+
+        def switch_account(self, account_id, set_default=False):
+            self.session = IGSession(
+                cst="secret-cst",
+                security_token="secret-xst",
+                current_account_id=account_id,
+                lightstreamer_endpoint="https://stream.example",
+            )
+            return self.session
+
+        def get_prices(self, epic, **kwargs):
+            return type(
+                "Series",
+                (),
+                {
+                    "prices": [
+                        {
+                            "snapshotTime": "2026/05/07 10:00:00",
+                        }
+                    ]
+                },
+            )()
+
+        def logout(self):
+            return None
+
+    monkeypatch.setattr(main_module, "IGRestAdapter", FakeRestAdapter)
+    monkeypatch.setenv("TRADING_IG_PASSWORD", "pass123")
+    monkeypatch.setenv("TRADING_IG_API_KEY", "key123")
+
+    exit_code = main_module.main(
+        [
+            "history-market",
+            "--environment",
+            "live",
+            "--username",
+            "user",
+            "--account-id",
+            "UVWXYZ9876",
+            "--epic",
+            "IX.D.TEST.ONE",
+            "--resolution",
+            "MINUTE_5",
+            "--max-points",
+            "120",
+        ]
+    )
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "Accounts:" in captured.out
+    assert "UV...76" in captured.out
+    assert "Selected account: UV...76" in captured.out
+    assert "UVWXYZ9876" not in captured.out

@@ -124,6 +124,7 @@ def build_parser() -> argparse.ArgumentParser:
     history_market_parser.add_argument("--epic", action="append", required=True)
     history_market_parser.add_argument("--resolution", required=True)
     history_market_parser.add_argument("--max-points", type=int, required=True)
+    history_market_parser.add_argument("--account-id")
     history_market_parser.add_argument("--fallback-ladder", action="store_true")
     history_market_parser.add_argument(
         "--log-level",
@@ -316,7 +317,25 @@ def history_market(args: argparse.Namespace) -> int:
     adapter = IGRestAdapter(environment=environment, read_only=True)
     try:
         session = adapter.login(credentials)
+        accounts = adapter.get_accounts() if hasattr(adapter, "get_accounts") else []
         print(f"Environment: {environment.value}")
+        print("Accounts:")
+        for account in accounts:
+            print(
+                "- "
+                f"{mask_identifier(account.account_id)} | "
+                f"{account.account_name or 'unknown'} | "
+                f"{account.account_type or 'unknown'} | "
+                f"{account.currency or 'unknown'}"
+            )
+        if args.account_id:
+            if not hasattr(adapter, "switch_account"):
+                print(
+                    "History diagnostics failed: account switching is unavailable.",
+                    file=sys.stderr,
+                )
+                return 1
+            session = adapter.switch_account(args.account_id)
         print(f"Account: {mask_identifier(session.current_account_id)}")
         print(f"Resolution: {args.resolution}")
         print(f"Requested max_points: {args.max_points}")
@@ -348,6 +367,7 @@ def history_market(args: argparse.Namespace) -> int:
             final_points = (
                 result.selected_max_points if result.selected_max_points is not None else "none"
             )
+            print(f"Selected account: {mask_identifier(session.current_account_id)}")
             print(f"Final selected max_points: {final_points}")
             if result.series is None or not result.series.prices:
                 print("Number of candles returned: 0")
