@@ -22,3 +22,12 @@ config.json
 .vscode/
 Thumbs.db
 .DS_Store
+.pytest-tmp/
+.codex/skills/
+
+# Local Codex / pytest runtime files
+.pytest_cache/
+.pytest-tmp/
+.codex/skills/
+.codex_backups/
+.local_backups/
