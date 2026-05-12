@@ -1,0 +1,51 @@
+project:
+  name: "{PROJECT_NAME}"
+  base_stack: "desktop-pyqt"
+  domain: "{DOMAIN}"
+  risk_level: "medium-high"
+
+python:
+  preferred_version: "3.12"
+  layout: "src-or-package"
+  package_name: ""
+  venv_policy: "use-project-venv"
+  test_framework: "pytest"
+  lint_tool: "ruff"
+  type_checker: "optional"
+
+codex:
+  require_planning_with_files: true
+  require_skill_selection: true
+  require_repo_map: true
+  require_review_diff: true
+  require_current_state_update: conditional
+  prefer_minimal_patch: true
+  ask_before_large_refactor: true
+
+skills:
+  method:
+    - python-planning-with-files
+    - python-diagnose
+    - python-tdd
+    - python-review-diff
+    - python-architecture-check
+    - python-repomap-maintainer
+    - python-terminal-token-optimizer
+    - python-package-env
+    - python-pyqt-threading
+  domain: []
+  runtime: []
+
+verification:
+  tests_all: "pytest -q"
+  lint: "ruff check ."
+  format_check: "ruff format --check ."
+  repo_map: "python scripts/codex/generate_python_repo_map.py --write"
+  diff_summary: "python scripts/codex/safe_diff_summary.py"
+  gui_import_smoke: "python -c "print('configure GUI smoke command in PROJECT_PROFILE.yaml')""
+
+token_optimization:
+  enabled: optional
+  preserve_raw_output: true
+  raw_output_dir: ".codex_artifacts/command_logs"
+  compact_output_max_lines: 120
