@@ -1,0 +1,99 @@
+requirement_id,description,source_file,status
+GUI2-ARCH-001,code métier indépendant de PyQt / sources transport; aucune règle de risque dans l'UI.,docs/prd/10_architecture/gui_v2_refactor.md,specified_not_implemented
+GUI2-ARCH-002,"une seule session et un seul runtime central, sans multiplicateurs d'appels réseau après navigation.",docs/prd/10_architecture/gui_v2_refactor.md,specified_not_implemented
+GUI2-ARCH-003,projections typées et identifiées par compte/market/product/mode.,docs/prd/10_architecture/gui_v2_refactor.md,specified_not_implemented
+GUI2-ARCH-004,migration incrémentale avec ancien écran en secours jusqu'à validation.,docs/prd/10_architecture/gui_v2_refactor.md,specified_not_implemented
+GUI2-ARCH-005,"parité du fonctionnel existant démontrée par tests, et non supposée après découpage.",docs/prd/10_architecture/gui_v2_refactor.md,specified_not_implemented
+GUI2-ARCH-006,un nouvel onglet ne peut appeler directement ni adapter IG ni keyring ni commande de trading.,docs/prd/10_architecture/gui_v2_refactor.md,specified_not_implemented
+GUI2-ARCH-007,"découpage Qt threads, coalescing et flux stales correctement gérés.",docs/prd/10_architecture/gui_v2_refactor.md,specified_not_implemented
+GUI2-ARCH-008,"configuration et persistance rétrocompatibles, sans perte de Paper ou journal.",docs/prd/10_architecture/gui_v2_refactor.md,specified_not_implemented
+GUI2-ARCH-009,thème/i18n centralisés et testables séparément des vues métiers.,docs/prd/10_architecture/gui_v2_refactor.md,specified_not_implemented
+GUI2-ARCH-010,"niveau d'effort et risques du refactor motivés par résultats, pas des déplacements cosmétiques massifs.",docs/prd/10_architecture/gui_v2_refactor.md,specified_not_implemented
+GUI2-NAV-001,"navigation accessible depuis toutes les pages, raccourcis clavier configurables, état actif visuel et libellés traduits.",docs/prd/30_feature/ui_v2/01_VISION_NAVIGATION.md,specified_not_implemented
+GUI2-NAV-002,header visible en permanence ; mode et source de données séparés; alerte critique jamais masquée par l'overflow.,docs/prd/30_feature/ui_v2/01_VISION_NAVIGATION.md,specified_not_implemented
+GUI2-NAV-003,"pages chargées paresseusement si coûteuses, mais une seule instance des services métier et des connexions externes.",docs/prd/30_feature/ui_v2/01_VISION_NAVIGATION.md,specified_not_implemented
+GUI2-NAV-004,retour arrière logique / boutons de navigation sans réinitialiser une analyse ou un graphique.,docs/prd/30_feature/ui_v2/01_VISION_NAVIGATION.md,specified_not_implemented
+GUI2-NAV-005,sélection du compte et de l'underlying explicites; aucun héritage ambigu d'un produit ou d'un ordre.,docs/prd/30_feature/ui_v2/01_VISION_NAVIGATION.md,specified_not_implemented
+GUI2-NAV-006,"taille/fenêtre/dernier onglet persistés, restauration versionnée et fallback sain si disposition obsolète.",docs/prd/30_feature/ui_v2/01_VISION_NAVIGATION.md,specified_not_implemented
+GUI2-NAV-007,mode fenêtre normal/maximisé ; pas de perte de contrôle avec un DPI différent ou lors du débranchement d'un second écran.,docs/prd/30_feature/ui_v2/01_VISION_NAVIGATION.md,specified_not_implemented
+GUI2-NAV-008,fermer la GUI ne doit pas prétendre maintenir le moteur d'ordres logiciels tant que celui-ci reste dans le même processus ; avertissement si des opérations Paper ou pendings sont actifs.,docs/prd/30_feature/ui_v2/01_VISION_NAVIGATION.md,specified_not_implemented
+GUI2-NAV-009,sidebar en mode compact (icônes et infobulles) et mode complet ; la fonctionnalité n'exige pas un serveur ou Electron.,docs/prd/30_feature/ui_v2/01_VISION_NAVIGATION.md,specified_not_implemented
+GUI2-DS-001,"thème sombre conforme aux références, totalement centralisé, sans QSS dispersé.",docs/prd/30_feature/ui_v2/02_DESIGN_SYSTEM.md,specified_not_implemented
+GUI2-DS-002,couleurs et texte/icone redondants pour déficience de perception des couleurs.,docs/prd/30_feature/ui_v2/02_DESIGN_SYSTEM.md,specified_not_implemented
+GUI2-DS-003,"état `disabled/loading/error` cohérent pour chaque contrôle, sans action factice.",docs/prd/30_feature/ui_v2/02_DESIGN_SYSTEM.md,specified_not_implemented
+GUI2-DS-004,"accentuation forte paramétrable, jamais une promesse d'opportunité ou de rentabilité.",docs/prd/30_feature/ui_v2/02_DESIGN_SYSTEM.md,specified_not_implemented
+GUI2-DS-005,"nombres alignés, unités explicites, arrondis de présentation sans altérer `Decimal` métier.",docs/prd/30_feature/ui_v2/02_DESIGN_SYSTEM.md,specified_not_implemented
+GUI2-DS-006,aucune donnée mockée en production sous une apparence de donnée réelle ; mode démo visuelle explicitement étiqueté pour tests seulement.,docs/prd/30_feature/ui_v2/02_DESIGN_SYSTEM.md,specified_not_implemented
+GUI2-DS-007,captures comparatives sur Windows et revue humaine avant validation esthétique.,docs/prd/30_feature/ui_v2/02_DESIGN_SYSTEM.md,specified_not_implemented
+GUI2-DASH-001,"tableau de bord par compte et mode, avec période explicitement visible.",docs/prd/30_feature/ui_v2/03_DASHBOARD.md,specified_not_implemented
+GUI2-DASH-002,histogramme PnL EUR/% et ligne solde/equity synchronisés temps/zoom/curseur.,docs/prd/30_feature/ui_v2/03_DASHBOARD.md,specified_not_implemented
+GUI2-DASH-003,calculs financiers tracés aux événements et snapshots; aucune invention de capital passé.,docs/prd/30_feature/ui_v2/03_DASHBOARD.md,specified_not_implemented
+GUI2-DASH-004,séparation ordres techniquement réussis et trades financièrement gagnants.,docs/prd/30_feature/ui_v2/03_DASHBOARD.md,specified_not_implemented
+GUI2-DASH-005,"positions ouvertes mises à jour avec prix valide, latence/fraîcheur et contrôles de protection; clic détail.",docs/prd/30_feature/ui_v2/03_DASHBOARD.md,specified_not_implemented
+GUI2-DASH-006,actualités et événements à venir par source / impact et horodatage.,docs/prd/30_feature/ui_v2/03_DASHBOARD.md,specified_not_implemented
+GUI2-DASH-007,"suggestions IA d'optimisation consultatives, versionnées, jamais auto-appliquées.",docs/prd/30_feature/ui_v2/03_DASHBOARD.md,specified_not_implemented
+GUI2-DASH-008,recalcul non bloquant et rafraîchissement incrémental; dashboard fonctionnel avec historique incomplet.,docs/prd/30_feature/ui_v2/03_DASHBOARD.md,specified_not_implemented
+GUI2-DASH-009,affichage « aucune donnée / impossible à calculer » pour les statistiques non encore disponibles.,docs/prd/30_feature/ui_v2/03_DASHBOARD.md,specified_not_implemented
+GUI2-SCAN-001,tableau multi-marchés classé actualisable automatiquement avec pause et statut.,docs/prd/30_feature/ui_v2/04_SCANNER_CATALOGUE.md,specified_not_implemented
+GUI2-SCAN-002,tous les marchés configurés restent visibles avec raison d'indisponibilité plutôt que disparition silencieuse.,docs/prd/30_feature/ui_v2/04_SCANNER_CATALOGUE.md,specified_not_implemented
+GUI2-SCAN-003,"scores techniques/IA/contextuels séparés, ordinaux non probabilistes et données manquantes grises.",docs/prd/30_feature/ui_v2/04_SCANNER_CATALOGUE.md,specified_not_implemented
+GUI2-SCAN-004,long/short/à surveiller avec raisonnement explicitement affiché et vetos.,docs/prd/30_feature/ui_v2/04_SCANNER_CATALOGUE.md,specified_not_implemented
+GUI2-SCAN-005,"catalogue IG distinct des sous-jacents, recherche/filtres/colonnes, avec respect des droits et quotas.",docs/prd/30_feature/ui_v2/04_SCANNER_CATALOGUE.md,specified_not_implemented
+GUI2-SCAN-006,binding EPIC exact requis pour toute projection de contexte du sous-jacent vers produit.,docs/prd/30_feature/ui_v2/04_SCANNER_CATALOGUE.md,specified_not_implemented
+GUI2-SCAN-007,"rendu incrémental scalable, tri/filtre et sélection stables en streaming.",docs/prd/30_feature/ui_v2/04_SCANNER_CATALOGUE.md,specified_not_implemented
+GUI2-SCAN-008,surbrillance forte optionnelle et sans confusion entre sens de marché et succès d'un trade.,docs/prd/30_feature/ui_v2/04_SCANNER_CATALOGUE.md,specified_not_implemented
+GUI2-SCAN-009,"horodatages de prix, sentiment et signal distincts et conservés durant les pannes.",docs/prd/30_feature/ui_v2/04_SCANNER_CATALOGUE.md,specified_not_implemented
+GUI2-SCAN-010,états d'erreur liés aux permissions/quotas sans appels REST en boucle.,docs/prd/30_feature/ui_v2/04_SCANNER_CATALOGUE.md,specified_not_implemented
+GUI2-WATCH-001,"watchlist configurée et identités de marchés stables, un seul marché actif à la fois dans la vue standard.",docs/prd/30_feature/ui_v2/05_WATCHLIST_ANALYSE.md,specified_not_implemented
+GUI2-WATCH-002,"réutilisation du moteur PyQtGraph et des indicateurs/services existants, sans refaire les calculs dans les widgets.",docs/prd/30_feature/ui_v2/05_WATCHLIST_ANALYSE.md,specified_not_implemented
+GUI2-WATCH-003,"overlay paramétrable et panneaux indicateurs synchronisés, performances UI préservées.",docs/prd/30_feature/ui_v2/05_WATCHLIST_ANALYSE.md,specified_not_implemented
+GUI2-WATCH-004,"valeurs/stratégies explicables, complétude OHLC et dates visibles.",docs/prd/30_feature/ui_v2/05_WATCHLIST_ANALYSE.md,specified_not_implemented
+GUI2-WATCH-005,"vue IA affichant périmètre, sources, fraîcheur, coûts potentiels, statut et limites.",docs/prd/30_feature/ui_v2/05_WATCHLIST_ANALYSE.md,specified_not_implemented
+GUI2-WATCH-006,"plans LONG, SHORT et NO_TRADE en parallèle, séparés du sens d'ordre du contrat IG.",docs/prd/30_feature/ui_v2/05_WATCHLIST_ANALYSE.md,specified_not_implemented
+GUI2-WATCH-007,clic vers brouillon Paper uniquement si données et règles déterministes passent les gates.,docs/prd/30_feature/ui_v2/05_WATCHLIST_ANALYSE.md,specified_not_implemented
+GUI2-WATCH-008,le changement de marché ne recycle pas silencieusement l'IA ou les prix de l'instrument précédent.,docs/prd/30_feature/ui_v2/05_WATCHLIST_ANALYSE.md,specified_not_implemented
+GUI2-WATCH-009,"indication du nombre de bougies nécessaires à la disponibilité des indicateurs, sans forcing d'historique IG.",docs/prd/30_feature/ui_v2/05_WATCHLIST_ANALYSE.md,specified_not_implemented
+GUI2-ORD-001,identités compte/environnement/exécution visibles sur toutes lignes et actions.,docs/prd/30_feature/ui_v2/06_POSITIONS_ORDRES.md,specified_not_implemented
+GUI2-ORD-002,actualisation prix et PnL non bloquante et âge du prix contrôlé.,docs/prd/30_feature/ui_v2/06_POSITIONS_ORDRES.md,specified_not_implemented
+GUI2-ORD-003,"stop/TP/KO simultanés et différenciés, statut confirmé/proposé/pending.",docs/prd/30_feature/ui_v2/06_POSITIONS_ORDRES.md,specified_not_implemented
+GUI2-ORD-004,stockage et présentation distincts des positions IG et Paper; aucune agrégation ambiguë.,docs/prd/30_feature/ui_v2/06_POSITIONS_ORDRES.md,specified_not_implemented
+GUI2-ORD-005,impossibilité pour GUI de contourner le RiskEngine et les droits/permissions API.,docs/prd/30_feature/ui_v2/06_POSITIONS_ORDRES.md,specified_not_implemented
+GUI2-ORD-006,ordres en attente natifs et locaux clairement séparés; panne/fermeture application détectée.,docs/prd/30_feature/ui_v2/06_POSITIONS_ORDRES.md,specified_not_implemented
+GUI2-ORD-007,"reprise des fonctionnalités Paper vérifiées, sans régression des snapshots/restauration explicite.",docs/prd/30_feature/ui_v2/06_POSITIONS_ORDRES.md,specified_not_implemented
+GUI2-ORD-008,confirmations/correlation_id/état incertain et journalisation de chaque action.,docs/prd/30_feature/ui_v2/06_POSITIONS_ORDRES.md,specified_not_implemented
+GUI2-ORD-009,boutons `Modifier`/`Clôturer` désactivés avec explication en l'absence de chemin broker autorisé.,docs/prd/30_feature/ui_v2/06_POSITIONS_ORDRES.md,specified_not_implemented
+GUI2-ORD-010,shortlist des positions du Dashboard synchronisée avec la même source de vérité.,docs/prd/30_feature/ui_v2/06_POSITIONS_ORDRES.md,specified_not_implemented
+GUI2-ANA-001,"journal filtrable, export CSV/JSON expurgé, provenance et distinction Paper/Broker.",docs/prd/30_feature/ui_v2/07_HISTORIQUE_IA_APPRENTISSAGE.md,specified_not_implemented
+GUI2-ANA-002,"métriques correctement définies par compte/devise/mode, avec effectif et dates.",docs/prd/30_feature/ui_v2/07_HISTORIQUE_IA_APPRENTISSAGE.md,specified_not_implemented
+GUI2-ANA-003,"suivi des paramètres historiques, versions de stratégie et coûts/frais de chaque scénario.",docs/prd/30_feature/ui_v2/07_HISTORIQUE_IA_APPRENTISSAGE.md,specified_not_implemented
+GUI2-ANA-004,"`OptimizationProposal` typée, auditable, non exécutable, avec preuves et hypothèses.",docs/prd/30_feature/ui_v2/07_HISTORIQUE_IA_APPRENTISSAGE.md,specified_not_implemented
+GUI2-ANA-005,aucune modification de configuration par simple réception d'une réponse OpenAI.,docs/prd/30_feature/ui_v2/07_HISTORIQUE_IA_APPRENTISSAGE.md,specified_not_implemented
+GUI2-ANA-006,validation hors échantillon et politique de rollback avant activation de modification.,docs/prd/30_feature/ui_v2/07_HISTORIQUE_IA_APPRENTISSAGE.md,specified_not_implemented
+GUI2-ANA-007,consentement explicite avant transmission d'historique de transactions externe.,docs/prd/30_feature/ui_v2/07_HISTORIQUE_IA_APPRENTISSAGE.md,specified_not_implemented
+GUI2-ANA-008,gestion des datasets incomplets ou non versionnés avec état `INSUFFICIENT_EVIDENCE`.,docs/prd/30_feature/ui_v2/07_HISTORIQUE_IA_APPRENTISSAGE.md,specified_not_implemented
+GUI2-ANA-009,"séparation des avis IA, résultats réels, résultats Paper et backtests.",docs/prd/30_feature/ui_v2/07_HISTORIQUE_IA_APPRENTISSAGE.md,specified_not_implemented
+GUI2-MAC-001,"calendrier et sources avec heure locale/date UTC interne, visibilité de l'impact et filtre.",docs/prd/30_feature/ui_v2/08_MACRO_IA.md,specified_not_implemented
+GUI2-MAC-002,"distinction information collectée, analyse IA et fait marché vérifié.",docs/prd/30_feature/ui_v2/08_MACRO_IA.md,specified_not_implemented
+GUI2-MAC-003,"contrôles de fraîcheur, expiration, sources et applicable/non applicable par produit.",docs/prd/30_feature/ui_v2/08_MACRO_IA.md,specified_not_implemented
+GUI2-MAC-004,aucun appel IA payant causé par le seul rendu d'un widget.,docs/prd/30_feature/ui_v2/08_MACRO_IA.md,specified_not_implemented
+GUI2-MAC-005,"nombre d'appels, coût, budget, statut et autorisation visibles dans paramètres / diagnostics.",docs/prd/30_feature/ui_v2/08_MACRO_IA.md,specified_not_implemented
+GUI2-MAC-006,"risque événementiel distinct de sentiment directionnel, dans le dashboard et le scanner.",docs/prd/30_feature/ui_v2/08_MACRO_IA.md,specified_not_implemented
+GUI2-MAC-007,"analyse IA lisible en français/anglais selon possibilité, avec traduction des labels UI indépendamment du texte externe.",docs/prd/30_feature/ui_v2/08_MACRO_IA.md,specified_not_implemented
+GUI2-MAC-008,données absentes = inconnu / not applicable sans scores fictifs.,docs/prd/30_feature/ui_v2/08_MACRO_IA.md,specified_not_implemented
+GUI2-OPS-001,"états santé IG REST/streaming/market data/IA séparés, vérifiés et horodatés.",docs/prd/30_feature/ui_v2/09_DIAGNOSTICS_PARAMETRES.md,specified_not_implemented
+GUI2-OPS-002,"supervision non bloquante avec backoff, respect quota et distinction marché fermé/flux stale.",docs/prd/30_feature/ui_v2/09_DIAGNOSTICS_PARAMETRES.md,specified_not_implemented
+GUI2-OPS-003,aucun ping IA payant sans consentement ni action explicite.,docs/prd/30_feature/ui_v2/09_DIAGNOSTICS_PARAMETRES.md,specified_not_implemented
+GUI2-OPS-004,navigation vers diagnostic détaillé depuis le badge bandeau.,docs/prd/30_feature/ui_v2/09_DIAGNOSTICS_PARAMETRES.md,specified_not_implemented
+GUI2-OPS-005,configuration de l'interface et langue persistantes; autres paramètres présents mais pas nouveaux droits d'exécution.,docs/prd/30_feature/ui_v2/09_DIAGNOSTICS_PARAMETRES.md,specified_not_implemented
+GUI2-OPS-006,"validation de type, bornes, unités et dépendances des paramètres métier.",docs/prd/30_feature/ui_v2/09_DIAGNOSTICS_PARAMETRES.md,specified_not_implemented
+GUI2-OPS-007,alertes critiques persistantes et accusé de réception; export journal expurgé.,docs/prd/30_feature/ui_v2/09_DIAGNOSTICS_PARAMETRES.md,specified_not_implemented
+GUI2-OPS-008,restauration de disposition et migration config backward-compatible.,docs/prd/30_feature/ui_v2/09_DIAGNOSTICS_PARAMETRES.md,specified_not_implemented
+GUI2-OPS-009,"arrêt d'urgence visible uniquement si fonctionnalité effective, sans induire de protection broker non existante.",docs/prd/30_feature/ui_v2/09_DIAGNOSTICS_PARAMETRES.md,specified_not_implemented
+GUI2-OPS-010,"mesures CPU/Qt loops/temps de rendu et erreurs, sans télémétrie externe par défaut.",docs/prd/30_feature/ui_v2/09_DIAGNOSTICS_PARAMETRES.md,specified_not_implemented
+GUI2-DATA-001,"snapshots GUI immuables, provenance, timestamp, scope et status.",docs/prd/30_feature/ui_v2/11_CONTRATS_ETATS_DONNEES.md,specified_not_implemented
+GUI2-DATA-002,projections financières centralisées et unités/devise sûres.,docs/prd/30_feature/ui_v2/11_CONTRATS_ETATS_DONNEES.md,specified_not_implemented
+GUI2-DATA-003,"un seul runtime/connecteur/flux, pas d'appels cachés en UI.",docs/prd/30_feature/ui_v2/11_CONTRATS_ETATS_DONNEES.md,specified_not_implemented
+GUI2-DATA-004,"états inconnus, périmés, non applicables, données manquantes conservés jusqu'à l'UI.",docs/prd/30_feature/ui_v2/11_CONTRATS_ETATS_DONNEES.md,specified_not_implemented
+GUI2-DATA-005,"émission Qt thread-safe, coalescing et sélection par IDs stables.",docs/prd/30_feature/ui_v2/11_CONTRATS_ETATS_DONNEES.md,specified_not_implemented
+GUI2-DATA-006,séparation analyses/consultation des commandes transactionnelles.,docs/prd/30_feature/ui_v2/11_CONTRATS_ETATS_DONNEES.md,specified_not_implemented
+GUI2-DATA-007,"migration backward-compatible des états/config, absence de perte de journal.",docs/prd/30_feature/ui_v2/11_CONTRATS_ETATS_DONNEES.md,specified_not_implemented
