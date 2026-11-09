@@ -1,0 +1,17 @@
+schema_version: 1
+status: in_progress
+objective: Validate IG DEMO capabilities and a supervised default-deny execution gate with sanitized evidence.
+allowed_scope:
+  - read-only repository inspection and planning
+  - sanitized local evidence design
+  - authenticated IG DEMO read-only calls
+forbidden_scope:
+  - any DEMO or LIVE broker mutation
+  - any LIVE authenticated call
+  - weakening LiveTradingDisabledError
+open_requirements:
+  - obtain representative DEMO Barrier and Option capability evidence
+  - obtain separate explicit authority before any DEMO mutation
+  - validate confirmation and reconciliation only after mutation authority exists
+  - retain separate human authorization gate for any future DEMO mutation
+next_action: Keep execution capabilities unsupported; await separate user authority for any bounded DEMO mutation.

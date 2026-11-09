@@ -1,44 +1,7 @@
-# REPO_MAP_POLICY.md
+# RepoMap policy — SR 4.1
 
-## Objectif
-Maintenir une carte légère du codebase pour éviter que Codex lise trop de fichiers et consomme trop de tokens.
+RepoMap is a navigation aid, not mandatory context.
 
-## Fichiers
+Use it when target files or structural consumers are unknown. Skip it for a known local change. Update the generated map only after a structural change; update the human map only when the explanation of the codebase changed.
 
-```text
-docs/codex/CODEBASE_MAP.md           # carte humaine courte
-docs/codex/CODEBASE_MAP.generated.md # carte générée automatiquement
-```
-
-## Quand consulter le RepoMap
-
-- reprise de projet ;
-- tâche multi-fichiers ;
-- bug sans fichier évident ;
-- refactor ;
-- ajout de fonctionnalité ;
-- modification d'architecture.
-
-## Quand régénérer
-
-```bash
-python scripts/codex/generate_python_repo_map.py --write
-```
-
-À faire si :
-
-- module ajouté/supprimé ;
-- package renommé ;
-- script important ajouté ;
-- test ajouté ;
-- entry point modifié ;
-- layout modifié ;
-- ressource Qt ajoutée ;
-- configuration pyproject/requirements modifiée.
-
-## Règles
-
-- Ne pas transformer le RepoMap en documentation exhaustive.
-- Ne pas y mettre de secrets, chemins locaux sensibles ou données privées.
-- La carte générée peut être écrasée.
-- La carte humaine doit rester courte et maintenue manuellement.
+In `nexus_kg` mode, KG may guide navigation under `MCP_POLICY.yaml`; real source and final verification remain decisive.

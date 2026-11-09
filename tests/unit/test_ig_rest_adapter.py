@@ -206,6 +206,42 @@ def test_categories_and_category_instruments_are_read_only() -> None:
     assert instruments[0].instrument_name == "Carrefour SA"
 
 
+def test_categories_accept_current_ig_code_shape() -> None:
+    class CurrentCategoryClient(FakeHttpClient):
+        def request(self, method, url, *, headers, json_body=None, timeout):
+            if url.endswith("/categories"):
+                return HttpResponse(
+                    status_code=200,
+                    headers={},
+                    body={
+                        "categories": [
+                            {"code": "INDICES", "nonTradeable": False},
+                            {"code": "COMMODITIES", "nonTradeable": False},
+                        ]
+                    },
+                )
+            return super().request(
+                method,
+                url,
+                headers=headers,
+                json_body=json_body,
+                timeout=timeout,
+            )
+
+    adapter = IGRestAdapter(
+        environment=IGEnvironment.DEMO,
+        http_client=CurrentCategoryClient(),
+    )
+    adapter.login(IGCredentials("demo-user", "fake-password", "fake-api-key"))
+
+    categories = adapter.get_categories()
+
+    assert [(category.category_id, category.name) for category in categories] == [
+        ("INDICES", "INDICES"),
+        ("COMMODITIES", "COMMODITIES"),
+    ]
+
+
 def test_logout_ignores_invalid_security_token() -> None:
     class LogoutTokenExpiredClient(FakeHttpClient):
         def request(self, method, url, *, headers, json_body=None, timeout):

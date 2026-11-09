@@ -1,0 +1,28 @@
+schema_version: 1
+status: verified
+objective: Replace the ticket placeholder with a risk-evaluated Paper proposal UI and no execution path.
+allowed_scope:
+  - src/trading_ig_assistant/ui/ticket_view.py
+  - src/trading_ig_assistant/ui/product_selector.py
+  - focused UI tests and factual project documentation
+forbidden_scope:
+  - IG order calls or authenticated probes
+  - PaperBroker execution from the GUI
+  - DEMO, LIVE or AUTO activation
+  - dependencies, migrations or new persistence
+decisions:
+  - proposal and risk evaluation only
+  - stale or incomplete inputs fail visibly
+evidence:
+  - targeted baseline 50 passed
+  - full offline suite 193 passed
+  - ruff check src tests passed
+  - native Qt 960x600 smoke passed
+changed_files:
+  - src/trading_ig_assistant/ui/ticket_view.py
+  - src/trading_ig_assistant/ui/product_selector.py
+  - tests/unit/test_ticket_view.py
+  - tests/unit/test_ui_shell.py
+verification:
+  status: pass
+next_action: User may validate the Paper ticket visually, then select the next offline GUI integration lot.

@@ -1,8 +1,11 @@
 # Logging and Errors
 
+> **V1.2 reconstruction — 2026-10-22:** [Project conventions](../00_conventions/tradingig_v1_2_conventions.md) and [reconciliation decisions](../01_product/decisions.md) apply. Original text is preserved; documented V1.2 changes govern current scope. No implementation or activation is implied.
+
+
 > **PRD Policy:** **PROJECT (editable)** — Fill and update this file for the current project.
 
-**Last updated:** 2026-05-07
+**Last updated:** 2026-10-22
 
 ## Goal
 Make failures visible and diagnosable without leaking secrets or allowing unsafe trading.
@@ -37,3 +40,9 @@ Make failures visible and diagnosable without leaking secrets or allowing unsafe
 
 ## Testing notes
 - Add redaction unit tests with representative secret patterns.
+
+## V1.2 scope alignment
+
+Use structured UTC events, correlation/causation IDs, sanitized rotating logs and explicit UNKNOWN/UNSUPPORTED. Timeout is not proof of rejection: reconcile before resubmission. Local critical alerts remain available when delivery fails.
+
+Canonical requirements: [chapter 9](../30_feature/F007_software_pending_orders.md), [chapter 13](../30_feature/F009_trade_journal_and_analytics.md), [chapter 15](../30_feature/F013_alerts_diagnostics_and_resilience.md), [chapter 17](domain_contracts.md).

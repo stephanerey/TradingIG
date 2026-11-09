@@ -1,0 +1,9 @@
+objective: "Add a versioned chronological candle feed with no future-data visibility"
+scope:
+  allowed: "offline replay domain/service code, synthetic tests, R08 documentation"
+  forbidden: "strategy selection, broker calls, AUTO activation, persistence, migrations, GUI"
+skills:
+  - codex-tradingig-paper-execution
+  - codex-tradingig-accounts-risk
+status: core_complete_activation_not_authorized
+next_action: "Select a strategy and real versioned dataset before wiring the replay consumers"

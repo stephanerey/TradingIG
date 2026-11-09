@@ -1,0 +1,3 @@
+interface:
+  display_name: "TradingIG Storage and Audit"
+  short_description: "Securiser journal, PnL et migrations TradingIG"

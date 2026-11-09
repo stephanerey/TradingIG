@@ -1,0 +1,15 @@
+task: ui-paper-persistence-preview
+status: verified
+scope:
+  - additive SQLite schema v2 preview
+  - explicit Paper save and restore design
+protected:
+  - existing local database and backups
+  - secrets and IG account identity
+  - IG order methods
+evidence:
+  - existing runtime database absent
+  - schema v1 insufficient for exact open-position recovery
+  - explicit human authorization received on 2026-10-23
+  - 221 offline tests and 21 protected IG regressions passed
+next: stop this lot; continue R07 read-only validation separately

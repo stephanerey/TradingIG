@@ -1,8 +1,11 @@
 # Data Schema
 
+> **V1.2 reconstruction — 2026-10-22:** [Project conventions](../00_conventions/tradingig_v1_2_conventions.md) and [reconciliation decisions](../01_product/decisions.md) apply. Original text is preserved; documented V1.2 changes govern current scope. No implementation or activation is implied.
+
+
 > **PRD Policy:** **PROJECT (editable)** — Fill and update this file for the current project.
 
-**Last updated:** 2026-05-07
+**Last updated:** 2026-10-23
 
 ## Goal
 Define persistent data needed for journaling, replay, analytics, and cache.
@@ -91,3 +94,23 @@ Links generated tickets/trades to the macro ribbon state visible at decision tim
 
 ## Testing notes
 - Migration tests create a fresh database and verify schema.
+
+## V1.2 scope alignment
+
+The existing table sketches are incomplete target designs. Add account/broker/environment identity, FX/source provenance, candle basis/revision/quality, immutable intents and confirmations, snapshots, rejected signals and configuration/context/model versions. Precision and migrations must preserve financial calculations and append-only audit. Only the deployed subsets recorded below are implemented.
+
+Canonical requirements: [chapter 5](../30_feature/F001_ig_connection_and_settings.md), [chapter 6](../30_feature/F003_realtime_market_data_and_charts.md), [chapter 13](../30_feature/F009_trade_journal_and_analytics.md), [chapter 17](domain_contracts.md).
+
+## R04 implemented subset — 2026-10-22
+
+Schema v1 implements `schema_migrations` and append-only `journal_events` with unique IDs, UTC timestamps, sanitized JSON payloads, Decimal-as-text P&L and explicit P&L status/currency. Update/delete triggers enforce immutability. Initialization is explicit, refuses unknown schemas, backs up existing version changes, restores on failure and validates schema/integrity before WAL use. Broader ticket/position/candle tables remain future work and are not inferred as deployed.
+
+## Paper checkpoint subset — schema v2 — 2026-10-23
+
+After explicit human authorization, schema v2 adds `paper_session_snapshots`. Each row is an
+append-only, versioned full checkpoint identified by `snapshot_id`, `session_id` and UTC save time;
+the canonical JSON payload stores Decimal values as text and is protected by SHA-256. Update/delete
+triggers reject mutation. Migration from v1 creates a recoverable backup first and restores it on
+failure. The application performs no database I/O at import or startup: save and restore require
+visible user actions. Payload validation rejects credential-like keys and stores no IG account
+identity. This is local Paper recovery, not broker reconciliation or proof of IG execution.

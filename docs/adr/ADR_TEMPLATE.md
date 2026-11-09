@@ -1,14 +1,22 @@
-# ADR-YYYYMMDD-title
+# ADR-0000 — Titre
 
 ## Statut
-Proposé / Accepté / Remplacé / Abandonné
+Propose / Accepte / Remplace / Abandonne
+
+## Date
+YYYY-MM-DD
 
 ## Contexte
+...
 
-## Décision
+## Decision
+...
 
-## Conséquences
+## Alternatives
+...
 
-## Alternatives considérées
+## Consequences
+...
 
-## Vérification / migration
+## Impact Codex
+Skills, docs, verifications.

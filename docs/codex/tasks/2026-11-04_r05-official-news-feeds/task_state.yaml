@@ -1,0 +1,8 @@
+objective: "Ingest official Fed and ECB RSS metadata with bounded networking and explicit health"
+scope:
+  allowed: "official read-only RSS, stdlib HTTP/XML, offline tests, API003/F005 documentation"
+  forbidden: "credentials, paid providers, BLS bypass, scheduler, GUI, persistence, AI classification, orders, AUTO"
+skills:
+  - codex-tradingig-analysis-scanner
+status: complete
+next_action: "Add non-blocking refresh orchestration before connecting source health to context"

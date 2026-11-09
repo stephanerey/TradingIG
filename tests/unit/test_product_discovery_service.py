@@ -183,6 +183,77 @@ def test_classification_heuristics_identify_barrier_and_option() -> None:
     assert option.strike == 19000.0
 
 
+def test_explicit_shares_are_not_classified_as_options_from_their_names(tmp_path) -> None:
+    summary = MarketSummary(
+        epic="SHARE.ETF",
+        instrument_name="Semiconductor Option Income ETF",
+        instrument_type="SHARES",
+        expiry="-",
+        raw={},
+    )
+    service = ProductDiscoveryService(FakeDiscoveryAdapter())
+    product = service.classify_product(summary, None)
+    assert product.product_type is ProductType.CASH_OR_DFB
+    assert product.direction is ProductDirection.UNKNOWN
+
+    report_path = tmp_path / "old-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "search_term": "categories",
+                        "products": [
+                            {
+                                "epic": "SHARE.ETF",
+                                "name": "Semiconductor Option Income ETF",
+                                "product_type": "option",
+                                "instrument_type": "SHARES",
+                                "direction": "call",
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    original = report_path.read_bytes()
+    restored = read_discovery_report(report_path)[0].products[0]
+    assert restored.product_type is ProductType.CASH_OR_DFB
+    assert restored.direction is ProductDirection.UNKNOWN
+    assert report_path.read_bytes() == original
+
+
+def test_explicit_option_on_shares_remains_an_option() -> None:
+    summary = MarketSummary(
+        epic="OPT.SHARE", instrument_name="Example 100 CALL", instrument_type="OPT_SHARES", raw={}
+    )
+    product = ProductDiscoveryService(FakeDiscoveryAdapter()).classify_product(summary, None)
+    assert product.product_type is ProductType.OPTION
+
+
+def test_targeted_search_uses_one_query_without_details_and_deduplicates() -> None:
+    class SearchAdapter(FakeDiscoveryAdapter):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        def search_markets(self, query):
+            self.calls.append(query)
+            market = MarketSummary(
+                epic="OPT.ONE", instrument_name="France 40 100 CALL", instrument_type="OPT_INDICES"
+            )
+            return [market, market]
+
+    adapter = SearchAdapter()
+    result = ProductDiscoveryService(adapter).search_product_summaries(" France 40 ")
+    assert adapter.calls == ["France 40"]
+    assert adapter.detail_calls == []
+    assert len(result.products) == result.candidates_count == 1
+    assert result.products[0].product_type is ProductType.OPTION
+
+
 def test_sanitized_report_excludes_sensitive_values(tmp_path) -> None:
     service = ProductDiscoveryService(FakeDiscoveryAdapter())
     result = service.discover_products("US Tech 100")

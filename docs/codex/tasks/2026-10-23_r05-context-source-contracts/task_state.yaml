@@ -1,0 +1,8 @@
+objective: "Normalize provider-neutral macro/news records into traceable context signals"
+scope:
+  allowed: "offline domain/service/adapter contracts, synthetic tests, API003/F005 documentation"
+  forbidden: "real providers, network, credentials, dependencies, persistence, GUI, strategies, orders, AUTO"
+skills:
+  - codex-tradingig-analysis-scanner
+status: complete
+next_action: "Choose and map the first authorized real or manual macro/news provider"

@@ -1,0 +1,9 @@
+objective: "Add a disabled-by-default OpenAI Responses market-context provider"
+scope:
+  allowed: "strict structured output, injected secret/transport, offline tests, docs"
+  forbidden: "live call, default model, web search, key persistence, broker/execution path"
+skills:
+  - openai-docs
+  - codex-tradingig-analysis-scanner
+status: waiting_human_validation
+next_action: "Select a model, secure an API key and authorize one bounded live metadata-only call"

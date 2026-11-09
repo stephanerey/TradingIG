@@ -1,0 +1,28 @@
+objective: "Add a default-deny, offline AUTO readiness gate without activating execution"
+scope:
+  allowed: "domain/service contracts, synthetic tests, R08 documentation"
+  forbidden: "AUTO activation, IG mutation, LIVE access, dependencies, migrations, GUI wiring"
+skills:
+  - codex-tradingig-accounts-risk
+  - codex-tradingig-supervised-demo-gate
+status: complete_offline_gate_only
+decisions:
+  - "AUTO remains disabled and LIVE remains forbidden"
+  - "No real whitelist, quota or acceptance record was invented"
+evidence:
+  targeted_tests: "37 passed"
+  full_tests: "239 passed"
+  lint: "passed"
+  format: "passed for new Python files"
+changed_files:
+  - src/trading_ig_assistant/domain/automation.py
+  - src/trading_ig_assistant/services/automation_readiness_gate.py
+  - tests/unit/test_automation_readiness_gate.py
+  - docs/domain/BUSINESS_RULES.md
+  - docs/domain/RISK_REGISTER.md
+  - docs/domain/HUMAN_VALIDATION_RULES.md
+  - docs/prd/30_feature/F007_software_pending_orders.md
+  - docs/prd/02_tasks/phases/R08_optional_automation.md
+  - docs/prd/02_tasks/tasks_now.md
+  - docs/CURRENT_STATE.md
+next_action: "Request a distinct product decision before any quantitative AUTO candidate pass"

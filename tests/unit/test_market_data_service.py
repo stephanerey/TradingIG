@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from trading_ig_assistant.domain.market_data import (
@@ -10,6 +11,7 @@ from trading_ig_assistant.domain.market_data import (
 )
 from trading_ig_assistant.domain.streaming import PRICE_QUOTE_SPEC, StreamState
 from trading_ig_assistant.services.candle_aggregation_service import (
+    CandleAggregationService,
     chart_update_ohlc,
     live_price_for_quote,
     price_ohlc_from_payload,
@@ -170,4 +172,78 @@ def test_historical_price_conversion_uses_selected_basis() -> None:
         Decimal("102.3"),
         Decimal("99.3"),
         Decimal("101.3"),
+    )
+
+
+def test_one_minute_updates_and_revisions_preserve_five_minute_ohlc() -> None:
+    service = CandleAggregationService()
+    candles = ()
+
+    def timestamp_ms(minute: int) -> int:
+        return int(datetime(2026, 5, 11, 10, minute, tzinfo=UTC).timestamp() * 1000)
+
+    updates = [
+        (0, 100.0, 102.0, 99.0, 101.0),
+        (1, 101.0, 105.0, 100.0, 104.0),
+        (2, 104.0, 106.0, 103.0, 105.0),
+        (3, 105.0, 105.5, 102.0, 103.0),
+        (4, 103.0, 104.0, 101.0, 102.0),
+    ]
+    for minute, open_value, high_value, low_value, close_value in updates:
+        event = service.apply_chart_update(
+            candles,
+            ChartCandleUpdate(
+                epic="EPIC.ONE",
+                interval="1MINUTE",
+                timestamp_ms=timestamp_ms(minute),
+                open=open_value,
+                high=high_value,
+                low=low_value,
+                close=close_value,
+            ),
+            interval_seconds=300,
+        )
+        candles = event.candles
+
+    assert len(candles) == 1
+    assert (candles[0].open, candles[0].high, candles[0].low, candles[0].close) == (
+        Decimal("100.0"),
+        Decimal("106.0"),
+        Decimal("99.0"),
+        Decimal("102.0"),
+    )
+
+    revised_first = service.apply_chart_update(
+        candles,
+        ChartCandleUpdate(
+            epic="EPIC.ONE",
+            interval="1MINUTE",
+            timestamp_ms=timestamp_ms(0),
+            open=98.0,
+            high=101.0,
+            low=97.0,
+            close=100.0,
+        ),
+        interval_seconds=300,
+    )
+    revised_last = service.apply_chart_update(
+        revised_first.candles,
+        ChartCandleUpdate(
+            epic="EPIC.ONE",
+            interval="1MINUTE",
+            timestamp_ms=timestamp_ms(4),
+            open=103.0,
+            high=107.0,
+            low=101.0,
+            close=106.0,
+        ),
+        interval_seconds=300,
+    )
+
+    candle = revised_last.candles[0]
+    assert (candle.open, candle.high, candle.low, candle.close) == (
+        Decimal("98.0"),
+        Decimal("107.0"),
+        Decimal("97.0"),
+        Decimal("106.0"),
     )

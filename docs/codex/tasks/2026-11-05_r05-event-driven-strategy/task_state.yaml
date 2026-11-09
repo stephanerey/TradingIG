@@ -1,0 +1,11 @@
+schema_version: 1
+status: completed
+objective: "Implémenter EVENT_DRIVEN sans inférence de source, direction ou prix."
+next_action: "Brancher les stratégies dans un scanner fonctionnel et visible, sans AUTO."
+protected_state:
+  branch: chore/sr41-upgrade
+  head: 512c16d
+  preserve_dirty_worktree: true
+external_effects:
+  network_calls: false
+  broker_orders: false

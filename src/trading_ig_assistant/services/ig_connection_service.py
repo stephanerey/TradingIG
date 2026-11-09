@@ -13,6 +13,10 @@ from trading_ig_assistant.app.config import IGEnvironment
 from trading_ig_assistant.domain.instruments import Account
 
 
+class AccountSwitchNotConfirmedError(RuntimeError):
+    """Raised when IG does not confirm the requested account context."""
+
+
 class IGAccountAdapter(Protocol):
     def login(self, credentials: IGCredentials) -> IGSession:
         """Authenticate against IG."""
@@ -71,8 +75,17 @@ class IGConnectionService:
         try:
             session = adapter.login(credentials)
             accounts = adapter.get_accounts()
-            if _account_exists(accounts, request.selected_account_id):
-                session = adapter.switch_account(request.selected_account_id or "")
+            if (
+                _account_exists(accounts, request.selected_account_id)
+                and request.selected_account_id != session.current_account_id
+            ):
+                requested_account_id = request.selected_account_id or ""
+                switched_session = adapter.switch_account(requested_account_id)
+                if switched_session.current_account_id != requested_account_id:
+                    raise AccountSwitchNotConfirmedError(
+                        "IG did not confirm the requested account context."
+                    )
+                session = switched_session
             return IGConnectionResult(
                 environment=request.environment,
                 current_account_id=session.current_account_id,

@@ -1,0 +1,8 @@
+objective: "Add typed, versioned and safely degradable AI market-context snapshots"
+scope:
+  allowed: "offline domain/service code, synthetic providers/tests, R05/F005 documentation"
+  forbidden: "external AI/news providers, network, strategies, orders, AUTO, persistence, GUI"
+skills:
+  - codex-tradingig-analysis-scanner
+status: complete
+next_action: "Select and implement authorized macro/news and AI providers in a separate lot"

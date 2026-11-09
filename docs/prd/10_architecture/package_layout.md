@@ -1,8 +1,11 @@
 # Package Layout
 
+> **V1.2 reconstruction — 2026-10-22:** [Project conventions](../00_conventions/tradingig_v1_2_conventions.md) and [reconciliation decisions](../01_product/decisions.md) apply. Original text is preserved; documented V1.2 changes govern current scope. No implementation or activation is implied.
+
+
 > **PRD Policy:** **PROJECT (editable)** — Fill and update this file for the current project.
 
-**Last updated:** 2026-05-07
+**Last updated:** 2026-10-22
 
 ## Proposed layout
 ```text
@@ -80,3 +83,9 @@ trading-ig-assistant/
 
 ## Testing notes
 - Add import boundary tests if practical.
+
+## V1.2 scope alignment
+
+Preserve src/trading_ig_assistant and functional modules. Target chapter 4 names responsibilities; it does not require rebuilding the skeleton or renaming the whole package.
+
+Canonical requirements: [chapter 3](../20_refactor/codebase_findings.md), [chapter 4](overview.md).

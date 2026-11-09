@@ -1,0 +1,13 @@
+schema_version: 1
+status: completed
+objective: Implement a deterministic paper-only broker, pending engine and trade manager with no live-call path.
+allowed_scope:
+  - paper-only domain and service code
+  - deterministic replay and state-machine tests
+  - local in-memory alerts and journal integration
+forbidden_scope:
+  - authenticated IG order calls or execution enablement
+  - changes weakening LiveTradingDisabledError
+  - external notification providers or new dependencies
+open_requirements: []
+next_action: Evaluate R07 as a separate human-supervised capability gate; do not activate IG execution implicitly.

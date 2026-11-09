@@ -1,0 +1,19 @@
+schema_version: 1
+status: complete
+objective: >-
+  Use only current-session M1 streaming candles in the GUI, derive higher timeframes locally and
+  keep technical warmup non-blocking for the independent Paper workflow.
+scope:
+  - candle session accumulation
+  - GUI historical bootstrap policy
+  - scanner warmup messaging
+decisions:
+  - no IG historical REST or persisted candle-cache read in the default GUI path
+  - M1 is canonical and session-only
+  - missing technical history cannot become favorable evidence or an AUTO signal
+evidence:
+  - docs/codex/tasks/2026-11-05_session-only-candles/verification.md
+verification:
+  tests: 397 passed
+  ruff: targeted green
+next_action: Continue non-historical application development; defer provider selection.

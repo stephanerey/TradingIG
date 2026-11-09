@@ -1,0 +1,12 @@
+task: ui-paper-valid-defaults
+status: verified
+scope:
+  - validatable local Paper defaults
+protected:
+  - all risk vetoes
+  - IG order methods
+evidence:
+  - 17 targeted ticket tests passed
+  - 222 offline tests passed
+  - 21 protected IG regressions passed
+next: user may verify the new defaults in the provisional GUI

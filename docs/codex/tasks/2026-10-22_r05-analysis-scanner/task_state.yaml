@@ -1,0 +1,9 @@
+schema_version: 1
+status: completed
+objective: Implement deterministic indicators, macro context and explainable advisory scanner.
+allowed_scope:
+  - pure indicator and strategy/scanner domain code
+  - structured offline macro context
+  - deterministic tests and phase evidence
+open_requirements: []
+next_action: Start R06 only after its domain-skill gate is validated; keep live execution disabled.

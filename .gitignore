@@ -31,3 +31,5 @@ Thumbs.db
 .codex/skills/
 .codex_backups/
 .local_backups/
+# SR local authentication state
+.playwright/.auth/

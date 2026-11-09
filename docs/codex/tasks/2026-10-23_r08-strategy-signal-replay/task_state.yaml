@@ -1,0 +1,9 @@
+objective: "Replay an injected strategy over future-blind frames with auditable signal evidence"
+scope:
+  allowed: "offline replay domain/service code, synthetic tests, R08 documentation"
+  forbidden: "strategy implementation, scoring, intents, fills, broker calls, AUTO, persistence, GUI"
+skills:
+  - codex-tradingig-analysis-scanner
+  - codex-tradingig-paper-execution
+status: core_complete_activation_not_authorized
+next_action: "Select a concrete strategy and real dataset before scanner/execution replay wiring"

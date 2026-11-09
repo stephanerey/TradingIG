@@ -1,8 +1,11 @@
 # Non-functional Requirements
 
+> **V1.2 reconstruction — 2026-10-22:** [Project conventions](../00_conventions/tradingig_v1_2_conventions.md) and [reconciliation decisions](../01_product/decisions.md) apply. Original text is preserved; documented V1.2 changes govern current scope. No implementation or activation is implied.
+
+
 > **PRD Policy:** **PROJECT (editable)** — Fill and update this file for the current project.
 
-**Last updated:** 2026-05-07
+**Last updated:** 2026-10-22
 
 ## Performance
 - UI should remain responsive during streaming updates.
@@ -33,3 +36,9 @@
 - Demo/dry-run first.
 - Live execution explicit and visible.
 - Max risk and max exposure hard gates.
+
+## V1.2 scope alignment
+
+Chapter 15.3 targets are measurements, not guaranteed broker latency. Preserve Qt responsiveness, coalesced updates, safe degradation, recoverable caches/audit and explicit unknown data. Network/AI failure must not block local state management.
+
+Canonical requirements: [chapter 6](../30_feature/F003_realtime_market_data_and_charts.md), [chapter 15](../30_feature/F013_alerts_diagnostics_and_resilience.md), [chapter 16](../10_architecture/security_and_auth.md).

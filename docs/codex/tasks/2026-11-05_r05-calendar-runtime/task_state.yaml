@@ -1,0 +1,12 @@
+schema_version: 1
+status: deferred
+objective: "Valider puis rafraîchir Trading Economics hors de la boucle Qt, sans exécution."
+next_action: "Reprendre lorsque l'utilisateur disposera d'un abonnement et d'une clé Trading Economics."
+protected_state:
+  branch: chore/sr41-upgrade
+  head: 512c16d
+  preserve_dirty_worktree: true
+external_effects:
+  real_api_calls: false
+  credentials_added: false
+  broker_orders: false

@@ -1,10 +1,13 @@
 # PRD — IG Trading Assistant
 
+> **V1.2 reconstruction — 2026-10-22:** [Project conventions](00_conventions/tradingig_v1_2_conventions.md) apply; original project text is retained and explicit scope changes are recorded in [decisions](01_product/decisions.md).
+
+
 > **PRD Policy:** **PROJECT (editable)** — Project-specific source of truth for the IG Trading Assistant.
 
-**Status:** Draft ready for P00 bootstrap  
-**Owner:** Stéphane  
-**Last updated:** 2026-05-07
+**Status:** V1.2 reconstructed; documentary consolidation, SR00 preview pending\
+**Owner:** Stéphane\
+**Last updated:** 2026-10-22
 
 ## Product summary
 The IG Trading Assistant is a Python desktop application that connects to the IG REST and Streaming APIs to help a retail trader analyze a short list of IG markets, select an available Barrier or Option contract, build a risk-controlled ticket, monitor the open trade, and manage stops according to deterministic rules.
@@ -72,8 +75,8 @@ The application MUST prioritize discipline over activity: it MUST be able to rec
 - `30_feature/API003_news_and_macro_adapters.md`
 
 ## Current execution phase
-Current phase: **P00 Bootstrap**.  
-Goal: build a safe skeleton, validate IG API access in demo mode, and implement read-only market data before any live order capability.
+Current phase: **PRD documentary consolidation**. Historical P00 remains recorded; next eligible task is **SR00 preview**, not R00.\
+Goal: preserve the existing application and consolidate requirements. No IG connection, SR installation or live-order capability is activated in this task.
 
 ## Non-negotiable constraints
 - No hardcoded credentials.
@@ -82,3 +85,19 @@ Goal: build a safe skeleton, validate IG API access in demo mode, and implement 
 - The system MUST support demo mode first.
 - The app MUST never present any trade as risk-free.
 - The app MUST keep an immutable event log for every recommendation, ticket calculation, order change, and stop/limit update.
+
+## V1.2 reconstructed — current entry points
+
+This is the local reconstruction explicitly authorized on 2026-10-22 from the recovered V1.1 archive. It is not the unavailable original V1.2 pack. Compatible project customizations remain; historical phases are retained.
+
+1. [Project conventions and source precedence](00_conventions/tradingig_v1_2_conventions.md).
+2. [Decisions and unresolved settings inheritance](01_product/decisions.md).
+3. [Full source-to-module coverage](00_conventions/v1_2_source_coverage.md).
+4. [SR00/R00–R08 roadmap](01_product/roadmap.md) and [current task board](02_tasks/tasks_now.md).
+5. [F001–F013 / API001–API003 index](30_feature/feature_index.md).
+6. [Domain contracts](10_architecture/domain_contracts.md) and [acceptance matrix](90_quality/acceptance_matrix.md).
+7. [SR 4.1 target workflow](05_coding_agent/sr41_development_workflow.md) and [future SR00 prompt](05_coding_agent/sr00_start_prompt.md).
+
+## Delivery boundary
+
+Documentation is consolidated; application acceptance tests and SR migration are not claimed as passed. The original LOCKED readiness checklist remains available but unchecked. SR00 requires its own source/version/commit verification, preview and upgrade approval. No live execution is installed or enabled by this PRD.

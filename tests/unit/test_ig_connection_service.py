@@ -3,6 +3,7 @@ from trading_ig_assistant.adapters.ig_rest import IGSession
 from trading_ig_assistant.app.config import IGEnvironment
 from trading_ig_assistant.domain.instruments import Account
 from trading_ig_assistant.services.ig_connection_service import (
+    AccountSwitchNotConfirmedError,
     IGConnectionRequest,
     IGConnectionService,
 )
@@ -12,6 +13,7 @@ class FakeAccountAdapter:
     def __init__(self) -> None:
         self.logged_out = False
         self.credentials: IGCredentials | None = None
+        self.switch_calls: list[str] = []
 
     def login(self, credentials: IGCredentials) -> IGSession:
         self.credentials = credentials
@@ -31,6 +33,7 @@ class FakeAccountAdapter:
         ]
 
     def switch_account(self, account_id: str, *, set_default: bool = False) -> IGSession:
+        self.switch_calls.append(account_id)
         return IGSession(
             cst="fake-cst",
             security_token="fake-token-switched",
@@ -77,6 +80,73 @@ def test_connection_service_switches_to_selected_account() -> None:
     )
 
     assert result.current_account_id == "ACC123"
+    assert adapter.switch_calls == []
+
+
+def test_connection_service_switches_only_when_selected_account_differs() -> None:
+    class DifferentAccountAdapter(FakeAccountAdapter):
+        def get_accounts(self) -> list[Account]:
+            return [
+                Account(account_id="ACC123", account_name="Initial"),
+                Account(account_id="ACC456", account_name="Selected"),
+            ]
+
+    adapter = DifferentAccountAdapter()
+    service = IGConnectionService(adapter_factory=lambda _environment: adapter)
+
+    result = service.validate_read_only_connection(
+        IGConnectionRequest(
+            environment=IGEnvironment.DEMO,
+            username="demo-user",
+            password="fake-password",
+            api_key="fake-api-key",
+            selected_account_id="ACC456",
+        )
+    )
+
+    assert result.current_account_id == "ACC456"
+    assert adapter.switch_calls == ["ACC456"]
+
+
+def test_connection_service_rejects_unconfirmed_account_switch() -> None:
+    class UnconfirmedSwitchAdapter(FakeAccountAdapter):
+        def get_accounts(self) -> list[Account]:
+            return [
+                Account(account_id="ACC123", account_name="Initial"),
+                Account(account_id="ACC456", account_name="Selected"),
+            ]
+
+        def switch_account(
+            self,
+            account_id: str,
+            *,
+            set_default: bool = False,
+        ) -> IGSession:
+            return IGSession(
+                cst="fake-cst",
+                security_token="fake-token",
+                current_account_id="OTHER-ACCOUNT",
+            )
+
+    adapter = UnconfirmedSwitchAdapter()
+    service = IGConnectionService(adapter_factory=lambda _environment: adapter)
+
+    try:
+        service.validate_read_only_connection(
+            IGConnectionRequest(
+                environment=IGEnvironment.DEMO,
+                username="demo-user",
+                password="fake-password",
+                api_key="fake-api-key",
+                selected_account_id="ACC456",
+            )
+        )
+    except AccountSwitchNotConfirmedError:
+        pass
+    else:
+        raise AssertionError("Expected AccountSwitchNotConfirmedError")
+
+    assert adapter.logged_out is True
 
 
 def test_connection_service_rejects_email_identifier_before_http() -> None:

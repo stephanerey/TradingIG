@@ -1,39 +1,20 @@
-# TOKEN_OPTIMIZATION.md
+# Token and cache policy — SR 4.1
 
-## Objectif
-Réduire les tokens consommés par les sorties terminal longues sans perdre l'information utile.
+## Input
 
-## Principe
-- La sortie brute est conservée localement.
-- Codex ne lit que le résumé compact sauf besoin.
-- En cas d'échec incompris, Codex relit le brut ciblé.
+- permanent SR context target: at most 1,500 tokens;
+- ordinary SR overhead target: at most 3,000 uncached tokens;
+- complex-pass SR overhead target: at most 8,000 uncached tokens;
+- zero to two method skills normally, three maximum for a complex pass.
 
-## Commande recommandée
+Load exact ranges and triggered procedures. Keep raw logs and large artifacts outside context; inject a bounded summary and stable path. Retry a corrected tool call at most once.
 
-```bash
-python scripts/codex/python_token_run.py -- pytest -q
-python scripts/codex/python_token_run.py -- ruff check .
-```
+## Output
 
-## Sorties brutes
+Lead with the result. Ordinary closure should fit in about 400 words. Report only used evidence, relevant limits and remaining acceptance.
 
-Par défaut :
+## Cache
 
-```text
-.codex_artifacts/command_logs/
-```
+Keep permanent instructions, tool definitions and their order stable. Put task-specific and volatile content later. Add deferred tools append-only; prefer allowlists over rebuilding the catalog.
 
-## Quand utiliser
-
-- pytest très long ;
-- logs applicatifs ;
-- `git diff` volumineux ;
-- scans de fichiers ;
-- commandes réseau ou matériel bavardes ;
-- build ou packaging.
-
-## Quand ne pas utiliser
-
-- commande courte ;
-- erreur concise ;
-- sortie dont chaque ligne est significative.
+Track separately: context occupancy, uncached input, cached input or writes, output, reasoning when available, tool-result volume and retries. Cached tokens still occupy context and must not be discounted in the context-pressure gate.

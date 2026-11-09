@@ -1,0 +1,12 @@
+schema_version: 1
+status: completed
+objective: "Normaliser hors ligne le calendrier Trading Economics avec sécurité et provenance."
+next_action: "Composer un probe/runtime non bloquant avant toute validation humaine avec une clé réelle."
+protected_state:
+  branch: chore/sr41-upgrade
+  head: 512c16d
+  preserve_dirty_worktree: true
+external_effects:
+  real_api_calls: false
+  credentials_added: false
+  broker_orders: false

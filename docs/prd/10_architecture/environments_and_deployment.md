@@ -1,8 +1,11 @@
 # Environments and Deployment
 
+> **V1.2 reconstruction — 2026-10-22:** [Project conventions](../00_conventions/tradingig_v1_2_conventions.md) and [reconciliation decisions](../01_product/decisions.md) apply. Original text is preserved; documented V1.2 changes govern current scope. No implementation or activation is implied.
+
+
 > **PRD Policy:** **PROJECT (editable)** — Fill and update this file for the current project.
 
-**Last updated:** 2026-05-07
+**Last updated:** 2026-10-22
 
 ## Environments
 | Environment | Purpose | Trading allowed | Notes |
@@ -34,3 +37,9 @@ Live mode MUST require:
 
 ## Testing notes
 - Unit tests verify that execution calls are blocked outside allowed modes.
+
+## V1.2 scope alignment
+
+ANALYSIS/SUPERVISED/AUTO are modes; PAPER/DEMO/LIVE are execution environments. Safe start is ANALYSIS. Continuous V1 operation keeps the GUI open, without implying a Windows service. No live activation during SR00–R06.
+
+Canonical requirements: [chapter 9](../30_feature/F007_software_pending_orders.md), [chapter 12](../30_feature/F012_windows_workspace_and_settings.md), [chapter 16](security_and_auth.md).

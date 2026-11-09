@@ -1,0 +1,12 @@
+schema_version: 1
+status: completed
+objective: "Choisir une source calendrier macro structurée avant intégration."
+next_action: "Choix Trading Economics validé par l'utilisateur le 2026-11-05 ; adaptateur hors ligne livré."
+protected_state:
+  branch: chore/sr41-upgrade
+  head: 512c16d
+  preserve_dirty_worktree: true
+external_effects:
+  network_integration: true
+  credentials_added: false
+  broker_orders: false

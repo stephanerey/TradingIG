@@ -1,10 +1,5 @@
-# Decisions
+# decisions.md
 
-## Décisions prises
-- 
-
-## Alternatives rejetées
-- 
-
-## Validation humaine requise
-- 
+## Decisions validees
+| Date | Decision | Validee par | Impact |
+|---|---|---|---|

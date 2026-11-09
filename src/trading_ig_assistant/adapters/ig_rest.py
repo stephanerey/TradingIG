@@ -13,6 +13,12 @@ from typing import Any, Protocol
 
 from trading_ig_assistant.adapters.credentials import IGCredentials
 from trading_ig_assistant.app.config import IGEnvironment
+from trading_ig_assistant.domain.adapter_contracts import (
+    AccountIsolationError,
+    AccountRef,
+    BrokerCapabilities,
+    CapabilitySupport,
+)
 from trading_ig_assistant.domain.instruments import (
     Account,
     MarketCategory,
@@ -180,6 +186,30 @@ class IGRestAdapter:
         self._api_key: str | None = None
 
     @property
+    def provider_id(self) -> str:
+        return "ig"
+
+    @property
+    def broker_id(self) -> str:
+        return "ig"
+
+    def capabilities(self, account: AccountRef, _product_id: str) -> BrokerCapabilities:
+        if account.broker_id != self.broker_id or account.environment != self.environment.value:
+            raise AccountIsolationError(
+                "IG capability request does not match the adapter environment."
+            )
+        if (
+            self._session is not None
+            and self._session.current_account_id is not None
+            and account.account_id != self._session.current_account_id
+        ):
+            raise AccountIsolationError("IG capability request does not match the active account.")
+        return BrokerCapabilities(
+            discover_products=CapabilitySupport.SUPPORTED,
+            read_accounts=CapabilitySupport.SUPPORTED,
+        )
+
+    @property
     def base_url(self) -> str:
         if self.environment == IGEnvironment.LIVE:
             return IG_LIVE_BASE_URL
@@ -319,8 +349,8 @@ class IGRestAdapter:
         categories = response.body.get("categories", [])
         parsed_categories = [
             MarketCategory(
-                category_id=str(item.get("id") or item.get("categoryId") or ""),
-                name=str(item.get("name") or item.get("categoryName") or ""),
+                category_id=str(item.get("id") or item.get("categoryId") or item.get("code") or ""),
+                name=str(item.get("name") or item.get("categoryName") or item.get("code") or ""),
                 raw=item,
             )
             for item in categories
@@ -445,10 +475,7 @@ class IGRestAdapter:
                     )
                     request_mode = "max-points-fallback"
             except IGAPIError as exc:
-                if not (
-                    max_points is not None
-                    and _is_malformed_date_error(exc)
-                ):
+                if not (max_points is not None and _is_malformed_date_error(exc)):
                     raise
                 LOGGER.debug(
                     "IG prices fallback epic=%s resolution=%s requested_mode=%s "
@@ -506,6 +533,7 @@ class IGRestAdapter:
         version: str,
         json_body: dict[str, Any] | None = None,
         include_session: bool = True,
+        extra_headers: dict[str, str] | None = None,
     ) -> HttpResponse:
         headers = {
             "Accept": "application/json; charset=UTF-8",
@@ -513,6 +541,8 @@ class IGRestAdapter:
         }
         if self._api_key:
             headers["X-IG-API-KEY"] = self._api_key
+        if extra_headers:
+            headers.update(extra_headers)
         if include_session:
             if self._session is None:
                 raise IGAPIError("IG REST session is not authenticated.")

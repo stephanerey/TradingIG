@@ -5,15 +5,19 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
+import sqlite3
 import sys
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
+from uuid import uuid4
 
 from PyQt5 import QtCore, QtWidgets
 
-from trading_ig_assistant.adapters.credentials import build_default_credential_store
+from trading_ig_assistant.adapters.credentials import SecretValue, build_default_credential_store
 from trading_ig_assistant.adapters.ig_rest import (
     HistoricalPriceFetchResult,
     IGAPIError,
@@ -23,27 +27,56 @@ from trading_ig_assistant.adapters.ig_rest import (
     load_prices_with_adaptive_fallback,
 )
 from trading_ig_assistant.adapters.ig_streaming import IGStreamingAdapter
+from trading_ig_assistant.adapters.news_provider import NewsProvider
+from trading_ig_assistant.adapters.official_rss_news import (
+    ecb_press_news_provider,
+    federal_reserve_monetary_news_provider,
+)
 from trading_ig_assistant.app.config import (
     AppConfig,
     IGConnectionProfileConfig,
     IGEnvironment,
+    WorkspaceState,
     default_config_path,
+    default_paper_database_path,
     load_config,
     save_config,
 )
 from trading_ig_assistant.app.streaming_bridge import StreamingEventBridge
+from trading_ig_assistant.domain.ai_context import (
+    AIAnalysisStatus,
+    MarketContextSnapshot,
+    is_ai_citation_eligible,
+)
+from trading_ig_assistant.domain.analysis import ScoreBand, ScoreComponentName
+from trading_ig_assistant.domain.context_sources import NewsCollectionSnapshot
 from trading_ig_assistant.domain.instruments import Account
+from trading_ig_assistant.domain.macro_context import ContextSignal
 from trading_ig_assistant.domain.market_data import (
     CandleSource,
     ChartCandleSeries,
     ChartCandleUpdate,
+    ChartPriceBasis,
     PriceSeries,
     Quote,
 )
-from trading_ig_assistant.domain.products import ProductType, TradableProduct
+from trading_ig_assistant.domain.market_navigation import initial_ig_reference_epics
+from trading_ig_assistant.domain.products import AssetClass, ProductType, TradableProduct
+from trading_ig_assistant.persistence.paper_session_codec import (
+    decode_paper_session_state,
+    encode_paper_session_state,
+)
+from trading_ig_assistant.persistence.repositories import (
+    CorruptPaperSnapshotError,
+    PaperSessionSnapshotRepository,
+)
+from trading_ig_assistant.persistence.sqlite_store import (
+    MigrationError,
+    SQLiteStore,
+    UnsupportedSchemaError,
+)
 from trading_ig_assistant.services.candle_aggregation_service import (
     CandleAggregationService,
-    chart_scale_for_interval,
 )
 from trading_ig_assistant.services.candle_history_service import (
     CandleHistoryService,
@@ -51,26 +84,127 @@ from trading_ig_assistant.services.candle_history_service import (
 from trading_ig_assistant.services.candle_history_service import (
     _stream_cache_root as _stream_candle_cache_root,
 )
-from trading_ig_assistant.services.ig_connection_service import IGConnectionRequest
+from trading_ig_assistant.services.ig_connection_service import (
+    AccountSwitchNotConfirmedError,
+    IGConnectionRequest,
+)
+from trading_ig_assistant.services.macro_context_service import MacroContextService
+from trading_ig_assistant.services.market_navigation_catalog_service import (
+    IGProductMarketBindingRegistry,
+    MarketNavigationCatalogError,
+)
+from trading_ig_assistant.services.multi_market_session_candle_service import (
+    MultiMarketSessionCandleService,
+)
+from trading_ig_assistant.services.news_ai_evidence_service import (
+    build_news_ai_evidence_signals,
+)
+from trading_ig_assistant.services.news_context_health_service import (
+    build_news_source_health_signal,
+)
+from trading_ig_assistant.services.openai_context_runtime_service import (
+    run_openai_market_context,
+)
+from trading_ig_assistant.services.paper_session import (
+    PaperSessionService,
+    PaperTicketSubmission,
+)
+from trading_ig_assistant.services.product_context_projection_service import (
+    ProductContextProjectionService,
+    build_context_score_component,
+)
 from trading_ig_assistant.services.product_discovery_service import (
     ProductDiscoveryResult,
     ProductDiscoveryService,
     read_discovery_report,
     write_discovery_report,
 )
+from trading_ig_assistant.services.quote_candle_fallback_service import (
+    QuoteCandleFallbackService,
+)
+from trading_ig_assistant.services.scanner_component_service import ScannerComponentService
+from trading_ig_assistant.services.scanner_preview_service import build_scanner_preview
+from trading_ig_assistant.services.scanner_runtime_batch_service import (
+    ScannerRuntimeBatchResult,
+    ScannerRuntimeBatchService,
+)
+from trading_ig_assistant.services.setup_scoring_service import build_banded_score_component
+from trading_ig_assistant.services.trading_economics_calendar_runtime import (
+    TradingEconomicsRuntimeResult,
+    refresh_trading_economics_calendar,
+)
 from trading_ig_assistant.ui.about_dialog import AboutDialog
 from trading_ig_assistant.ui.account_status_widget import AccountStatusRibbonWidget
 from trading_ig_assistant.ui.chart_view import ChartView
+from trading_ig_assistant.ui.economic_calendar_refresh import (
+    CalendarRuntimeRunner,
+    EconomicCalendarRefreshWorker,
+)
 from trading_ig_assistant.ui.log_view_dialog import LogViewDialog
 from trading_ig_assistant.ui.macro_ribbon_widget import MacroRibbonWidget
+from trading_ig_assistant.ui.official_news_refresh import (
+    OfficialNewsRefreshResult,
+    OfficialNewsRefreshWorker,
+)
+from trading_ig_assistant.ui.openai_context_refresh import (
+    OpenAIContextRefreshWorker,
+    OpenAIContextRunner,
+)
+from trading_ig_assistant.ui.openai_web_research import WebResearchDialog
+from trading_ig_assistant.ui.paper_portfolio_view import PaperPortfolioWidget
 from trading_ig_assistant.ui.product_selector import ProductSelectorWidget
+from trading_ig_assistant.ui.scanner_view import ScannerPreviewWidget
 from trading_ig_assistant.ui.settings_dialog import SettingsDialog
 from trading_ig_assistant.utils.logging_config import configure_logging, emit_session_banner
 from trading_ig_assistant.utils.redaction import mask_identifier
 
 LOGGER = logging.getLogger(__name__)
-PRICE_HISTORY_POINTS = 240
 PRODUCT_STREAM_ITEMS_LIMIT = 20
+CHART_STREAM_ITEMS_LIMIT = 6
+HISTORY_SNAPSHOT_POINTS = 32
+HISTORY_CACHE_REFRESH_TTL = timedelta(seconds=60)
+HISTORY_ALLOWANCE_PROBE_COOLDOWN = timedelta(hours=6)
+OFFICIAL_NEWS_REFRESH_INTERVAL_MS = 15 * 60 * 1000
+OFFICIAL_NEWS_HEALTH_VALIDITY = timedelta(minutes=15)
+OPENAI_NEWS_EVIDENCE_LIMIT = 20
+OPENAI_CONTEXT_REFRESH_INTERVAL_MS = 15 * 60 * 1000
+CALENDAR_REFRESH_INTERVAL_MS = 15 * 60 * 1000
+SESSION_ONLY_CANDLES = True
+
+
+def _prioritized_price_epics(
+    selected_product: TradableProduct | None,
+    visible_epics: list[str],
+    chart_product: TradableProduct | None,
+) -> list[str]:
+    """Keep the selected product inside the capped direct-quote subscription."""
+    candidates = [
+        selected_product.epic if selected_product is not None else "",
+        *visible_epics,
+        chart_product.epic if chart_product is not None else "",
+    ]
+    return list(dict.fromkeys(epic for epic in candidates if epic))
+
+
+def _prioritized_chart_epics(
+    selected_chart_product: TradableProduct | None,
+    baseline_reference_epics: tuple[str, ...],
+) -> list[str]:
+    candidates = [
+        selected_chart_product.epic if selected_chart_product is not None else "",
+        *baseline_reference_epics,
+    ]
+    epics = list(dict.fromkeys(epic for epic in candidates if epic))
+    if len(epics) > CHART_STREAM_ITEMS_LIMIT:
+        raise ValueError("configured chart stream universe exceeds the bounded item limit")
+    return epics
+
+
+def _chart_source_overrides_from_config(config: AppConfig) -> dict[str, str]:
+    overrides = dict(config.chart_source_overrides)
+    for binding in config.product_market_bindings:
+        overrides[binding.product_epic] = binding.reference_epic
+    return overrides
 
 
 @dataclass
@@ -79,6 +213,13 @@ class ActiveIGConnection:
     current_account_id: str | None
     accounts: list[Account]
     adapter: IGRestAdapter
+
+
+@dataclass(frozen=True)
+class OpenAIContextSession:
+    model: str
+    max_output_tokens: int
+    automatic_refresh: bool = False
 
 
 @dataclass
@@ -95,6 +236,8 @@ class HistoricalAllowanceState:
     blocked_until: datetime | None = None
     affected_account_id: str | None = None
     affected_epic: str | None = None
+    remaining_points: int | None = None
+    total_points: int | None = None
 
     def is_blocked(
         self,
@@ -119,6 +262,37 @@ class ResolvedChartSource:
     method: str
 
 
+@dataclass(frozen=True)
+class PriceHistoryRequest:
+    generation: int
+    environment: IGEnvironment
+    account_id: str | None
+    selected_product_epic: str
+    products: tuple[TradableProduct, ...]
+    resolution: str
+    range_key: str
+    price_basis: ChartPriceBasis
+    max_points: int
+
+
+@dataclass(frozen=True)
+class PriceHistoryAttempt:
+    product: TradableProduct
+    result: HistoricalPriceFetchResult
+
+
+@dataclass(frozen=True)
+class PriceHistoryLoadResult:
+    request: PriceHistoryRequest
+    attempts: tuple[PriceHistoryAttempt, ...]
+
+
+@dataclass(frozen=True)
+class PriceHistoryFailure:
+    request: PriceHistoryRequest
+    message: str
+
+
 class ConnectionWorker(QtCore.QObject):
     succeeded = QtCore.pyqtSignal(object)
     failed = QtCore.pyqtSignal(str)
@@ -136,11 +310,21 @@ class ConnectionWorker(QtCore.QObject):
             credentials = _credentials_from_request(self._request)
             session = adapter.login(credentials)
             accounts = adapter.get_accounts()
-            if self._request.selected_account_id and _account_id_exists(
-                accounts,
-                self._request.selected_account_id,
+            if (
+                self._request.selected_account_id
+                and self._request.selected_account_id != session.current_account_id
+                and _account_id_exists(
+                    accounts,
+                    self._request.selected_account_id,
+                )
             ):
-                session = adapter.switch_account(self._request.selected_account_id)
+                requested_account_id = self._request.selected_account_id
+                switched_session = adapter.switch_account(requested_account_id)
+                if switched_session.current_account_id != requested_account_id:
+                    raise AccountSwitchNotConfirmedError(
+                        "IG did not confirm the requested account context."
+                    )
+                session = switched_session
             result = ActiveIGConnection(
                 environment=self._request.environment,
                 current_account_id=session.current_account_id,
@@ -181,10 +365,12 @@ class ProductDiscoveryWorker(QtCore.QObject):
         self,
         adapter: IGRestAdapter,
         environment: IGEnvironment,
+        search_term: str | None = None,
     ) -> None:
         super().__init__()
         self._adapter = adapter
         self._environment = environment
+        self._search_term = search_term
 
     @QtCore.pyqtSlot()
     def run(self) -> None:
@@ -197,7 +383,11 @@ class ProductDiscoveryWorker(QtCore.QObject):
                 ),
             )
             service = ProductDiscoveryService(self._adapter)
-            results = [service.discover_all_products(max_details=0)]
+            results = [
+                service.search_product_summaries(self._search_term)
+                if self._search_term is not None
+                else service.discover_all_products(max_details=0)
+            ]
             if _results_contain_invalid_security_token(results):
                 raise IGAPIError("invalid-security-token: IG rejected the discovery session token.")
             LOGGER.debug(
@@ -224,53 +414,138 @@ class ProductDiscoveryWorker(QtCore.QObject):
 
 class PriceHistoryWorker(QtCore.QObject):
     succeeded = QtCore.pyqtSignal(object)
-    failed = QtCore.pyqtSignal(str)
+    failed = QtCore.pyqtSignal(object)
     finished = QtCore.pyqtSignal()
 
-    def __init__(self, adapter: IGRestAdapter, epic: str) -> None:
+    def __init__(self, adapter: IGRestAdapter, request: PriceHistoryRequest) -> None:
         super().__init__()
         self._adapter = adapter
-        self._epic = epic
+        self._request = request
 
     @QtCore.pyqtSlot()
     def run(self) -> None:
         try:
-            LOGGER.debug("Price history worker start epic=%s", self._epic)
-            series = self._adapter.get_prices(
-                self._epic,
-                resolution="MINUTE",
-                max_points=PRICE_HISTORY_POINTS,
-            )
             LOGGER.debug(
-                "Price history worker success epic=%s points=%s",
-                self._epic,
-                len(series.prices),
+                "Price history worker start selected_epic=%s candidates=%s",
+                self._request.selected_product_epic,
+                [product.epic for product in self._request.products],
             )
-            self.succeeded.emit(series)
+            attempts: list[PriceHistoryAttempt] = []
+            for product in self._request.products:
+                result = load_prices_with_adaptive_fallback(
+                    self._adapter,
+                    product.epic,
+                    resolution=self._request.resolution,
+                    requested_max_points=self._request.max_points,
+                    stop_on_allowance_error=product.product_type == ProductType.CASH_OR_DFB,
+                )
+                attempts.append(PriceHistoryAttempt(product=product, result=result))
+                if result.series is not None:
+                    break
+                if (
+                    product.product_type == ProductType.CASH_OR_DFB
+                    and _history_fallback_is_historical_allowance(result)
+                ):
+                    break
+            LOGGER.debug(
+                "Price history worker complete selected_epic=%s attempts=%s",
+                self._request.selected_product_epic,
+                len(attempts),
+            )
+            self.succeeded.emit(
+                PriceHistoryLoadResult(
+                    request=self._request,
+                    attempts=tuple(attempts),
+                )
+            )
         except Exception as exc:
-            LOGGER.debug("Price history worker failed epic=%s error=%s", self._epic, exc)
-            self.failed.emit(str(exc))
+            LOGGER.debug(
+                "Price history worker failed selected_epic=%s error=%s",
+                self._request.selected_product_epic,
+                exc,
+            )
+            self.failed.emit(PriceHistoryFailure(request=self._request, message=str(exc)))
         finally:
-            LOGGER.debug("Price history worker finished epic=%s", self._epic)
+            LOGGER.debug(
+                "Price history worker finished selected_epic=%s",
+                self._request.selected_product_epic,
+            )
             self.finished.emit()
 
 
 class MainWindow(QtWidgets.QMainWindow):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        workspace_persistence: bool = False,
+        paper_database_path: Path | None = None,
+        official_news_providers: tuple[NewsProvider, ...] = (),
+        official_news_refresh_interval_ms: int = OFFICIAL_NEWS_REFRESH_INTERVAL_MS,
+        openai_context_runner: OpenAIContextRunner = run_openai_market_context,
+        openai_key_reader=None,
+        openai_context_refresh_interval_ms: int = OPENAI_CONTEXT_REFRESH_INTERVAL_MS,
+        calendar_context_runner: CalendarRuntimeRunner = refresh_trading_economics_calendar,
+        calendar_key_reader=None,
+        calendar_refresh_interval_ms: int = CALENDAR_REFRESH_INTERVAL_MS,
+    ) -> None:
         super().__init__()
         LOGGER.debug("MainWindow initialization start")
-        self.setWindowTitle("Trading IG Assistant - P01 read-only shell")
+        self.setWindowTitle("Trading IG Assistant - analyse et Paper local")
         self.resize(1280, 820)
         self._config_path = default_config_path()
+        self._paper_database_path = paper_database_path or default_paper_database_path()
         self._config = load_config(self._config_path)
+        self._workspace_persistence = workspace_persistence
         self._credential_store = self._build_credential_store()
+        if official_news_refresh_interval_ms <= 0:
+            raise ValueError("official news refresh interval must be positive")
+        self._official_news_providers = official_news_providers
+        self._official_news_thread: QtCore.QThread | None = None
+        self._official_news_worker: OfficialNewsRefreshWorker | None = None
+        self._official_news_refresh_timer = QtCore.QTimer(self)
+        self._official_news_refresh_timer.setInterval(official_news_refresh_interval_ms)
+        self._official_news_refresh_timer.timeout.connect(self._refresh_official_news)
+        self._latest_news_snapshots: tuple[NewsCollectionSnapshot, ...] = ()
+        self._latest_macro_state = MacroContextService().build_state((), datetime.now(UTC))
+        self._latest_ai_context_snapshot: MarketContextSnapshot | None = None
+        self._ai_expiry_timer = QtCore.QTimer(self)
+        self._ai_expiry_timer.setSingleShot(True)
+        self._ai_expiry_timer.timeout.connect(self._refresh_ai_presentation)
+        self._openai_context_runner = openai_context_runner
+        self._openai_key_reader = openai_key_reader or (
+            lambda: os.environ.get("OPENAI_API_KEY", "")
+        )
+        self._openai_context_session: OpenAIContextSession | None = None
+        self._openai_context_thread: QtCore.QThread | None = None
+        self._openai_context_worker: OpenAIContextRefreshWorker | None = None
+        if openai_context_refresh_interval_ms <= 0:
+            raise ValueError("OpenAI context refresh interval must be positive")
+        self._openai_context_refresh_timer = QtCore.QTimer(self)
+        self._openai_context_refresh_timer.setInterval(openai_context_refresh_interval_ms)
+        self._openai_context_refresh_timer.timeout.connect(self._refresh_openai_context_automatic)
+        if calendar_refresh_interval_ms <= 0:
+            raise ValueError("calendar refresh interval must be positive")
+        self._calendar_context_runner = calendar_context_runner
+        self._calendar_key_reader = calendar_key_reader or (
+            lambda: os.environ.get("TRADING_ECONOMICS_API_KEY", "")
+        )
+        self._calendar_runtime_result: TradingEconomicsRuntimeResult | None = None
+        self._calendar_context_thread: QtCore.QThread | None = None
+        self._calendar_context_worker: EconomicCalendarRefreshWorker | None = None
+        self._calendar_refresh_timer = QtCore.QTimer(self)
+        self._calendar_refresh_timer.setInterval(calendar_refresh_interval_ms)
+        self._calendar_refresh_timer.timeout.connect(self._refresh_calendar_context)
         self._active_connection: ActiveIGConnection | None = None
         self._connection_thread: QtCore.QThread | None = None
         self._connection_worker: ConnectionWorker | None = None
         self._discovery_thread: QtCore.QThread | None = None
         self._discovery_worker: ProductDiscoveryWorker | None = None
+        self._targeted_discovery_origin: tuple[object, str | None, int] | None = None
         self._price_history_thread: QtCore.QThread | None = None
         self._price_history_worker: PriceHistoryWorker | None = None
+        self._price_history_generation = 0
+        self._pending_history_reload = False
+        self._pending_history_force_refresh = False
         self._price_history_cache: dict[
             tuple[str, str, str, str, int],
             CachedHistoryEntry,
@@ -280,12 +555,28 @@ class MainWindow(QtWidgets.QMainWindow):
             candle_aggregation_service=self._candle_aggregation_service,
             cache_root_provider=_stream_candle_cache_root,
         )
+        self._scanner_candle_history_service = CandleHistoryService(
+            cache_root_provider=_stream_candle_cache_root,
+        )
+        self._scanner_binding_registry = IGProductMarketBindingRegistry(
+            self._config.product_market_bindings
+        )
+        self._scanner_session_candles = MultiMarketSessionCandleService(
+            self._scanner_binding_registry,
+            candle_history_service=self._scanner_candle_history_service,
+            reference_epics=initial_ig_reference_epics(),
+        )
+        self._latest_scanner_runtime_batch: ScannerRuntimeBatchResult | None = None
         self._chart_candle_series: ChartCandleSeries | None = None
         self._chart_source_resolution_method = "selected fallback"
         self._live_chart_scale_requested = "1MINUTE"
         self._live_chart_scale_actual = "1MINUTE"
         self._aggregation_mode = "direct"
         self._chart_stream_scale_fallback_attempted = False
+        self._chart_stream_permission_fallback_attempted = False
+        self._chart_quote_candle_fallback_active = False
+        self._quote_candle_fallback_service = QuoteCandleFallbackService()
+        self._last_history_gap_refresh_key: tuple[str, int, str, str] | None = None
         self._last_history_reload_price_basis: object | None = None
         self._history_allowance_state = HistoricalAllowanceState()
         self._api_allowance_exceeded = False
@@ -295,14 +586,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self._visible_price_epics: list[str] = []
         self._loaded_cache_environment: IGEnvironment | None = None
         self._streaming_adapter: IGStreamingAdapter | None = None
-        self._streaming_bridge = StreamingEventBridge()
+        self._chart_stream_epics: tuple[str, ...] = ()
+        self._stream_generation = 0
+        self._streaming_bridge: StreamingEventBridge | None = None
+        self._paper_session = PaperSessionService()
+        self._paper_freshness_timer = QtCore.QTimer(self)
+        self._paper_freshness_timer.setInterval(1000)
+        self._paper_freshness_timer.timeout.connect(self._refresh_paper_freshness)
         self._build_menu()
         self._build_layout()
-        self._streaming_bridge.quote_received.connect(self._on_stream_quote)
-        self._streaming_bridge.chart_received.connect(self._on_stream_chart)
-        self._streaming_bridge.status_changed.connect(self._on_stream_status)
-        self._streaming_bridge.error_received.connect(self._on_stream_error)
+        if self._workspace_persistence:
+            self._restore_workspace_state()
         self._load_cached_discovery_results()
+        if self._official_news_providers:
+            self._official_news_refresh_timer.start()
+            QtCore.QTimer.singleShot(0, self._refresh_official_news)
         LOGGER.debug("MainWindow initialization complete")
 
     def _build_menu(self) -> None:
@@ -313,6 +611,21 @@ class MainWindow(QtWidgets.QMainWindow):
         tools_menu = self.menuBar().addMenu("&Tools")
         settings_action = tools_menu.addAction("Settings")
         settings_action.triggered.connect(self._open_settings)
+        self._official_news_refresh_action = tools_menu.addAction("Refresh official source health")
+        self._official_news_refresh_action.setEnabled(bool(self._official_news_providers))
+        self._official_news_refresh_action.triggered.connect(self._refresh_official_news)
+        self._openai_context_action = tools_menu.addAction(
+            "Analyser le contexte officiel avec OpenAI (manuel/facturé)"
+        )
+        self._openai_context_action.setEnabled(False)
+        self._openai_context_action.triggered.connect(self._refresh_openai_context)
+        web_research_action = tools_menu.addAction(
+            "Recherche web du marché avec OpenAI (manuel/facturé)"
+        )
+        web_research_action.triggered.connect(self._open_web_research)
+        self._calendar_context_action = tools_menu.addAction("Refresh macro calendar")
+        self._calendar_context_action.setEnabled(False)
+        self._calendar_context_action.triggered.connect(self._refresh_calendar_context)
         disabled_action = tools_menu.addAction("Live trading disabled")
         disabled_action.setEnabled(False)
 
@@ -328,38 +641,643 @@ class MainWindow(QtWidgets.QMainWindow):
         root = QtWidgets.QWidget()
         root_layout = QtWidgets.QVBoxLayout(root)
         root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSizeConstraint(QtWidgets.QLayout.SetNoConstraint)
 
         self.account_status = AccountStatusRibbonWidget()
+        self.account_status.setMinimumSize(0, 0)
+        self.account_status.setSizePolicy(
+            QtWidgets.QSizePolicy.Ignored,
+            QtWidgets.QSizePolicy.Preferred,
+        )
         self.account_status.connect_requested.connect(self._connect_environment)
         self.account_status.disconnect_requested.connect(self._disconnect)
         self.account_status.settings_requested.connect(self._open_settings)
         self.account_status.account_selected.connect(self._select_account)
         root_layout.addWidget(self.account_status)
-        root_layout.addWidget(MacroRibbonWidget())
+        self.macro_ribbon = MacroRibbonWidget()
+        self.macro_ribbon.setMinimumSize(0, 0)
+        self.macro_ribbon.setSizePolicy(
+            QtWidgets.QSizePolicy.Ignored,
+            QtWidgets.QSizePolicy.Preferred,
+        )
+        root_layout.addWidget(self.macro_ribbon)
 
-        body = QtWidgets.QSplitter()
-        body.setOrientation(QtCore.Qt.Horizontal)
+        self.body_splitter = QtWidgets.QSplitter()
+        self.body_splitter.setOrientation(QtCore.Qt.Horizontal)
+        self.body_splitter.setMinimumSize(0, 0)
+        self.body_splitter.setSizePolicy(
+            QtWidgets.QSizePolicy.Ignored,
+            QtWidgets.QSizePolicy.Ignored,
+        )
         self.chart_view = ChartView()
+        self.chart_view.setMinimumSize(0, 0)
+        self.chart_view.setSizePolicy(
+            QtWidgets.QSizePolicy.Ignored,
+            QtWidgets.QSizePolicy.Ignored,
+        )
         self._last_history_reload_price_basis = self.chart_view.current_price_basis()
         self.chart_view.resolution_changed.connect(self._on_chart_resolution_changed)
         self.chart_view.history_range_changed.connect(self._on_chart_range_changed)
         self.chart_view.price_basis_changed.connect(self._on_chart_price_basis_changed)
-        body.addWidget(self.chart_view)
+        self.body_splitter.addWidget(self.chart_view)
 
-        right_tabs = QtWidgets.QTabWidget()
+        self.right_tabs = QtWidgets.QTabWidget()
         self.product_selector = ProductSelectorWidget()
+        self.product_selector.set_market_bindings(self._config.product_market_bindings)
+        self.product_selector.set_market_context(self._latest_macro_state)
         self.product_selector.discover_requested.connect(self._discover_products)
+        self.product_selector.targeted_search_requested.connect(self._search_products_targeted)
         self.product_selector.export_requested.connect(self._export_discovery_report)
         self.product_selector.product_selected.connect(self._on_product_selected)
         self.product_selector.visible_epics_changed.connect(self._on_visible_epics_changed)
-        right_tabs.addTab(self.product_selector, "Products / Ticket")
-        right_tabs.setMinimumWidth(760)
-        body.addWidget(right_tabs)
-        body.setStretchFactor(0, 1)
-        body.setStretchFactor(1, 3)
+        self.product_selector.paper_ticket.paper_execution_requested.connect(
+            self._execute_paper_submission
+        )
+        self.right_tabs.addTab(self.product_selector, "Produits / Ticket")
+        self.scanner_preview = ScannerPreviewWidget()
+        self.scanner_preview.refresh_requested.connect(self._refresh_scanner_preview)
+        self.right_tabs.addTab(self.scanner_preview, "Scanner")
+        self.paper_portfolio = PaperPortfolioWidget()
+        self.paper_portfolio.stop_update_requested.connect(self._update_paper_stop)
+        self.paper_portfolio.close_requested.connect(self._close_paper_position)
+        self.paper_portfolio.save_requested.connect(self._save_paper_session)
+        self.paper_portfolio.restore_requested.connect(self._restore_paper_session)
+        self.right_tabs.addTab(self.paper_portfolio, "Portefeuille Paper")
+        self.right_tabs.currentChanged.connect(self._on_right_tab_changed)
+        self.right_tabs.setMinimumSize(0, 0)
+        self.right_tabs.setSizePolicy(
+            QtWidgets.QSizePolicy.Ignored,
+            QtWidgets.QSizePolicy.Ignored,
+        )
+        self.body_splitter.addWidget(self.right_tabs)
+        self.body_splitter.setStretchFactor(0, 1)
+        self.body_splitter.setStretchFactor(1, 3)
 
-        root_layout.addWidget(body, stretch=1)
+        root_layout.addWidget(self.body_splitter, stretch=1)
         self.setCentralWidget(root)
+        self._refresh_paper_session_views()
+
+    @QtCore.pyqtSlot(int)
+    def _on_right_tab_changed(self, _index: int) -> None:
+        if self.right_tabs.currentWidget() is self.paper_portfolio:
+            self._refresh_paper_session_views()
+            self._paper_freshness_timer.start()
+        else:
+            self._paper_freshness_timer.stop()
+
+    @QtCore.pyqtSlot()
+    def _refresh_paper_freshness(self) -> None:
+        if self.right_tabs.currentWidget() is not self.paper_portfolio:
+            return
+        if self._paper_session.position_snapshots() != self.paper_portfolio.position_snapshots:
+            self._refresh_paper_session_views()
+
+    @QtCore.pyqtSlot()
+    def _refresh_scanner_preview(self) -> None:
+        if self._active_connection is not None:
+            self._refresh_bound_scanner_batch()
+            return
+        if self._chart_candle_series is None or len(self._chart_candle_series.candles) < 2:
+            self.scanner_preview.show_unavailable(
+                "WARMING_UP : aucune bougie clôturée reçue pendant cette session. L'analyse "
+                "technique se débloquera progressivement; le contexte et le Paper restent "
+                "disponibles séparément."
+            )
+            return
+        evaluated_at = datetime.now(UTC)
+        current_macro_state = MacroContextService().revalidate_state(
+            self._latest_macro_state, evaluated_at
+        )
+        try:
+            preview = build_scanner_preview(
+                self._chart_candle_series,
+                as_of_utc=evaluated_at,
+            )
+        except ValueError as exc:
+            self.scanner_preview.show_unavailable(f"Analyse indisponible : {exc}")
+            return
+        product_context = None
+        if self._selected_product is not None:
+            product_context = ProductContextProjectionService().project(
+                self._selected_product,
+                current_macro_state,
+                evaluated_at_utc=evaluated_at,
+                ai_snapshot=self._latest_ai_context_snapshot,
+            )
+        context_component = (
+            build_context_score_component(product_context)
+            if product_context is not None
+            else build_banded_score_component(
+                ScoreComponentName.CONTEXT,
+                ScoreBand.UNKNOWN,
+                reason_codes=("PRODUCT_CONTEXT_UNAVAILABLE",),
+            )
+        )
+        product_spread = None
+        fee_per_unit_per_side = None
+        execution_price_scale_verified = False
+        if self._selected_product is not None:
+            chart_product = self._chart_product or self._selected_product
+            execution_price_scale_verified = chart_product.epic == self._selected_product.epic
+            live_quote = self.product_selector.fresh_live_quote_for_epic(
+                self._selected_product.epic, now=evaluated_at
+            )
+            product_spread = _scanner_quote_spread(live_quote)
+            fee_per_unit_per_side = _scanner_fee_for_product(
+                self._config,
+                self._selected_product,
+            )
+        component_service = ScannerComponentService()
+        market_risk_component = component_service.market_risk_from_macro(current_macro_state)
+        scoring_config = self._config.scanner_scoring
+        component_weights = {
+            ScoreComponentName(name): weight
+            for name, weight in scoring_config.component_weights().items()
+        }
+        score_results = component_service.score_signals(
+            preview.consensus,
+            context_component,
+            fresh=True,
+            continuous=preview.excluded_pre_gap_candles == 0,
+            market_risk_component=market_risk_component,
+            product_spread=product_spread,
+            fee_per_unit_per_side=fee_per_unit_per_side,
+            execution_price_scale_verified=execution_price_scale_verified,
+            component_weights=component_weights,
+            candidate_threshold=scoring_config.candidate_threshold,
+            watch_threshold=scoring_config.watch_threshold,
+        )
+        self.scanner_preview.set_preview(preview, product_context, score_results)
+        self.statusBar().showMessage(
+            "Scanner preview mis à jour sur bougies clôturées ; aucun ticket ni ordre créé.",
+            10000,
+        )
+
+    def _refresh_bound_scanner_batch(self) -> None:
+        selected = self._selected_product
+        connection = self._active_connection
+        self._latest_scanner_runtime_batch = None
+        if selected is None or connection is None:
+            self.scanner_preview.show_unavailable(
+                "Scanner indisponible : aucun produit sélectionné."
+            )
+            return
+        try:
+            self._scanner_binding_registry.resolve(selected.epic)
+        except MarketNavigationCatalogError:
+            self.scanner_preview.show_unavailable(
+                "Scanner indisponible : ce produit ne possède pas de binding exact validé. "
+                "Il reste disponible pour le Paper manuel."
+            )
+            return
+
+        products = _scanner_runtime_products(self.product_selector.results(), selected)
+        spreads: dict[str, Decimal | None] = {}
+        fees: dict[str, Decimal | None] = {}
+        for binding in self._scanner_binding_registry.bindings():
+            product = next(
+                (item for item in products if item.epic == binding.product_epic),
+                None,
+            )
+            if product is None:
+                continue
+            live_quote = self.product_selector.fresh_live_quote_for_epic(
+                product.epic, now=datetime.now(UTC)
+            )
+            spreads[product.epic] = _scanner_quote_spread(live_quote)
+            fees[product.epic] = _scanner_fee_for_product(self._config, product)
+
+        scoring_config = self._config.scanner_scoring
+        component_weights = {
+            ScoreComponentName(name): weight
+            for name, weight in scoring_config.component_weights().items()
+        }
+        try:
+            result = ScannerRuntimeBatchService(
+                self._scanner_binding_registry,
+                self._scanner_session_candles,
+            ).scan(
+                products=products,
+                environment=connection.environment,
+                account_id=connection.current_account_id,
+                resolution_seconds=self.chart_view.current_interval_seconds(),
+                price_basis=self.chart_view.current_price_basis(),
+                macro_state=self._latest_macro_state,
+                evaluated_at_utc=datetime.now(UTC),
+                profile_catalog=self._config.scanner_profiles,
+                ai_snapshot=self._latest_ai_context_snapshot,
+                product_spreads=spreads,
+                fee_per_unit_per_side=fees,
+                component_weights=component_weights,
+                candidate_threshold=scoring_config.candidate_threshold,
+                watch_threshold=scoring_config.watch_threshold,
+            )
+        except ValueError as exc:
+            self.scanner_preview.show_unavailable(f"Scanner indisponible : {exc}")
+            return
+
+        self._latest_scanner_runtime_batch = result
+        selected_item = next(
+            (item for item in result.batch.items if item.product.epic == selected.epic),
+            None,
+        )
+        if selected_item is None:
+            selected_failure = next(
+                (
+                    failure
+                    for failure in result.batch.failures
+                    if failure.product_epic == selected.epic
+                ),
+                None,
+            )
+            reason = selected_failure.reason if selected_failure is not None else "données absentes"
+            self.scanner_preview.show_unavailable(
+                f"Scanner indisponible pour le produit sélectionné : {reason}"
+            )
+        else:
+            self.scanner_preview.set_preview(
+                selected_item.preview,
+                result.context_for(selected.epic),
+                selected_item.results,
+            )
+        self.statusBar().showMessage(
+            "Scanner batch manuel : "
+            f"{len(result.batch.items)} produit(s) lié(s), "
+            f"{len(result.batch.failures)} indisponible(s) ; aucun ticket ni ordre créé.",
+            12000,
+        )
+
+    @QtCore.pyqtSlot()
+    def _refresh_official_news(self) -> None:
+        if self._latest_news_snapshots:
+            self._rebuild_macro_context(datetime.now(UTC))
+        if not self._official_news_providers or self._official_news_thread is not None:
+            return
+        LOGGER.debug(
+            "Official news refresh start provider_count=%s",
+            len(self._official_news_providers),
+        )
+        self.statusBar().showMessage("Refreshing official source health...", 0)
+        self._official_news_refresh_action.setEnabled(False)
+        self._official_news_thread = QtCore.QThread(self)
+        self._official_news_worker = OfficialNewsRefreshWorker(self._official_news_providers)
+        self._official_news_worker.moveToThread(self._official_news_thread)
+        self._official_news_thread.started.connect(self._official_news_worker.run)
+        self._official_news_worker.succeeded.connect(self._on_official_news_refresh_success)
+        self._official_news_worker.finished.connect(self._official_news_thread.quit)
+        self._official_news_worker.finished.connect(self._official_news_worker.deleteLater)
+        self._official_news_thread.finished.connect(self._official_news_thread.deleteLater)
+        self._official_news_thread.finished.connect(self._clear_official_news_worker)
+        self._official_news_thread.start()
+
+    @QtCore.pyqtSlot(object)
+    def _on_official_news_refresh_success(self, result: object) -> None:
+        if not isinstance(result, OfficialNewsRefreshResult):
+            return
+        self._latest_news_snapshots = result.snapshots
+        evidence_signals = self._rebuild_macro_context(result.collected_at_utc)
+        available_count = sum(snapshot.status.value == "available" for snapshot in result.snapshots)
+        self.statusBar().showMessage(
+            "Official source health refreshed: "
+            f"{available_count}/{len(result.snapshots)} available; "
+            f"{len(evidence_signals)} AI metadata evidence items.",
+            7000,
+        )
+
+    @QtCore.pyqtSlot()
+    def _clear_official_news_worker(self) -> None:
+        self._official_news_thread = None
+        self._official_news_worker = None
+        self._official_news_refresh_action.setEnabled(bool(self._official_news_providers))
+
+    def _rebuild_macro_context(self, generated_at_utc: datetime) -> tuple[ContextSignal, ...]:
+        if self._calendar_runtime_result is not None:
+            generated_at_utc = max(
+                generated_at_utc,
+                self._calendar_runtime_result.snapshot.collected_at_utc,
+            )
+        if self._latest_news_snapshots:
+            generated_at_utc = max(
+                generated_at_utc,
+                *(snapshot.collected_at_utc for snapshot in self._latest_news_snapshots),
+            )
+        signals: list[ContextSignal] = []
+        evidence_signals: tuple[ContextSignal, ...] = ()
+        if self._latest_news_snapshots:
+            signals.append(
+                build_news_source_health_signal(
+                    self._latest_news_snapshots,
+                    generated_at_utc=generated_at_utc,
+                    valid_for=OFFICIAL_NEWS_HEALTH_VALIDITY,
+                )
+            )
+            evidence_signals = build_news_ai_evidence_signals(
+                self._latest_news_snapshots,
+                generated_at_utc=generated_at_utc,
+                valid_for=OFFICIAL_NEWS_HEALTH_VALIDITY,
+                max_items=OPENAI_NEWS_EVIDENCE_LIMIT,
+            )
+            signals.extend(evidence_signals)
+        if self._calendar_runtime_result is not None:
+            signals.extend(self._calendar_runtime_result.signals)
+        self._latest_macro_state = MacroContextService().build_state(
+            tuple(signals),
+            generated_at_utc,
+        )
+        self.macro_ribbon.set_state(self._latest_macro_state)
+        self.product_selector.set_market_context(
+            self._latest_macro_state,
+            self._latest_ai_context_snapshot,
+        )
+        self._update_openai_context_action()
+        return tuple(evidence_signals)
+
+    @QtCore.pyqtSlot(object)
+    def _enable_calendar_context_session(self, result: object) -> None:
+        if not isinstance(result, TradingEconomicsRuntimeResult):
+            return
+        self._calendar_runtime_result = result
+        self._rebuild_macro_context(result.snapshot.collected_at_utc)
+        self._calendar_refresh_timer.start()
+        self._calendar_context_action.setEnabled(True)
+        self.statusBar().showMessage(
+            "Calendrier Trading Economics validé pour cette session ; refresh toutes les 15 min.",
+            10000,
+        )
+
+    @QtCore.pyqtSlot()
+    def _refresh_calendar_context(self) -> None:
+        current = self._calendar_runtime_result
+        if current is None or self._calendar_context_thread is not None:
+            return
+        api_key = self._calendar_key_reader()
+        if not api_key:
+            self.statusBar().showMessage(
+                "TRADING_ECONOMICS_API_KEY n'est plus disponible dans ce processus.",
+                10000,
+            )
+            return
+        thread = QtCore.QThread(self)
+        worker = EconomicCalendarRefreshWorker(
+            api_key=SecretValue(api_key),
+            config=current.config,
+            runner=self._calendar_context_runner,
+        )
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.completed.connect(self._on_calendar_context_success)
+        worker.failed.connect(self._on_calendar_context_failure)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._clear_calendar_context_worker)
+        self._calendar_context_thread = thread
+        self._calendar_context_worker = worker
+        self._calendar_context_action.setEnabled(False)
+        self.statusBar().showMessage("Rafraîchissement du calendrier macro…", 0)
+        thread.start()
+
+    @QtCore.pyqtSlot(object)
+    def _on_calendar_context_success(self, result: object) -> None:
+        if not isinstance(result, TradingEconomicsRuntimeResult):
+            self._on_calendar_context_failure("Résultat calendrier invalide.")
+            return
+        self._calendar_runtime_result = result
+        self._rebuild_macro_context(result.snapshot.collected_at_utc)
+        self.statusBar().showMessage(
+            f"Calendrier macro rafraîchi : {len(result.snapshot.events)} événement(s).",
+            10000,
+        )
+
+    @QtCore.pyqtSlot(str)
+    def _on_calendar_context_failure(self, message: str) -> None:
+        self.statusBar().showMessage(message, 12000)
+
+    @QtCore.pyqtSlot()
+    def _clear_calendar_context_worker(self) -> None:
+        self._calendar_context_thread = None
+        self._calendar_context_worker = None
+        self._calendar_context_action.setEnabled(self._calendar_runtime_result is not None)
+
+    @QtCore.pyqtSlot(str, int, bool)
+    def _enable_openai_context_session(
+        self,
+        model: str,
+        max_output_tokens: int,
+        automatic_refresh: bool = False,
+    ) -> None:
+        self._openai_context_session = OpenAIContextSession(
+            model=model,
+            max_output_tokens=max_output_tokens,
+            automatic_refresh=automatic_refresh,
+        )
+        if automatic_refresh:
+            self._openai_context_refresh_timer.start()
+        else:
+            self._openai_context_refresh_timer.stop()
+        self._update_openai_context_action()
+        mode = (
+            "L'analyse consultative sera renouvelée toutes les 15 minutes."
+            if automatic_refresh
+            else "L'analyse reste manuelle et consultative."
+        )
+        self.statusBar().showMessage(
+            f"OpenAI validé pour cette session. {mode}",
+            10000,
+        )
+
+    def _has_openai_evidence(self) -> bool:
+        now = datetime.now(UTC)
+        return any(
+            "ai_evidence" in {tag.lower() for tag in signal.tags}
+            and signal.observed_at_utc <= now
+            and (signal.valid_until_utc is None or now < signal.valid_until_utc)
+            and is_ai_citation_eligible(signal, now)
+            for signal in self._latest_macro_state.signals
+        )
+
+    @QtCore.pyqtSlot()
+    def _open_web_research(self) -> None:
+        session = self._openai_context_session
+        api_key = self._openai_key_reader()
+        if session is None or not api_key:
+            QtWidgets.QMessageBox.information(
+                self, "Recherche web", "Validez d'abord OpenAI dans Tools → Settings → OpenAI."
+            )
+            return
+        if self._selected_product is None:
+            QtWidgets.QMessageBox.information(self, "Recherche web", "Sélectionnez un produit.")
+            return
+        market = f"{self._selected_product.name} ({self._selected_product.epic})"
+        dialog = WebResearchDialog(
+            market=market,
+            instrument_id=self._selected_product.epic,
+            model=session.model,
+            key=api_key,
+            parent=self,
+        )
+        dialog.context_ready.connect(self._on_openai_context_success)
+        dialog.exec()
+
+    def _update_openai_context_action(self) -> None:
+        self._openai_context_action.setEnabled(
+            self._openai_context_session is not None
+            and self._has_openai_evidence()
+            and self._openai_context_thread is None
+        )
+
+    @QtCore.pyqtSlot()
+    def _refresh_openai_context(self) -> None:
+        self._start_openai_context_refresh(report_unavailable=True)
+
+    @QtCore.pyqtSlot()
+    def _refresh_openai_context_automatic(self) -> None:
+        session = self._openai_context_session
+        if session is None or not session.automatic_refresh:
+            self._openai_context_refresh_timer.stop()
+            return
+        self._start_openai_context_refresh(report_unavailable=False)
+
+    def _start_openai_context_refresh(self, *, report_unavailable: bool) -> None:
+        session = self._openai_context_session
+        if session is None or self._openai_context_thread is not None:
+            return
+        if not self._has_openai_evidence():
+            if report_unavailable:
+                self.statusBar().showMessage(
+                    "Aucune métadonnée officielle éligible n'est disponible pour l'analyse OpenAI.",
+                    10000,
+                )
+            else:
+                LOGGER.info("Periodic OpenAI context refresh skipped: no eligible evidence")
+            return
+        api_key = self._openai_key_reader()
+        if not api_key:
+            if report_unavailable:
+                self.statusBar().showMessage(
+                    "OPENAI_API_KEY n'est plus disponible dans ce processus.",
+                    10000,
+                )
+            else:
+                LOGGER.warning("Periodic OpenAI context refresh skipped: key unavailable")
+            return
+
+        instrument_id = (
+            self._selected_product.epic
+            if self._selected_product is not None
+            else "GLOBAL-MARKET-CONTEXT"
+        )
+        current_macro_state = MacroContextService().build_state(
+            self._latest_macro_state.signals, datetime.now(UTC)
+        )
+        thread = QtCore.QThread(self)
+        worker = OpenAIContextRefreshWorker(
+            model=session.model,
+            api_key=SecretValue(api_key),
+            max_output_tokens=session.max_output_tokens,
+            macro_state=current_macro_state,
+            instrument_id=instrument_id,
+            runner=self._openai_context_runner,
+        )
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.succeeded.connect(self._on_openai_context_success)
+        worker.failed.connect(self._on_openai_context_failure)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._clear_openai_context_worker)
+        self._openai_context_thread = thread
+        self._openai_context_worker = worker
+        self._openai_context_action.setEnabled(False)
+        self.statusBar().showMessage(
+            "Analyse consultative OpenAI en cours…",
+            0,
+        )
+        thread.start()
+
+    @QtCore.pyqtSlot(object)
+    def _on_openai_context_success(self, result: object) -> None:
+        if not isinstance(result, MarketContextSnapshot):
+            self._on_openai_context_failure("OpenAI returned an invalid runtime result.")
+            return
+        ai_reason_codes = tuple(code for code in result.reason_codes if code.startswith("AI_"))
+        self._latest_ai_context_snapshot = result
+        self._refresh_ai_presentation()
+        LOGGER.info(
+            "OpenAI consultative context completed status=%s model=%s reasons=%s",
+            result.ai_analysis.status.value,
+            result.ai_analysis.model_id,
+            ",".join(ai_reason_codes) or "none",
+        )
+        if result.ai_analysis.status is AIAnalysisStatus.AVAILABLE:
+            self.statusBar().showMessage(
+                "Contexte consultatif OpenAI mis à jour ; aucun ticket ni ordre n'a été créé.",
+                12000,
+            )
+        else:
+            diagnostic = ", ".join(ai_reason_codes) or "AI_UNAVAILABLE"
+            self.statusBar().showMessage(
+                "Contexte OpenAI indisponible "
+                f"({diagnostic}) ; le contexte déterministe reste inchangé.",
+                12000,
+            )
+
+    @QtCore.pyqtSlot()
+    def _refresh_ai_presentation(self) -> None:
+        """Expire the display locally; never make a provider call from this timer."""
+        self._ai_expiry_timer.stop()
+        snapshot = self._latest_ai_context_snapshot
+        if snapshot is None:
+            return
+        now = datetime.now(UTC)
+        instrument_id = self._selected_product.epic if self._selected_product else ""
+        reasons = tuple(code for code in snapshot.reason_codes if code.startswith("AI_"))
+        self.macro_ribbon.set_ai_analysis(
+            snapshot.ai_analysis,
+            reasons,
+            evaluated_at_utc=now,
+            instrument_id=instrument_id,
+            valid_until_utc=snapshot.valid_until_utc,
+        )
+        self.product_selector.set_market_context(self._latest_macro_state, snapshot)
+        if snapshot.valid_until_utc > now:
+            remaining_ms = int((snapshot.valid_until_utc - now).total_seconds() * 1000) + 1
+            self._ai_expiry_timer.start(min(remaining_ms, 2_147_483_647))
+
+    @QtCore.pyqtSlot(str)
+    def _on_openai_context_failure(self, message: str) -> None:
+        self.statusBar().showMessage(message, 12000)
+
+    @QtCore.pyqtSlot()
+    def _clear_openai_context_worker(self) -> None:
+        self._openai_context_thread = None
+        self._openai_context_worker = None
+        self._update_openai_context_action()
+
+    def _restore_workspace_state(self) -> None:
+        workspace = self._config.workspace
+        if workspace.window_width is not None and workspace.window_height is not None:
+            width = workspace.window_width
+            height = workspace.window_height
+            screen = QtWidgets.QApplication.primaryScreen()
+            if screen is not None:
+                available = screen.availableGeometry()
+                width = min(width, available.width())
+                height = min(height, available.height())
+            self.resize(width, height)
+        if (
+            len(workspace.splitter_sizes) == self.body_splitter.count()
+            and sum(workspace.splitter_sizes) > 0
+        ):
+            self.body_splitter.setSizes(list(workspace.splitter_sizes))
+
+    def _capture_workspace_state(self) -> WorkspaceState:
+        return WorkspaceState(
+            window_width=self.width(),
+            window_height=self.height(),
+            splitter_sizes=tuple(self.body_splitter.sizes()),
+        )
 
     @staticmethod
     def _build_credential_store() -> object | None:
@@ -368,14 +1286,36 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot()
     def _open_settings(self) -> None:
         LOGGER.debug("Settings dialog open")
-        dialog = SettingsDialog(self._config, self._credential_store, self)
+        dialog = SettingsDialog(
+            self._config,
+            self._credential_store,
+            self,
+            openai_key_reader=self._openai_key_reader,
+            calendar_probe_runner=self._calendar_context_runner,
+            calendar_key_reader=self._calendar_key_reader,
+        )
         dialog.config_applied.connect(self._apply_config)
+        dialog.openai_runtime_validated.connect(self._enable_openai_context_session)
+        dialog.calendar_runtime_validated.connect(self._enable_calendar_context_session)
         dialog.exec()
 
     @QtCore.pyqtSlot(object)
     def _apply_config(self, config: AppConfig) -> None:
         LOGGER.debug("Settings applied environment=%s", config.environment.value)
         self._config = config
+        self.product_selector.set_market_bindings(config.product_market_bindings)
+        self._scanner_binding_registry = IGProductMarketBindingRegistry(
+            self._config.product_market_bindings
+        )
+        chart_epics = _prioritized_chart_epics(
+            self._chart_product or self._selected_product,
+            initial_ig_reference_epics(),
+        )
+        self._scanner_session_candles = MultiMarketSessionCandleService(
+            self._scanner_binding_registry,
+            candle_history_service=self._scanner_candle_history_service,
+            reference_epics=tuple(chart_epics),
+        )
         save_config(self._config, self._config_path)
         self.statusBar().showMessage("Settings saved.", 5000)
 
@@ -439,6 +1379,25 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     @QtCore.pyqtSlot()
+    def _clear_connection_market_state(self) -> None:
+        """Invalidate the visible, actionable state from a previous IG connection."""
+        results = self.product_selector.results()
+        retained = [r for r in results if not r.search_term.startswith("targeted-search:")]
+        if len(retained) != len(results):
+            self.product_selector.set_results(retained)
+        self.product_selector.clear_live_quotes()
+        self.chart_view.set_live_quote(None)
+        self.chart_view.set_candles(())
+        self._chart_candle_series = None
+        self._candle_history_service.reset_active_series()
+        self._latest_scanner_runtime_batch = None
+        self._paper_session.invalidate_market_quotes()
+        self._refresh_paper_session_views()
+        self.scanner_preview.show_unavailable(
+            "Scanner indisponible : attendre les données du compte courant."
+        )
+
+    @QtCore.pyqtSlot()
     def _disconnect(self) -> None:
         LOGGER.debug("Disconnect requested")
         if self._connection_thread is not None:
@@ -448,6 +1407,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage("Discovery is running; wait before disconnecting.", 5000)
             return
         self._stop_streaming()
+        self._clear_connection_market_state()
         self._logout_active_connection()
         self.account_status.set_disconnected()
         self.product_selector.set_selected_product(None)
@@ -462,6 +1422,8 @@ class MainWindow(QtWidgets.QMainWindow):
             LOGGER.debug("Connect read-only ignored because worker is already running")
             return
         if self._active_connection is not None:
+            self._stop_streaming()
+            self._clear_connection_market_state()
             self._logout_active_connection()
         self.statusBar().showMessage(
             f"Connecting to IG {request.environment.value} in read-only mode...",
@@ -481,6 +1443,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(object)
     def _on_connection_success(self, result: ActiveIGConnection) -> None:
+        self._clear_connection_market_state()
         self._auth_locked_out = False
         self._api_allowance_exceeded = False
         self._history_allowance_state = HistoricalAllowanceState()
@@ -507,6 +1470,10 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self._active_connection = result
         self._active_connection.current_account_id = selected_account_id
+        self._history_allowance_state = _load_history_allowance_state(
+            environment=result.environment,
+            account_id=selected_account_id,
+        )
         LOGGER.debug(
             "Connected IG accounts environment=%s accounts=%s selected_account=%s",
             result.environment.value,
@@ -531,8 +1498,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.chart_view.set_stream_status("STREAM READY")
             self._restart_streaming()
         message = (
-            f"Connected to IG {result.environment.value}. "
-            f"Accounts fetched: {len(result.accounts)}."
+            f"Connected to IG {result.environment.value}. Accounts fetched: {len(result.accounts)}."
         )
         self.statusBar().showMessage(
             message,
@@ -545,8 +1511,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if "too-many-failed-attempts" in message:
             self._auth_locked_out = True
             self.account_status.set_auth_locked(
-                "IG authentication locked: too many failed attempts. "
-                "Wait before trying again."
+                "IG authentication locked: too many failed attempts. Wait before trying again."
             )
         self.statusBar().showMessage(f"Connection failed: {humanize_ig_error(message)}", 12000)
 
@@ -583,6 +1548,79 @@ class MainWindow(QtWidgets.QMainWindow):
         self._discovery_thread.finished.connect(self._discovery_thread.deleteLater)
         self._discovery_thread.finished.connect(self._clear_discovery_worker)
         self._discovery_thread.start()
+
+    @QtCore.pyqtSlot(str)
+    def _search_products_targeted(self, search_term: str) -> None:
+        term = search_term.strip()
+        if not 3 <= len(term) <= 100:
+            self.statusBar().showMessage("Saisissez de 3 à 100 caractères dans le filtre.", 10000)
+            return
+        if self._discovery_thread is not None:
+            self.statusBar().showMessage("Une découverte est déjà en cours.", 7000)
+            return
+        if self._active_connection is None or self._active_connection.adapter.session is None:
+            self.statusBar().showMessage("Connectez-vous à IG avant cette recherche.", 7000)
+            return
+        if self._api_allowance_exceeded:
+            self.statusBar().showMessage("Quota API IG atteint : recherche suspendue.", 10000)
+            return
+        self.product_selector.set_busy(True)
+        self.statusBar().showMessage("Recherche IG ciblée en lecture seule…", 0)
+        self._targeted_discovery_origin = (
+            self._active_connection,
+            self._active_connection.current_account_id,
+            self._stream_generation,
+        )
+        thread = QtCore.QThread(self)
+        worker = ProductDiscoveryWorker(
+            self._active_connection.adapter, self._active_connection.environment, term
+        )
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.succeeded.connect(self._on_targeted_discovery_success)
+        worker.failed.connect(self._on_discovery_failure)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._clear_discovery_worker)
+        self._discovery_thread, self._discovery_worker = thread, worker
+        thread.start()
+
+    @QtCore.pyqtSlot(object)
+    def _on_targeted_discovery_success(self, results: list[ProductDiscoveryResult]) -> None:
+        origin = self._targeted_discovery_origin
+        if (
+            origin is None
+            or self._active_connection is not origin[0]
+            or self._active_connection.current_account_id != origin[1]
+            or self._stream_generation != origin[2]
+        ):
+            self.statusBar().showMessage(
+                "Recherche IG ignorée : le contexte de connexion a changé.", 10000
+            )
+            return
+        known = {p.epic for r in self.product_selector.results() for p in r.products}
+        additions = []
+        for result in results:
+            for product in result.products:
+                if product.epic not in known:
+                    additions.append(product)
+                    known.add(product.epic)
+        if additions:
+            self.product_selector.set_results([
+                *self.product_selector.results(),
+                ProductDiscoveryResult(
+                    search_term=results[0].search_term,
+                    candidates_count=len(additions),
+                    products=additions,
+                ),
+            ])
+        returned = sum(len(result.products) for result in results)
+        self.statusBar().showMessage(
+            f"Recherche IG : {returned} résultat(s), {len(additions)} nouveau(x). "
+            "Résultats supplémentaires conservés pour cette session.",
+            15000,
+        )
 
     @QtCore.pyqtSlot(object)
     def _on_discovery_success(self, results: list[ProductDiscoveryResult]) -> None:
@@ -622,6 +1660,7 @@ class MainWindow(QtWidgets.QMainWindow):
         LOGGER.debug("Product discovery worker cleared")
         self._discovery_thread = None
         self._discovery_worker = None
+        self._targeted_discovery_origin = None
         self.product_selector.set_busy(False)
 
     @QtCore.pyqtSlot(object)
@@ -634,7 +1673,12 @@ class MainWindow(QtWidgets.QMainWindow):
     def _select_account(self, account_id: object) -> None:
         selected_account_id = str(account_id) if account_id else None
         LOGGER.debug("Account selected account=%s", mask_identifier(selected_account_id))
-        if selected_account_id and self._switch_active_account(selected_account_id):
+        if selected_account_id and self._active_connection is not None:
+            if not self._switch_active_account(selected_account_id):
+                self._logout_active_connection()
+                self.account_status.set_disconnected()
+                self.chart_view.set_stream_status("DISCONNECTED")
+                return
             self._restart_streaming()
         self._set_profile_account(self._config.environment, selected_account_id)
 
@@ -645,10 +1689,22 @@ class MainWindow(QtWidgets.QMainWindow):
             return True
         try:
             session = self._active_connection.adapter.switch_account(account_id)
+            if session.current_account_id != account_id:
+                raise AccountSwitchNotConfirmedError(
+                    "IG did not confirm the requested account context."
+                )
+            self._stop_streaming()
+            self._clear_connection_market_state()
             self._active_connection.current_account_id = session.current_account_id
+            self._history_allowance_state = _load_history_allowance_state(
+                environment=self._active_connection.environment,
+                account_id=session.current_account_id,
+            )
             LOGGER.debug("Active IG account switched account=%s", mask_identifier(account_id))
             return True
-        except IGAPIError as exc:
+        except (IGAPIError, AccountSwitchNotConfirmedError) as exc:
+            self._stop_streaming()
+            self._clear_connection_market_state()
             LOGGER.debug(
                 "Active IG account switch failed account=%s error=%s",
                 mask_identifier(account_id),
@@ -694,6 +1750,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if not isinstance(product, TradableProduct):
             return
         self._selected_product = product
+        self._refresh_ai_presentation()
         LOGGER.debug(
             "Product selected epic=%s name=%r",
             product.epic,
@@ -714,23 +1771,244 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._active_connection is not None:
             self._restart_streaming()
 
+    @QtCore.pyqtSlot(int, object)
+    def _on_current_stream_quote(self, generation: int, quote: object) -> None:
+        if generation == self._stream_generation:
+            self._on_stream_quote(quote)
+
+    @QtCore.pyqtSlot(int, object)
+    def _on_current_stream_chart(self, generation: int, chart: object) -> None:
+        if generation == self._stream_generation:
+            self._on_stream_chart(chart)
+
+    @QtCore.pyqtSlot(int, str)
+    def _on_current_stream_status(self, generation: int, status: str) -> None:
+        if generation == self._stream_generation:
+            self._on_stream_status(status)
+
+    @QtCore.pyqtSlot(int, str)
+    def _on_current_stream_error(self, generation: int, message: str) -> None:
+        if generation == self._stream_generation:
+            self._on_stream_error(message)
+
     @QtCore.pyqtSlot(object)
     def _on_stream_quote(self, quote: object) -> None:
         if isinstance(quote, Quote):
             self.product_selector.set_live_quote(quote)
+            if self._paper_session.tracks_product(quote.epic):
+                try:
+                    self._paper_session.process_market_quote(
+                        quote,
+                        observed_at_utc=datetime.now(UTC),
+                    )
+                except ValueError as exc:
+                    LOGGER.warning("Paper quote update rejected: %s", exc)
+                    self.statusBar().showMessage(
+                        f"Mise à jour Paper refusée : {exc}",
+                        10000,
+                    )
+                self._refresh_paper_session_views()
             chart_product = self._chart_product or self._selected_product
             if chart_product is not None and quote.epic == chart_product.epic:
                 self.chart_view.set_live_quote(quote)
+            if (
+                self._chart_quote_candle_fallback_active
+                and self._selected_product is not None
+                and quote.epic == self._selected_product.epic
+            ):
+                self._apply_quote_candle_fallback(quote)
+
+    def _apply_quote_candle_fallback(self, quote: Quote) -> None:
+        if self._active_connection is None or self._selected_product is None:
+            return
+        chart_update = self._quote_candle_fallback_service.update(
+            quote,
+            observed_at_utc=datetime.now(UTC),
+            environment=self._active_connection.environment.value,
+            account_id=self._active_connection.current_account_id or "",
+        )
+        if chart_update is None:
+            return
+        chart_series = self._candle_history_service.apply_session_m1_update(
+            environment=self._active_connection.environment,
+            account_id=self._active_connection.current_account_id,
+            selected_product_epic=self._selected_product.epic,
+            chart_source_epic=self._selected_product.epic,
+            resolution_seconds=self.chart_view.current_interval_seconds(),
+            price_basis=self.chart_view.current_price_basis(),
+            chart_update=chart_update,
+        )
+        self._chart_candle_series = chart_series
+        self.chart_view.set_candles(chart_series.candles, preserve_view=True)
+        self.chart_view.set_live_quote(quote)
+
+    @QtCore.pyqtSlot(object)
+    def _execute_paper_submission(self, submission: object) -> None:
+        if not isinstance(submission, PaperTicketSubmission):
+            return
+        try:
+            record = self._paper_session.submit(submission)
+        except ValueError as exc:
+            LOGGER.warning("Paper submission rejected: %s", exc)
+            self.product_selector.paper_ticket.summary.append(
+                f"\nOUVERTURE PAPER REFUSÉE — {exc}\nAucune transmission à IG."
+            )
+            self.statusBar().showMessage(f"Ouverture Paper refusée : {exc}", 10000)
+            return
+        self.product_selector.paper_ticket.show_execution_result(record)
+        self._refresh_paper_session_views()
+        self.right_tabs.setCurrentWidget(self.paper_portfolio)
+        result = record.outcome.execution_result
+        self.statusBar().showMessage(
+            f"Session Paper : {result.status.value} — {result.message or '-'}",
+            10000,
+        )
+
+    def _refresh_paper_session_views(self) -> None:
+        self.paper_portfolio.set_session_state(
+            self._paper_session.position_snapshots(),
+            self._paper_session.orders(),
+            self._paper_session.events(),
+        )
+        self.product_selector.paper_ticket.set_open_exposures(self._paper_session.open_exposures())
+
+    @QtCore.pyqtSlot(str, object)
+    def _update_paper_stop(self, position_id: str, stop: object) -> None:
+        if not isinstance(stop, Decimal):
+            return
+        result = self._paper_session.move_stop(position_id, stop)
+        self._refresh_paper_session_views()
+        self.paper_portfolio.show_action_result(result)
+        self.statusBar().showMessage(
+            f"Stop Paper local : {result.status.value} — {result.message or '-'}",
+            10000,
+        )
+
+    @QtCore.pyqtSlot(str)
+    def _close_paper_position(self, position_id: str) -> None:
+        result = self._paper_session.close_position(position_id)
+        self._refresh_paper_session_views()
+        self.paper_portfolio.show_action_result(result)
+        self.statusBar().showMessage(
+            f"Clôture Paper locale : {result.status.value} — {result.message or '-'}",
+            10000,
+        )
+
+    @QtCore.pyqtSlot()
+    def _save_paper_session(self) -> None:
+        if not self._paper_session.has_state():
+            self.paper_portfolio.show_persistence_result(
+                "Aucun état Paper à sauvegarder; aucun fichier n'a été créé.",
+                error=True,
+            )
+            return
+        saved_at = datetime.now(UTC)
+        snapshot_id = f"paper-snapshot-{uuid4().hex}"
+        try:
+            store = SQLiteStore(self._paper_database_path)
+            store.initialize()
+            PaperSessionSnapshotRepository(store).save(
+                snapshot_id=snapshot_id,
+                session_id=self._paper_session.session_id,
+                saved_at_utc=saved_at,
+                payload=encode_paper_session_state(self._paper_session.checkpoint_state()),
+            )
+        except (
+            CorruptPaperSnapshotError,
+            MigrationError,
+            OSError,
+            RuntimeError,
+            sqlite3.DatabaseError,
+            UnsupportedSchemaError,
+            ValueError,
+        ) as exc:
+            LOGGER.error("Explicit Paper save failed: %s", exc)
+            self.paper_portfolio.show_persistence_result(
+                f"Sauvegarde Paper refusée : {exc}",
+                error=True,
+            )
+            return
+        message = f"Session Paper sauvegardée explicitement à {saved_at:%H:%M:%S} UTC."
+        self.paper_portfolio.show_persistence_result(message)
+        self.statusBar().showMessage(message, 10000)
+
+    @QtCore.pyqtSlot()
+    def _restore_paper_session(self) -> None:
+        if not self._paper_database_path.exists():
+            self.paper_portfolio.show_persistence_result(
+                "Aucune base Paper locale à restaurer.",
+                error=True,
+            )
+            return
+        if self._paper_session.has_state():
+            answer = QtWidgets.QMessageBox.question(
+                self,
+                "Restaurer la session Paper",
+                "Remplacer la session Paper locale courante par la dernière sauvegarde ?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.No,
+            )
+            if answer != QtWidgets.QMessageBox.Yes:
+                return
+        try:
+            store = SQLiteStore(self._paper_database_path)
+            store.initialize()
+            snapshot = PaperSessionSnapshotRepository(store).latest()
+            if snapshot is None:
+                self.paper_portfolio.show_persistence_result(
+                    "La base locale ne contient aucune sauvegarde Paper.",
+                    error=True,
+                )
+                return
+            restored = PaperSessionService.from_checkpoint_state(
+                decode_paper_session_state(snapshot.payload)
+            )
+            restored.record_restore(snapshot.snapshot_id)
+        except (
+            CorruptPaperSnapshotError,
+            MigrationError,
+            OSError,
+            RuntimeError,
+            sqlite3.DatabaseError,
+            UnsupportedSchemaError,
+            ValueError,
+        ) as exc:
+            LOGGER.error("Explicit Paper restore failed: %s", exc)
+            self.paper_portfolio.show_persistence_result(
+                f"Restauration Paper refusée : {exc}",
+                error=True,
+            )
+            return
+        self._paper_session = restored
+        self._refresh_paper_session_views()
+        message = "Dernière session Paper restaurée explicitement; aucune transmission à IG."
+        self.paper_portfolio.show_persistence_result(message)
+        self.statusBar().showMessage(message, 10000)
 
     @QtCore.pyqtSlot(object)
     def _on_stream_chart(self, chart_update: object) -> None:
         if isinstance(chart_update, ChartCandleUpdate):
+            if self._active_connection is not None:
+                try:
+                    self._scanner_session_candles.ingest_m1_update(
+                        environment=self._active_connection.environment,
+                        account_id=self._active_connection.current_account_id,
+                        chart_update=chart_update,
+                        resolution_seconds=60,
+                        price_basis=ChartPriceBasis.MID,
+                    )
+                except (MarketNavigationCatalogError, ValueError) as exc:
+                    LOGGER.debug(
+                        "Scanner session candle ignored epic=%s error=%s",
+                        chart_update.epic,
+                        exc,
+                    )
             chart_product = self._chart_product or self._selected_product
             if chart_product is None or chart_update.epic != chart_product.epic:
                 return
             if self._active_connection is None or self._selected_product is None:
                 return
-            chart_series = self._candle_history_service.apply_stream_update(
+            chart_series = self._candle_history_service.apply_session_m1_update(
                 environment=self._active_connection.environment,
                 account_id=self._active_connection.current_account_id,
                 selected_product_epic=self._selected_product.epic,
@@ -741,6 +2019,14 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             self._chart_candle_series = chart_series
             self.chart_view.set_candles(chart_series.candles, preserve_view=True)
+            gap_key = _latest_series_gap_key(chart_series)
+            if gap_key is not None and gap_key != self._last_history_gap_refresh_key:
+                self._last_history_gap_refresh_key = gap_key
+                self.statusBar().showMessage(
+                    "Trou détecté dans les bougies de session : indicateurs techniques dégradés; "
+                    "aucun rattrapage historique n'est tenté.",
+                    15000,
+                )
             live_quote = _quote_from_chart_update(chart_update)
             if live_quote is not None:
                 self.chart_view.set_live_quote(live_quote)
@@ -758,6 +2044,72 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(str)
     def _on_stream_error(self, message: str) -> None:
         LOGGER.debug("Streaming error message=%s", message)
+        if (
+            self._streaming_adapter is not None
+            and "INSUFFICIENT PERMISSIONS" in message.upper()
+            and len(self._chart_stream_epics) > 1
+            and f"CHART:{len(self._chart_stream_epics)}-MARKETS:" in message.upper()
+            and not self._chart_stream_permission_fallback_attempted
+        ):
+            chart_product = self._chart_product or self._selected_product
+            if chart_product is not None:
+                self._chart_stream_permission_fallback_attempted = True
+                try:
+                    self._streaming_adapter.subscribe_charts(
+                        [chart_product.epic],
+                        "1MINUTE",
+                    )
+                    self._chart_stream_epics = (chart_product.epic,)
+                    self._scanner_session_candles = MultiMarketSessionCandleService(
+                        self._scanner_binding_registry,
+                        candle_history_service=self._scanner_candle_history_service,
+                        reference_epics=self._chart_stream_epics,
+                    )
+                    LOGGER.debug(
+                        "Streaming multi-chart permission fallback selected_epic=%s",
+                        chart_product.epic,
+                    )
+                    self.statusBar().showMessage(
+                        "IG refuse au moins un flux Scanner de fond ; le graphique sélectionné "
+                        "continue seul et l'analyse multi-marchés est dégradée.",
+                        15000,
+                    )
+                    return
+                except Exception as exc:
+                    LOGGER.debug(
+                        "Streaming selected-chart permission fallback failed error=%s",
+                        exc,
+                    )
+        chart_product = self._chart_product or self._selected_product
+        if (
+            self._streaming_adapter is not None
+            and self._selected_product is not None
+            and chart_product is not None
+            and "INSUFFICIENT PERMISSIONS" in message.upper()
+            and f"CHART:{chart_product.epic}:" in message.upper()
+            and len(self._chart_stream_epics) <= 1
+        ):
+            self._chart_quote_candle_fallback_active = True
+            self._chart_product = self._selected_product
+            self._chart_source_resolution_method = "selected PRICE candle fallback"
+            self._chart_candle_series = None
+            self._candle_history_service.reset_active_series()
+            self.product_selector.set_chart_source(self._selected_product)
+            self.chart_view.set_selected_product(self._selected_product)
+            self.chart_view.set_stream_status("PRICE CANDLES (DEGRADED)")
+            LOGGER.debug(
+                "Streaming selected CHART denied; direct PRICE candle fallback active "
+                "selected_product_epic=%s denied_chart_epic=%s scanner_reference_degraded=true",
+                self._selected_product.epic,
+                chart_product.epic,
+            )
+            self.statusBar().showMessage(
+                "IG refuse les bougies du marché de référence ; graphique construit depuis "
+                "les cotations directes du produit. Scanner technique indisponible pour ce "
+                "mapping.",
+                15000,
+            )
+            return
         if (
             self._streaming_adapter is not None
             and "CHART:" in message.upper()
@@ -782,7 +2134,10 @@ class MainWindow(QtWidgets.QMainWindow):
                     self._aggregation_mode,
                 )
                 try:
-                    self._streaming_adapter.subscribe_chart(chart_product.epic, "1MINUTE")
+                    self._streaming_adapter.subscribe_charts(
+                        list(self._chart_stream_epics or (chart_product.epic,)),
+                        "1MINUTE",
+                    )
                     self.statusBar().showMessage(
                         "Direct chart scale unavailable; "
                         "using 1-minute stream with local aggregation.",
@@ -810,11 +2165,18 @@ class MainWindow(QtWidgets.QMainWindow):
         if stream_product is None:
             return
         try:
-            requested_scale = chart_scale_for_interval(self.chart_view.current_interval_seconds())
+            requested_scale = "1MINUTE"
             self._live_chart_scale_requested = requested_scale
             self._live_chart_scale_actual = requested_scale
-            self._aggregation_mode = "direct"
+            self._aggregation_mode = "session_m1"
             self._chart_stream_scale_fallback_attempted = False
+            self._chart_stream_permission_fallback_attempted = False
+            bridge = StreamingEventBridge(self._stream_generation)
+            bridge.quote_received.connect(self._on_current_stream_quote)
+            bridge.chart_received.connect(self._on_current_stream_chart)
+            bridge.status_changed.connect(self._on_current_stream_status)
+            bridge.error_received.connect(self._on_current_stream_error)
+            self._streaming_bridge = bridge
             adapter = IGStreamingAdapter(
                 session=session,
                 account_id=self._active_connection.current_account_id,
@@ -822,17 +2184,33 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             self.chart_view.set_stream_status("CONNECTING")
             adapter.start()
-            price_epics = list(dict.fromkeys([*self._visible_price_epics, stream_product.epic]))
+            price_epics = _prioritized_price_epics(
+                self._selected_product,
+                self._visible_price_epics,
+                stream_product,
+            )
             adapter.subscribe_markets(price_epics[:PRODUCT_STREAM_ITEMS_LIMIT])
-            adapter.subscribe_chart(stream_product.epic, requested_scale)
+            chart_epics = _prioritized_chart_epics(
+                stream_product,
+                initial_ig_reference_epics(),
+            )
+            self._scanner_session_candles = MultiMarketSessionCandleService(
+                self._scanner_binding_registry,
+                candle_history_service=self._scanner_candle_history_service,
+                reference_epics=tuple(chart_epics),
+            )
+            adapter.subscribe_charts(chart_epics, requested_scale)
+            self._chart_stream_epics = tuple(chart_epics)
             self._streaming_adapter = adapter
             LOGGER.debug(
                 "Streaming restarted selected_epic=%s source_epic=%s visible_prices=%s account=%s "
-                "live_chart_scale_requested=%s live_chart_scale_actual=%s aggregation_mode=%s",
+                "chart_streams=%s live_chart_scale_requested=%s "
+                "live_chart_scale_actual=%s aggregation_mode=%s",
                 self._selected_product.epic,
                 stream_product.epic,
                 len(price_epics[:PRODUCT_STREAM_ITEMS_LIMIT]),
                 mask_identifier(self._active_connection.current_account_id),
+                len(chart_epics),
                 self._live_chart_scale_requested,
                 self._live_chart_scale_actual,
                 self._aggregation_mode,
@@ -901,7 +2279,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._selected_product,
                 self.product_selector.results(),
                 self._active_connection.adapter,
-                chart_source_overrides=self._config.chart_source_overrides,
+                chart_source_overrides=_chart_source_overrides_from_config(self._config),
             )
             if all(product.epic != resolved.product.epic for product in candidates):
                 candidates.insert(0, resolved.product)
@@ -909,11 +2287,44 @@ class MainWindow(QtWidgets.QMainWindow):
             self._chart_source_resolution_method = resolved.method
         return candidates
 
-    def _load_selected_product_history(self) -> None:
+    def _load_selected_product_history(self, *, force_refresh: bool = False) -> None:
         if self._active_connection is None:
             return
         if self._selected_product is None:
             return
+        if SESSION_ONLY_CANDLES:
+            self._price_history_generation += 1
+            chart_product = self._chart_product or self._selected_product
+            price_basis = self.chart_view.current_price_basis()
+            self._last_history_reload_price_basis = price_basis
+            self._candle_history_service.reset_active_series()
+            chart_series = self._candle_history_service.session_series(
+                environment=self._active_connection.environment,
+                account_id=self._active_connection.current_account_id,
+                selected_product_epic=self._selected_product.epic,
+                chart_source_epic=chart_product.epic,
+                resolution_seconds=self.chart_view.current_interval_seconds(),
+                price_basis=price_basis,
+            )
+            self._chart_candle_series = chart_series
+            self.chart_view.set_candles(chart_series.candles)
+            LOGGER.debug(
+                "Session-only chart selected_product_epic=%s chart_source_epic=%s "
+                "timeframe_seconds=%s candles=%s; historical REST/cache disabled",
+                self._selected_product.epic,
+                chart_product.epic,
+                chart_series.resolution_seconds,
+                len(chart_series.candles),
+            )
+            self.statusBar().showMessage(
+                "Mode session : bougies construites depuis le flux M1; "
+                "aucun historique REST/cache.",
+                12000,
+            )
+            return
+
+        # Dormant path retained for a future, explicitly selected history provider.
+        self._price_history_generation += 1
         try:
             interval_seconds = self.chart_view.current_interval_seconds()
             range_key = self.chart_view.current_range_key()
@@ -925,40 +2336,13 @@ class MainWindow(QtWidgets.QMainWindow):
             history_candidates = self._history_candidate_products()
             if not history_candidates:
                 return
-            self._chart_candle_series = None
-            if self._api_allowance_exceeded:
-                LOGGER.debug(
-                    "Price history skipped selected_product_epic=%s due to global allowance block",
-                    self._selected_product.epic,
-                )
-                return
+            if not force_refresh:
+                self._chart_candle_series = None
+                self._candle_history_service.reset_active_series()
             displayed_from_cache = False
             for product in history_candidates:
                 anchor_price = _product_anchor_price(product)
                 cache_key = (product.epic, resolution, range_key, price_basis.value, max_points)
-                stream_cache_loaded = self._candle_history_service.load_stream_cache(
-                    environment=self._active_connection.environment,
-                    account_id=account_id,
-                    selected_product_epic=self._selected_product.epic,
-                    chart_source_epic=product.epic,
-                    resolution_seconds=interval_seconds,
-                    price_basis=price_basis,
-                )
-                if stream_cache_loaded is not None and not displayed_from_cache:
-                    self._chart_candle_series = stream_cache_loaded.series
-                    self.chart_view.set_candles(stream_cache_loaded.series.candles)
-                    displayed_from_cache = True
-                    self.statusBar().showMessage(
-                        "Using cached history; live chart continues.",
-                        12000,
-                    )
-                    LOGGER.debug(
-                        "Stream candle cache hit selected_product_epic=%s chart_source_epic=%s "
-                        "cache_hit=true source=stream-cache historical_candles_loaded=%s",
-                        self._selected_product.epic,
-                        product.epic,
-                        stream_cache_loaded.loaded_count,
-                    )
                 LOGGER.debug(
                     "History request selected_product_epic=%s selected_product_type=%s "
                     "chart_source_epic=%s chart_source_type=%s "
@@ -1000,7 +2384,23 @@ class MainWindow(QtWidgets.QMainWindow):
                     )
                     if cached_entry is not None:
                         self._price_history_cache[cache_key] = cached_entry
-                if cached_entry is not None and not displayed_from_cache:
+                cache_age = (
+                    datetime.now(UTC) - cached_entry.saved_at.astimezone(UTC)
+                    if cached_entry is not None
+                    else None
+                )
+                current_chart_source = (
+                    self._chart_candle_series.chart_source_epic
+                    if self._chart_candle_series is not None
+                    else None
+                )
+                if (
+                    cached_entry is not None
+                    and cache_age is not None
+                    and cache_age <= HISTORY_CACHE_REFRESH_TTL
+                    and not force_refresh
+                    and (not displayed_from_cache or current_chart_source == product.epic)
+                ):
                     self._render_history_entry(
                         product,
                         cached_entry=cached_entry,
@@ -1022,7 +2422,23 @@ class MainWindow(QtWidgets.QMainWindow):
                         self.chart_view.display_bar_count(),
                         cached_entry.saved_at.isoformat(),
                     )
-                else:
+                    self.statusBar().showMessage(
+                        "Recent historical snapshot reused; live chart continues.",
+                        12000,
+                    )
+                    LOGGER.debug(
+                        "Recent history snapshot reused epic=%s age_seconds=%.3f",
+                        product.epic,
+                        cache_age.total_seconds(),
+                    )
+                    return
+                elif cached_entry is not None:
+                    LOGGER.debug(
+                        "Stale historical snapshot ignored epic=%s age_seconds=%.3f",
+                        product.epic,
+                        cache_age.total_seconds() if cache_age is not None else -1,
+                    )
+                elif cached_entry is None:
                     LOGGER.debug(
                         "History cache miss selected_product_epic=%s chart_source_epic=%s "
                         "cache_hit=false cache_miss=true",
@@ -1050,124 +2466,287 @@ class MainWindow(QtWidgets.QMainWindow):
                             15000,
                         )
                     else:
+                        retry_at = self._history_allowance_state.blocked_until
+                        retry_text = (
+                            retry_at.astimezone().strftime("%Y-%m-%d %H:%M")
+                            if retry_at is not None
+                            else "the next IG allowance window"
+                        )
                         self.statusBar().showMessage(
                             "IG historical REST allowance reached. "
-                            "Live chart continues and candles will be cached locally.",
+                            f"Automatic retry paused until {retry_text}; "
+                            "current live candles only.",
                             15000,
                         )
                     return
 
-                fallback_result = load_prices_with_adaptive_fallback(
-                    self._active_connection.adapter,
-                    product.epic,
-                    resolution=resolution,
-                    requested_max_points=max_points,
-                    stop_on_allowance_error=product.product_type == ProductType.CASH_OR_DFB,
+            if self._api_allowance_exceeded:
+                LOGGER.debug(
+                    "Price history REST skipped selected_product_epic=%s "
+                    "due to global allowance block; local cache remains available",
+                    self._selected_product.epic,
                 )
-                if fallback_result.series is None:
-                    fallback_reason = _history_fallback_reason(fallback_result)
-                    LOGGER.debug(
-                        "Price history fallback exhausted selected_product_epic=%s "
-                        "chart_source_epic=%s history_epic=%s history_requested_points=%s "
-                        "history_attempted_points=%s history_final_points=%s "
-                        "historical_candles_loaded=0 fallback_reason=%s history_success=false",
-                        self._selected_product.epic,
-                        (self._chart_product or self._selected_product).epic,
-                        product.epic,
-                        max_points,
-                        [attempt.max_points for attempt in fallback_result.attempts],
-                        None,
-                        fallback_reason,
+                if displayed_from_cache:
+                    self.statusBar().showMessage(
+                        "Using cached history; live chart continues.",
+                        15000,
                     )
-                    if (
-                        _history_fallback_is_historical_allowance(fallback_result)
-                        and product.product_type == ProductType.CASH_OR_DFB
-                    ):
-                        failed_points = (
-                            fallback_result.attempts[0].max_points
-                            if fallback_result.attempts
-                            else max_points
-                        )
-                        LOGGER.debug(
-                            "historical_rest_blocked=true reason=historical-data-allowance "
-                            "failed_epic=%s failed_resolution=%s failed_points=%s",
-                            product.epic,
-                            resolution,
-                            failed_points,
-                        )
-                        self._history_allowance_state = HistoricalAllowanceState(
-                            exhausted=True,
-                            exhausted_at=datetime.now(UTC),
-                            last_error=_history_fallback_last_error(fallback_result),
-                            affected_account_id=account_id,
-                            affected_epic="*",
-                        )
-                        self.statusBar().showMessage(
-                            "IG historical REST allowance reached. "
-                            "Live chart continues and candles will be cached locally.",
-                            15000,
-                        )
-                        return
-                    continue
+                return
 
-                cached_entry = CachedHistoryEntry(
-                    series=fallback_result.series,
-                    saved_at=datetime.now(UTC),
-                )
-                self._price_history_cache[cache_key] = cached_entry
-                _save_history_cache(
-                    environment=self._active_connection.environment,
-                    account_id=account_id,
-                    epic=product.epic,
-                    resolution=resolution,
-                    range_key=range_key,
-                    price_basis=price_basis.value,
-                    max_points=max_points,
-                    entry=cached_entry,
-                )
-                self._render_history_entry(
-                    product,
-                    cached_entry=cached_entry,
-                    source=CandleSource.REST,
-                    anchor_price=anchor_price,
+            if self._price_history_thread is not None:
+                self._pending_history_reload = True
+                self._pending_history_force_refresh = (
+                    self._pending_history_force_refresh or force_refresh
                 )
                 LOGGER.debug(
-                    "Price history loaded selected_product_epic=%s chart_source_epic=%s "
-                    "history_epic=%s history_requested_points=%s history_attempted_points=%s "
-                    "history_final_points=%s historical_candles_loaded=%s display_candles=%s "
-                    "resolution=%s range_key=%s history_success=true",
+                    "Price history reload queued selected_product_epic=%s",
                     self._selected_product.epic,
-                    (self._chart_product or self._selected_product).epic,
-                    product.epic,
-                    max_points,
-                    [attempt.max_points for attempt in fallback_result.attempts],
-                    fallback_result.selected_max_points,
-                    len(cached_entry.series.prices),
-                    self.chart_view.display_bar_count(),
-                    resolution,
-                    range_key,
                 )
                 return
 
-            if displayed_from_cache:
-                self.statusBar().showMessage("Using cached history; live chart continues.", 15000)
-                return
-            self.statusBar().showMessage(
-                "No historical cache yet. Live candles will be stored from now on.",
-                10000,
+            request = PriceHistoryRequest(
+                generation=self._price_history_generation,
+                environment=self._active_connection.environment,
+                account_id=account_id,
+                selected_product_epic=self._selected_product.epic,
+                products=tuple(history_candidates),
+                resolution=resolution,
+                range_key=range_key,
+                price_basis=price_basis,
+                max_points=max_points,
             )
+            self._start_price_history_worker(request)
         except Exception as exc:
             if _is_api_allowance_exceeded(exc):
                 self._mark_api_allowance_exceeded()
             LOGGER.debug(
                 "Price history load failed epic=%s error=%s",
-                product.epic,
+                self._selected_product.epic if self._selected_product else "<none>",
                 exc,
             )
             self.statusBar().showMessage(
                 "Historical backfill unavailable; live chart is running.",
                 10000,
             )
+
+    def _start_price_history_worker(self, request: PriceHistoryRequest) -> None:
+        if self._active_connection is None or self._price_history_thread is not None:
+            return
+        self._pending_history_reload = False
+        self._pending_history_force_refresh = False
+        self._price_history_thread = QtCore.QThread(self)
+        self._price_history_worker = PriceHistoryWorker(
+            self._active_connection.adapter,
+            request,
+        )
+        self._price_history_worker.moveToThread(self._price_history_thread)
+        self._price_history_thread.started.connect(self._price_history_worker.run)
+        self._price_history_worker.succeeded.connect(self._on_price_history_success)
+        self._price_history_worker.failed.connect(self._on_price_history_failure)
+        self._price_history_worker.finished.connect(self._price_history_thread.quit)
+        self._price_history_worker.finished.connect(self._price_history_worker.deleteLater)
+        self._price_history_thread.finished.connect(self._price_history_thread.deleteLater)
+        self._price_history_thread.finished.connect(self._clear_price_history_worker)
+        self._price_history_thread.start()
+
+    @QtCore.pyqtSlot(object)
+    def _on_price_history_success(self, result: object) -> None:
+        if not isinstance(result, PriceHistoryLoadResult):
+            return
+        request = result.request
+        if not self._history_request_is_current(request):
+            LOGGER.debug(
+                "Stale price history result ignored selected_product_epic=%s generation=%s",
+                request.selected_product_epic,
+                request.generation,
+            )
+            return
+        for history_attempt in result.attempts:
+            product = history_attempt.product
+            fallback_result = history_attempt.result
+            if fallback_result.series is None:
+                fallback_reason = _history_fallback_reason(fallback_result)
+                LOGGER.debug(
+                    "Price history fallback exhausted selected_product_epic=%s "
+                    "chart_source_epic=%s history_epic=%s history_requested_points=%s "
+                    "history_attempted_points=%s history_final_points=%s "
+                    "historical_candles_loaded=0 fallback_reason=%s history_success=false",
+                    request.selected_product_epic,
+                    (self._chart_product or self._selected_product).epic,
+                    product.epic,
+                    request.max_points,
+                    [attempt.max_points for attempt in fallback_result.attempts],
+                    None,
+                    fallback_reason,
+                )
+                if (
+                    _history_fallback_is_historical_allowance(fallback_result)
+                    and product.product_type == ProductType.CASH_OR_DFB
+                ):
+                    failed_points = (
+                        fallback_result.attempts[0].max_points
+                        if fallback_result.attempts
+                        else request.max_points
+                    )
+                    LOGGER.debug(
+                        "historical_rest_blocked=true reason=historical-data-allowance "
+                        "failed_epic=%s failed_resolution=%s failed_points=%s",
+                        product.epic,
+                        request.resolution,
+                        failed_points,
+                    )
+                    observed_at = datetime.now(UTC)
+                    self._history_allowance_state = HistoricalAllowanceState(
+                        exhausted=True,
+                        exhausted_at=observed_at,
+                        last_error=_history_fallback_last_error(fallback_result),
+                        blocked_until=observed_at + HISTORY_ALLOWANCE_PROBE_COOLDOWN,
+                        affected_account_id=request.account_id,
+                        affected_epic="*",
+                        remaining_points=0,
+                    )
+                    _save_history_allowance_state(
+                        environment=request.environment,
+                        account_id=request.account_id,
+                        state=self._history_allowance_state,
+                    )
+                    self.statusBar().showMessage(
+                        "IG historical REST allowance reached. "
+                        "No automatic retry for 6 hours; current live candles only.",
+                        15000,
+                    )
+                    return
+                continue
+
+            cache_key = (
+                product.epic,
+                request.resolution,
+                request.range_key,
+                request.price_basis.value,
+                request.max_points,
+            )
+            cached_entry = CachedHistoryEntry(
+                series=fallback_result.series,
+                saved_at=datetime.now(UTC),
+            )
+            allowance = _extract_history_allowance(getattr(cached_entry.series, "raw", {}))
+            if allowance is not None:
+                remaining_points, total_points, expiry_seconds = allowance
+                observed_at = datetime.now(UTC)
+                exhausted = remaining_points < HISTORY_SNAPSHOT_POINTS
+                self._history_allowance_state = HistoricalAllowanceState(
+                    exhausted=exhausted,
+                    exhausted_at=observed_at if exhausted else None,
+                    last_error=None,
+                    blocked_until=(
+                        observed_at + timedelta(seconds=expiry_seconds)
+                        if exhausted and expiry_seconds is not None
+                        else None
+                    ),
+                    affected_account_id=request.account_id,
+                    affected_epic="*",
+                    remaining_points=remaining_points,
+                    total_points=total_points,
+                )
+                _save_history_allowance_state(
+                    environment=request.environment,
+                    account_id=request.account_id,
+                    state=self._history_allowance_state,
+                )
+            self._price_history_cache[cache_key] = cached_entry
+            _save_history_cache(
+                environment=request.environment,
+                account_id=request.account_id,
+                epic=product.epic,
+                resolution=request.resolution,
+                range_key=request.range_key,
+                price_basis=request.price_basis.value,
+                max_points=request.max_points,
+                entry=cached_entry,
+            )
+            self._render_history_entry(
+                product,
+                cached_entry=cached_entry,
+                source=CandleSource.REST,
+                anchor_price=_product_anchor_price(product),
+            )
+            self.statusBar().showMessage(
+                f"{len(cached_entry.series.prices)} recent {request.resolution} candles "
+                "loaded from IG; direct live stream continues.",
+                12000,
+            )
+            LOGGER.debug(
+                "Price history loaded selected_product_epic=%s chart_source_epic=%s "
+                "history_epic=%s history_requested_points=%s history_attempted_points=%s "
+                "history_final_points=%s historical_candles_loaded=%s display_candles=%s "
+                "resolution=%s range_key=%s history_success=true",
+                request.selected_product_epic,
+                (self._chart_product or self._selected_product).epic,
+                product.epic,
+                request.max_points,
+                [attempt.max_points for attempt in fallback_result.attempts],
+                fallback_result.selected_max_points,
+                len(cached_entry.series.prices),
+                self.chart_view.display_bar_count(),
+                request.resolution,
+                request.range_key,
+            )
+            return
+
+        if self._chart_candle_series is not None:
+            self.statusBar().showMessage(
+                "Recent historical snapshot remains available; live chart continues.", 15000
+            )
+        else:
+            self.statusBar().showMessage(
+                "No fresh historical snapshot. Current live candles only until REST refresh.",
+                10000,
+            )
+
+    @QtCore.pyqtSlot(object)
+    def _on_price_history_failure(self, failure: object) -> None:
+        if not isinstance(failure, PriceHistoryFailure):
+            return
+        if not self._history_request_is_current(failure.request):
+            return
+        if _is_api_allowance_exceeded(failure.message):
+            self._mark_api_allowance_exceeded()
+        LOGGER.debug(
+            "Price history load failed selected_product_epic=%s error=%s",
+            failure.request.selected_product_epic,
+            failure.message,
+        )
+        self.statusBar().showMessage(
+            "Historical backfill unavailable; live chart is running.",
+            10000,
+        )
+
+    def _history_request_is_current(self, request: PriceHistoryRequest) -> bool:
+        return (
+            self._active_connection is not None
+            and self._selected_product is not None
+            and request.generation == self._price_history_generation
+            and request.environment == self._active_connection.environment
+            and request.account_id == self._active_connection.current_account_id
+            and request.selected_product_epic == self._selected_product.epic
+        )
+
+    @QtCore.pyqtSlot()
+    def _clear_price_history_worker(self) -> None:
+        self._price_history_thread = None
+        self._price_history_worker = None
+        if self._pending_history_reload:
+            force_refresh = self._pending_history_force_refresh
+            self._pending_history_reload = False
+            self._pending_history_force_refresh = False
+            QtCore.QTimer.singleShot(
+                0,
+                lambda: self._load_selected_product_history(force_refresh=force_refresh),
+            )
+
+    @QtCore.pyqtSlot()
+    def _refresh_history_after_gap(self) -> None:
+        self._load_selected_product_history()
 
     @QtCore.pyqtSlot()
     def _reload_selected_product_history(self) -> None:
@@ -1202,6 +2781,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._load_selected_product_history()
 
     def _stop_streaming(self) -> None:
+        self._stream_generation += 1
+        self._streaming_bridge = None
         if self._streaming_adapter is None:
             return
         try:
@@ -1229,6 +2810,28 @@ class MainWindow(QtWidgets.QMainWindow):
         AboutDialog(self).exec()
 
     def closeEvent(self, event: QtCore.QEvent) -> None:
+        self._paper_freshness_timer.stop()
+        self._official_news_refresh_timer.stop()
+        self._openai_context_refresh_timer.stop()
+        self._calendar_refresh_timer.stop()
+        if self._official_news_thread is not None:
+            self._official_news_thread.quit()
+            if not self._official_news_thread.wait(11_000):
+                LOGGER.warning("Official news worker did not stop before GUI shutdown")
+        if self._openai_context_thread is not None:
+            self._openai_context_thread.quit()
+            if not self._openai_context_thread.wait(31_000):
+                LOGGER.warning("OpenAI context worker did not stop before GUI shutdown")
+        if self._calendar_context_thread is not None:
+            self._calendar_context_thread.quit()
+            if not self._calendar_context_thread.wait(11_000):
+                LOGGER.warning("Calendar context worker did not stop before GUI shutdown")
+        if self._workspace_persistence:
+            self._config.workspace = self._capture_workspace_state()
+            try:
+                save_config(self._config, self._config_path)
+            except OSError as exc:
+                LOGGER.warning("Workspace settings could not be saved: %s", exc)
         self._stop_streaming()
         self._logout_active_connection()
         super().closeEvent(event)
@@ -1286,11 +2889,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self._active_connection.adapter
             if self._active_connection is not None and not self._api_allowance_exceeded
             else None,
-            chart_source_overrides=self._config.chart_source_overrides,
+            chart_source_overrides=_chart_source_overrides_from_config(self._config),
         )
         self._chart_product = resolved_chart_source.product
         self._chart_source_resolution_method = resolved_chart_source.method
         self._chart_candle_series = None
+        self._chart_quote_candle_fallback_active = False
         LOGGER.debug(
             "Selected product state applied selected_epic=%s selected_product_type=%s "
             "chart_source_epic=%s chart_source_type=%s chart_source_resolution_method=%s",
@@ -1305,6 +2909,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._chart_source_resolution_method,
         )
         self.product_selector.set_selected_product(product)
+        self.product_selector.set_chart_source(self._chart_product or product)
         self.chart_view.set_selected_product(self._chart_product or product)
         self._load_selected_product_history()
         self._restart_streaming()
@@ -1317,7 +2922,13 @@ def run_gui() -> int:
         LOGGER.debug("GUI session banner emitted session_id=%s", session_id)
     LOGGER.debug("GUI launch start")
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
-    window = MainWindow()
+    window = MainWindow(
+        workspace_persistence=True,
+        official_news_providers=(
+            federal_reserve_monetary_news_provider(),
+            ecb_press_news_provider(),
+        ),
+    )
     window.show()
     try:
         return app.exec()
@@ -1419,30 +3030,26 @@ def _api_resolution_for_interval(interval_seconds: int) -> str:
 
 
 def _history_request_spec(interval_seconds: int, range_key: str) -> tuple[str, int]:
-    range_days = {
-        "1D": 1,
-        "5D": 5,
-        "1M": 30,
-        "3M": 90,
-        "6M": 180,
-        "1Y": 365,
-        "Max": 3650,
-    }.get(range_key, 30)
+    del range_key
     resolution = _api_resolution_for_interval(interval_seconds)
-    target_points = int((range_days * 86_400) / max(interval_seconds, 60))
-    minimum_points = {
-        60: 500,
-        300: 600,
-        600: 600,
-        900: 600,
-        1800: 600,
-        3600: 500,
-        7200: 500,
-        14_400: 500,
-        86_400: 500,
-    }.get(interval_seconds, 500)
-    max_points = min(max(target_points, minimum_points), 10_000)
-    return (resolution, max_points)
+    return (resolution, HISTORY_SNAPSHOT_POINTS)
+
+
+def _latest_series_gap_key(
+    series: ChartCandleSeries,
+) -> tuple[str, int, str, str] | None:
+    if len(series.candles) < 2:
+        return None
+    previous, current = series.candles[-2:]
+    expected = timedelta(seconds=series.resolution_seconds)
+    if current.timestamp - previous.timestamp <= expected:
+        return None
+    return (
+        series.chart_source_epic,
+        series.resolution_seconds,
+        previous.timestamp.isoformat(),
+        current.timestamp.isoformat(),
+    )
 
 
 def _resolve_account_id(
@@ -1493,12 +3100,115 @@ def _find_product_by_epic(
     return None
 
 
+def _scanner_runtime_products(
+    results: list[ProductDiscoveryResult],
+    selected: TradableProduct,
+) -> tuple[TradableProduct, ...]:
+    """Return one exact product identity per EPIC, prioritizing the active selection."""
+
+    by_epic = {
+        product.epic: product for result in results for product in result.products if product.epic
+    }
+    by_epic[selected.epic] = selected
+    return tuple(by_epic[epic] for epic in sorted(by_epic))
+
+
 def _discovery_cache_path(environment: IGEnvironment) -> Path:
     return Path.home() / ".trading_ig_assistant" / f"product_discovery_{environment.value}.json"
 
 
 def _history_cache_root() -> Path:
     return Path.home() / ".trading_ig_assistant" / "cache" / "history"
+
+
+def _history_allowance_state_path(
+    *,
+    environment: IGEnvironment,
+    account_id: str | None,
+) -> Path:
+    account_marker = _history_account_marker(account_id)
+    return _history_cache_root() / environment.value / f"allowance_{account_marker}.json"
+
+
+def _load_history_allowance_state(
+    *,
+    environment: IGEnvironment,
+    account_id: str | None,
+) -> HistoricalAllowanceState:
+    path = _history_allowance_state_path(environment=environment, account_id=account_id)
+    if not path.exists():
+        return HistoricalAllowanceState()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        exhausted_at = _optional_aware_datetime(payload.get("exhausted_at"))
+        blocked_until = _optional_aware_datetime(payload.get("blocked_until"))
+        return HistoricalAllowanceState(
+            exhausted=bool(payload.get("exhausted", False)),
+            exhausted_at=exhausted_at,
+            last_error=str(payload.get("last_error") or "") or None,
+            blocked_until=blocked_until,
+            affected_account_id=account_id,
+            affected_epic="*",
+            remaining_points=_optional_int(payload.get("remaining_points")),
+            total_points=_optional_int(payload.get("total_points")),
+        )
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        LOGGER.debug("History allowance state read failed path=%s error=%s", path, exc)
+        return HistoricalAllowanceState()
+
+
+def _save_history_allowance_state(
+    *,
+    environment: IGEnvironment,
+    account_id: str | None,
+    state: HistoricalAllowanceState,
+) -> None:
+    path = _history_allowance_state_path(environment=environment, account_id=account_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "exhausted": state.exhausted,
+        "exhausted_at": state.exhausted_at.isoformat() if state.exhausted_at else None,
+        "blocked_until": state.blocked_until.isoformat() if state.blocked_until else None,
+        "last_error": state.last_error,
+        "remaining_points": state.remaining_points,
+        "total_points": state.total_points,
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _extract_history_allowance(
+    raw: dict[str, object],
+) -> tuple[int, int | None, int | None] | None:
+    metadata = raw.get("metadata")
+    allowance = metadata.get("allowance") if isinstance(metadata, dict) else None
+    if not isinstance(allowance, dict):
+        direct = raw.get("allowance")
+        allowance = direct if isinstance(direct, dict) else None
+    if allowance is None:
+        return None
+    remaining = _optional_int(allowance.get("remainingAllowance"))
+    if remaining is None:
+        return None
+    return (
+        remaining,
+        _optional_int(allowance.get("totalAllowance")),
+        _optional_int(allowance.get("allowanceExpiry")),
+    )
+
+
+def _optional_aware_datetime(value: object) -> datetime | None:
+    if value in (None, ""):
+        return None
+    parsed = datetime.fromisoformat(str(value))
+    if parsed.tzinfo is None:
+        raise ValueError("allowance datetime must be timezone-aware")
+    return parsed.astimezone(UTC)
+
+
+def _optional_int(value: object) -> int | None:
+    if value in (None, ""):
+        return None
+    return int(value)
 
 
 def _history_cache_path(
@@ -1636,6 +3346,23 @@ def _quote_from_chart_update(chart_update: ChartCandleUpdate) -> Quote | None:
     )
 
 
+def _scanner_quote_spread(quote: Quote | None) -> Decimal | None:
+    if quote is None or quote.delayed is True or quote.bid is None or quote.offer is None:
+        return None
+    return Decimal(str(quote.offer)) - Decimal(str(quote.bid))
+
+
+def _scanner_fee_for_product(
+    config: AppConfig,
+    product: TradableProduct,
+) -> Decimal | None:
+    """Return only fees representable by the flat per-unit scanner model."""
+
+    if product.asset_class is AssetClass.SHARES:
+        return None
+    return config.scanner_execution_costs.fee_for_product_type(product.product_type)
+
+
 def _resolve_chart_source(
     selected_product: TradableProduct,
     results: list[ProductDiscoveryResult],
@@ -1652,7 +3379,6 @@ def _resolve_chart_source(
     method = _chart_source_resolution_method(
         selected_product,
         resolved_product,
-        results,
         chart_source_overrides or {},
     )
     return ResolvedChartSource(product=resolved_product, method=method)
@@ -1661,7 +3387,7 @@ def _resolve_chart_source(
 def _resolve_chart_source_product(
     selected_product: TradableProduct,
     results: list[ProductDiscoveryResult],
-    adapter: IGRestAdapter | None = None,
+    _adapter: IGRestAdapter | None = None,
     *,
     chart_source_overrides: dict[str, str] | None = None,
 ) -> TradableProduct:
@@ -1696,64 +3422,8 @@ def _resolve_chart_source_product(
         )
         return override_product
 
-    resolved = _resolve_chart_source_from_candidates(selected_product, candidates)
-    if resolved.epic != selected_product.epic:
-        LOGGER.debug(
-            "Chart source resolved from cached candidates selected_product_epic=%s "
-            "selected_product_type=%s chart_source_epic=%s chart_source_type=%s",
-            selected_product.epic,
-            selected_product.product_type.value,
-            resolved.epic,
-            resolved.product_type.value,
-        )
-        return resolved
-
-    if adapter is None:
-        return selected_product
-
-    try:
-        service = ProductDiscoveryService(adapter)
-        live_candidates: list[TradableProduct] = []
-        for search_term in _chart_source_search_terms(selected_product):
-            try:
-                summaries = adapter.search_markets(search_term)
-                classified_candidates = [
-                    service.classify_product(summary, details=None) for summary in summaries
-                ]
-                _log_chart_source_candidates(
-                    selected_product.epic,
-                    search_term,
-                    classified_candidates,
-                )
-                live_candidates.extend(classified_candidates)
-            except Exception as exc:
-                LOGGER.debug(
-                    "Chart source targeted search term failed "
-                    "selected_epic=%s search_term=%r error=%s",
-                    selected_product.epic,
-                    search_term,
-                    exc,
-                )
-        resolved = _resolve_chart_source_from_candidates(selected_product, live_candidates)
-        if resolved.epic != selected_product.epic:
-            LOGGER.debug(
-                "Chart source resolved via targeted search selected_product_epic=%s "
-                "selected_product_type=%s chart_source_epic=%s chart_source_type=%s",
-                selected_product.epic,
-                selected_product.product_type.value,
-                resolved.epic,
-                resolved.product_type.value,
-            )
-            return resolved
-    except Exception as exc:
-        LOGGER.debug(
-            "Chart source targeted search failed selected_epic=%s error=%s",
-            selected_product.epic,
-            exc,
-        )
-
     LOGGER.debug(
-        "No underlying chart source found; using selected product EPIC for chart "
+        "No explicit underlying chart mapping; using selected product EPIC for chart "
         "selected_product_epic=%s selected_product_type=%s chart_source_epic=%s "
         "chart_source_type=%s",
         selected_product.epic,
@@ -1767,78 +3437,12 @@ def _resolve_chart_source_product(
 def _chart_source_resolution_method(
     selected_product: TradableProduct,
     resolved_product: TradableProduct,
-    results: list[ProductDiscoveryResult],
     chart_source_overrides: dict[str, str],
 ) -> str:
     override_product = _resolve_chart_source_override(selected_product, [], chart_source_overrides)
     if override_product is not None and override_product.epic == resolved_product.epic:
         return "override"
-    for result in results:
-        if any(product.epic == resolved_product.epic for product in result.products):
-            return "cached candidates"
-    if resolved_product.epic != selected_product.epic:
-        return "targeted search"
     return "selected fallback"
-
-
-def _resolve_chart_source_from_candidates(
-    selected_product: TradableProduct,
-    candidates: list[TradableProduct],
-) -> TradableProduct:
-    target_name = _normalize_chart_base_name(selected_product.name)
-    scored_candidates = [
-        product
-        for product in candidates
-        if product.epic != selected_product.epic
-    ]
-    if not scored_candidates:
-        return selected_product
-    ranked = sorted(
-        scored_candidates,
-        key=lambda product: _chart_source_candidate_rank(product, target_name),
-        reverse=True,
-    )
-    best = ranked[0]
-    if _chart_source_candidate_rank(best, target_name)[0] <= 0:
-        return selected_product
-    return best
-
-
-def _chart_source_search_terms(selected_product: TradableProduct) -> list[str]:
-    stripped_name = _strip_chart_suffixes(selected_product.name)
-    normalized_name = _normalize_chart_base_name(selected_product.name)
-    terms = [selected_product.name, stripped_name]
-    if "us tech 100" in normalized_name:
-        terms.insert(0, "US Tech 100")
-    terms.append(normalized_name)
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for term in terms:
-        clean = " ".join(str(term).split()).strip()
-        if not clean:
-            continue
-        key = clean.lower()
-        if key in seen:
-            continue
-        deduped.append(clean)
-        seen.add(key)
-    return deduped
-
-
-def _chart_source_candidate_rank(
-    product: TradableProduct,
-    target_name: str,
-) -> tuple[int, int, int, int, int, int]:
-    normalized_name = _normalize_chart_base_name(product.name)
-    is_cash = 1 if product.product_type == ProductType.CASH_OR_DFB else 0
-    is_indices = 1 if str(product.instrument_type or "").upper() == "INDICES" else 0
-    is_tradeable = 1 if str(product.status or "").upper() == "TRADEABLE" else 0
-    exact_name = 1 if normalized_name == target_name else 0
-    close_name = 1 if target_name in normalized_name or normalized_name in target_name else 0
-    avoids_derivative_words = (
-        0 if any(token in normalized_name for token in ("barri", "option", "call", "put")) else 1
-    )
-    return (is_cash, is_indices, is_tradeable, exact_name, close_name, avoids_derivative_words)
 
 
 def _resolve_chart_source_override(
@@ -1849,6 +3453,7 @@ def _resolve_chart_source_override(
     if not chart_source_overrides:
         return None
     override_keys = [
+        selected_product.epic,
         selected_product.name,
         _strip_chart_suffixes(selected_product.name),
         _normalize_chart_base_name(selected_product.name),
@@ -1870,40 +3475,9 @@ def _resolve_chart_source_override(
         epic=override_epic,
         name=_strip_chart_suffixes(selected_product.name),
         product_type=ProductType.CASH_OR_DFB,
-        instrument_type="INDICES",
+        instrument_type=selected_product.instrument_type,
+        asset_class=selected_product.asset_class,
         status="TRADEABLE",
-    )
-
-
-def _log_chart_source_candidates(
-    selected_epic: str,
-    search_term: str,
-    candidates: list[TradableProduct],
-) -> None:
-    if not candidates:
-        LOGGER.debug(
-            "Chart source candidates selected_epic=%s search_term=%r count=0",
-            selected_epic,
-            search_term,
-        )
-        return
-    sample = [
-        {
-            "name": candidate.name,
-            "epic": candidate.epic,
-            "instrument_type": candidate.instrument_type,
-            "expiry": candidate.expiry,
-            "status": candidate.status,
-            "product_type": candidate.product_type.value,
-        }
-        for candidate in candidates[:5]
-    ]
-    LOGGER.debug(
-        "Chart source candidates selected_epic=%s search_term=%r count=%s sample=%s",
-        selected_epic,
-        search_term,
-        len(candidates),
-        sample,
     )
 
 

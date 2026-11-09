@@ -1,0 +1,142 @@
+# SR_LOTS.yaml - backlog vivant SR-Harness
+
+version: "0.4"
+project: "{{PROJECT_NAME}}"
+project_key: "{{PROJECT_KEY}}"
+updated_at: null
+
+lot_naming:
+  pattern: "{{PROJECT_KEY}}-<AREA>-<SEQ>"
+  sequence_digits: 3
+  examples:
+    - "{{PROJECT_KEY}}-DESIGN-001"
+    - "{{PROJECT_KEY}}-API-001"
+
+autonomy_policy:
+  default_level: 1
+  max_lots_per_session: 3
+  max_repair_attempts_per_lot: 2
+  stop_on_gate_failure: true
+  require_human_validation_for:
+    - migration
+    - external_write
+    - dependency_change
+    - security_sensitive_change
+    - legal_fiscal_hr_or_medical_conclusion
+    - production_data_mutation
+
+autonomy_run:
+  enabled: false
+  approved_by_user_at: null
+  max_lots: 3
+  executable_statuses:
+    - repair
+    - reopened
+    - validated
+  stop_on:
+    - gate_failure
+    - human_validation_required
+    - migration
+    - dependency_change
+    - context_budget_risk
+
+status_values:
+  - proposed
+  - planned
+  - validated
+  - in_progress
+  - done
+  - user_testing
+  - repair
+  - reopened
+  - blocked
+  - deferred
+  - superseded
+
+lots:
+  - lot_id: "{{PROJECT_KEY}}-DOCS-001"
+    legacy_lot_id: "EXAMPLE-01"
+    title: "Corriger la liste documents : tri, dates et perimetre source_app"
+    status: "proposed"
+    priority: "medium" # low | medium | high | critical
+    origin:
+      - "inbox-example-documents-sort"
+    created_at: null
+    updated_at: null
+    depends_on: []
+    blocked_by: []
+    impacts: []
+    impacted_by: []
+    supersedes: []
+    superseded_by: null
+    dependency_reconciliation:
+      status: "not_required" # not_required | pending | completed | blocked
+      reviewed_lots: []
+      classifications: []
+      open_questions: []
+    global_impact:
+      required: false
+      status: "not_applicable" # pending | pass | fail | not_applicable
+      surfaces_reviewed: []
+      impacted_lots: []
+      new_lots_to_create: []
+      lots_to_reopen_or_block: []
+      sequencing_recommendation: "not_required"
+      open_questions: []
+    design_evidence:
+      status: "pending" # pending | pass | fail | not_applicable
+      code_read_required: true
+      candidate_files:
+        - "docs/codex/CODEBASE_MAP.md"
+      confirmed_files_read: []
+      symbols_or_routes_checked: []
+      tests_or_logs_checked: []
+      assumptions_remaining: []
+      open_questions: []
+      not_applicable_reason: null
+      status_ceiling_if_not_pass: "proposed"
+    objective: "Afficher les documents autorises avec un tri par derniere mise a jour fiable et des dates valides."
+    required_sources:
+      - "docs/CURRENT_STATE.md"
+      - "docs/codex/CODEBASE_MAP.md"
+    allowed_paths:
+      - "apps/**"
+      - "frontend/**"
+      - "services/**"
+      - "backend/**"
+      - "docs/codex/tasks/**"
+    forbidden_paths:
+      - ".env"
+      - ".env.*"
+      - "node_modules/**"
+    acceptance_criteria:
+      - "Le tri par defaut est derniere mise a jour descendante."
+      - "Les dates invalides sont normalisees, ignorees ou signalees sans casser l'affichage."
+      - "Le perimetre sans filtre respecte tous les source_app autorises pour l'utilisateur."
+    validated_request_ids:
+      - "REQ-DOCS-SORT-001"
+      - "REQ-DOCS-DATES-001"
+      - "REQ-DOCS-SOURCE-APP-001"
+    verification_commands:
+      - "git diff --check"
+    gates:
+      evidence_gate: true
+      lot_design_evidence_gate: true
+      knowledge_gate: true
+      scope_gate: true
+      spec_gate: true
+      verification_gate: true
+      backlog_mutation_gate: true
+      global_impact_gate: false
+      lot_dependency_reconciliation: false
+      propagation_gate: true
+      self_evaluation_gate: true
+      design_gate: true
+      context_budget_gate: true
+      nexus_context_gate: false
+    stop_conditions:
+      - "regle de droits source_app absente ou contradictoire"
+      - "mutation de donnees non prevue"
+      - "test ou build bloquant apres tentatives de correction"
+    human_validation_required: []
+    notes: []

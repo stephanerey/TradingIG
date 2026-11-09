@@ -1,0 +1,8 @@
+objective: "Refresh official Fed/ECB source health outside the Qt event loop"
+scope:
+  allowed: "read-only official providers, Qt worker/timer, health-only context, offline tests"
+  forbidden: "headline scoring, AI provider, IG mutation, Paper fill, DEMO/LIVE/AUTO"
+skills:
+  - codex-tradingig-analysis-scanner
+status: complete
+next_action: "Add structured calendar/proxy sources or connect an authorized AI provider"

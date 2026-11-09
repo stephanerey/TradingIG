@@ -1,0 +1,21 @@
+schema_version: 1
+objective: "Activer un contexte OpenAI consultatif toutes les 15 minutes après consentement de session."
+allowed_scope:
+  - "Settings OpenAI et orchestration Qt du contexte"
+  - "tests et documentation directement liés"
+protected_state:
+  - "aucun ordre IG ou LIVE"
+  - "aucun secret persisté ou affiché"
+  - "changements locaux existants préservés"
+decisions:
+  - "consentement périodique distinct, session-only et désactivé par défaut"
+  - "aucun chevauchement, aucun appel sans preuve officielle"
+changed_files:
+  - "src/trading_ig_assistant/ui/settings_dialog.py"
+  - "src/trading_ig_assistant/ui/main_window.py"
+  - "tests/unit/test_openai_settings.py"
+  - "tests/unit/test_openai_context_runtime.py"
+verification:
+  - "478 tests hors ligne verts après clôture consolidée"
+  - "ruff check src tests vert"
+next_action: "Reprendre le prochain module fonctionnel; validation humaine périodique optionnelle."

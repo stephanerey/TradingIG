@@ -1,19 +1,24 @@
-# Prompt Codex — installer et vérifier l'environnement méthode
+# Installer SR Method 4.1 dans un projet neuf
 
-Tu dois préparer l'environnement Codex du projet sans modifier le code applicatif.
+Ne code pas. Objectif : installer la version publiee `4.1.0`, verifier l'installation, puis stopper avant tout travail applicatif.
 
-## Objectifs
-1. Lire `AGENTS.md`.
-2. Lire `docs/CURRENT_STATE.md` s'il existe.
-3. Lire `docs/codex/PROJECT_PROFILE.yaml`.
-4. Vérifier les fichiers méthode avec `python scripts/codex/verify_codex_pack.py`.
-5. Vérifier les skills avec `python scripts/codex/validate_skills.py --path ~/.codex/skills` ou équivalent Windows.
-6. Générer le RepoMap avec `python scripts/codex/generate_python_repo_map.py --write`.
-7. Ne pas modifier le code applicatif.
+1. Lire le `AGENTS.md` le plus proche et inspecter la cible sans mutation.
+2. Choisir explicitement `SR_PACK_SOURCE`; relever `version`, `release_status`, `source_commit` et l'etat Git. Refuser une source qui ne correspond pas a la release attendue.
+3. Si un marqueur SR existe deja (`docs/codex/SR_PACK_VERSION.json`, `SR_METHOD.md` ou `SR_LOTS.yaml`), utiliser `05_upgrade_codex_environment.md`.
+4. Sinon previsualiser :
 
-## Sortie attendue
-- état de l'installation ;
-- profil détecté ;
-- commandes disponibles ;
-- problèmes bloquants ;
-- prochaine étape recommandée.
+```bash
+python3 "$SR_PACK_SOURCE/scripts/install_codex_pack.py" --source "$SR_PACK_SOURCE" --target "$SR_TARGET" --json
+```
+
+Rapporter les creations, preservations et controles. Attendre l'autorisation exacte exigee par le projet, puis utiliser `--write`. Ne pas inventer de lot, passe, exigence ou capacite MCP.
+
+Verifier ensuite :
+
+```bash
+python3 "$SR_TARGET/scripts/codex/sr_post_install_check.py" --root "$SR_TARGET" --json
+```
+
+La cible doit contenir un `AGENTS.md` court, `SR_LOTS.yaml`, `SR_PASSES.yaml` avec `passes: []`, `MCP_POLICY.yaml` en mode `core` et le template `task_state.yaml`. Aucun code, secret, migration, dependance ou deploiement applicatif ne doit changer.
+
+Parcours : installation `00 -> 06`; installation existante `05 -> 06 -> 07`.

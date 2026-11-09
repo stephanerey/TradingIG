@@ -1,0 +1,4 @@
+interface:
+  display_name: "TradingIG Supervised DEMO Gate"
+  short_description: "Encadrer les preuves IG DEMO supervisées"
+  default_prompt: "Use $codex-tradingig-supervised-demo-gate to collect sanitized IG DEMO evidence within the current read-only authorization."

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import UTC, datetime
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
@@ -11,6 +12,19 @@ from uuid import uuid4
 LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
 LOG_FILE_NAME = "trading_ig_assistant.log"
 _SESSION_BANNER_EMITTED = False
+
+
+class WindowsSafeTimedRotatingFileHandler(TimedRotatingFileHandler):
+    """Keep logging when Windows temporarily locks the file during rollover."""
+
+    def doRollover(self) -> None:
+        try:
+            super().doRollover()
+        except PermissionError:
+            # A second running process can hold the shared log open on Windows. Retrying for every
+            # record floods stderr and drops useful diagnostics, so defer rotation to the next
+            # interval while continuing to append to the current file.
+            self.rolloverAt = self.computeRollover(int(time.time()))
 
 
 def default_log_dir() -> Path:
@@ -37,7 +51,7 @@ def configure_logging(
 
     existing_handler = _find_existing_file_handler(root_logger, log_path)
     if existing_handler is None:
-        handler = TimedRotatingFileHandler(
+        handler = WindowsSafeTimedRotatingFileHandler(
             log_path,
             when="midnight",
             interval=1,

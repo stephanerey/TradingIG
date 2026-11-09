@@ -1,8 +1,11 @@
 # KPIs
 
+> **V1.2 reconstruction — 2026-10-22:** [Project conventions](../00_conventions/tradingig_v1_2_conventions.md) and [reconciliation decisions](decisions.md) apply. Original text is preserved; documented V1.2 changes govern current scope. No implementation or activation is implied.
+
+
 > **PRD Policy:** **PROJECT (editable)** — Fill and update this file for the current project.
 
-**Last updated:** 2026-05-07
+**Last updated:** 2026-10-22
 
 ## KPI list
 | KPI | Definition | How measured | Target | Notes |
@@ -20,3 +23,9 @@
 - Data source(s): local event log, SQLite database, unit/integration test reports, IG demo session logs.
 - Frequency: per development milestone and after every significant trading session.
 - Owner: project owner / coding agent during implementation.
+
+## V1.2 scope alignment
+
+Use product brief §1.4, F009 statistics and the acceptance matrix. Scores rank candidates rather than predict win probability; label estimated P&L/costs. This delivery claims no measured product performance.
+
+Canonical requirements: [chapter 1](product_brief.md), [chapter 13](../30_feature/F009_trade_journal_and_analytics.md), [chapter 19](../90_quality/acceptance_matrix.md).

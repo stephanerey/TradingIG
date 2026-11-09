@@ -1,0 +1,9 @@
+objective: "Add deterministic Paper replay metrics with explicit no-look-ahead evidence"
+scope:
+  allowed: "offline domain/service code, synthetic tests, R08 documentation"
+  forbidden: "AUTO activation, broker calls, real data claims, persistence, GUI wiring"
+skills:
+  - codex-tradingig-paper-execution
+  - codex-tradingig-accounts-risk
+status: core_complete_activation_not_authorized
+next_action: "Select an approved strategy and versioned dataset before any full chronological validation"

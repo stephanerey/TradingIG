@@ -1,0 +1,11 @@
+schema_version: 1
+status: completed
+objective: "Compléter les indicateurs PRD reproductibles sans signal ni exécution."
+next_action: "Implémenter les stratégies techniques avec configurations explicites, sans défaut caché."
+protected_state:
+  branch: chore/sr41-upgrade
+  head: 512c16d
+  preserve_dirty_worktree: true
+external_effects:
+  network_calls: false
+  broker_orders: false

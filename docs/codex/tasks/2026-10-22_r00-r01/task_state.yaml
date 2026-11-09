@@ -1,0 +1,15 @@
+objective: "Complete R00 baseline and the three bounded R01 market-data reliability fixes, then stop."
+status: completed
+allowed_scope:
+  - project venv and declared dependencies
+  - offline baseline checks
+  - focused cache, candle aggregation, and Qt history-loading source/tests
+forbidden_scope:
+  - authenticated IG access or live orders
+  - new application dependencies or migrations
+  - R02 and later phases
+skills:
+  - aurora-lot-runner
+  - aurora-diagnose
+open_requirements: []
+next_action: "Stop after R01; do not start R02 without a new user request."

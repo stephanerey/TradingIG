@@ -1,8 +1,11 @@
 # Testing Strategy
 
+> **V1.2 reconstruction — 2026-10-22:** [Project conventions](../00_conventions/tradingig_v1_2_conventions.md) and [reconciliation decisions](../01_product/decisions.md) apply. Original text is preserved; documented V1.2 changes govern current scope. No implementation or activation is implied.
+
+
 > **PRD Policy:** **PROJECT (editable)** — Fill and update this file for the current project.
 
-**Last updated:** 2026-05-07
+**Last updated:** 2026-10-22
 
 ## Test layers
 - Unit tests: risk engine, ticket builder, pending-order state machine, trade manager, candle aggregation, redaction.
@@ -35,3 +38,9 @@ pytest tests/integration
 - Use fake secrets for redaction tests.
 - Use sanitized IG-like JSON fixtures.
 - Do not commit real account IDs or tokens.
+
+## V1.2 scope alignment
+
+For this documentary delivery, check links/anchors, coverage, preserved files and Git scope. Installation commands above are not part of consolidation. Future application checks remain pytest -q, ruff check src tests and native Windows Qt smoke as relevant. Network/credential integration is opt-in; critical regression coverage remains required.
+
+Canonical requirements: [chapter 18](../05_coding_agent/sr41_development_workflow.md), [chapter 19](acceptance_matrix.md), [chapter 22](definition_of_done.md).

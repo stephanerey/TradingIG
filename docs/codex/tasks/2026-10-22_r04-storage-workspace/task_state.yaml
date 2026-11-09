@@ -1,0 +1,14 @@
+schema_version: 1
+status: completed
+objective: Implement recoverable append-only storage, P&L aggregation and atomic workspace settings.
+allowed_scope:
+  - explicit local SQLite store and repositories
+  - journal and deterministic P&L services
+  - backward-compatible non-secret JSON settings and existing-window layout
+open_requirements: []
+evidence:
+  - 134 offline tests passed
+  - ruff check src tests passed
+  - schema recovery and append-only controls passed
+  - SR 4.1 post-check passed
+next_action: Present the compact R04 summary, then start R05 when continuing.

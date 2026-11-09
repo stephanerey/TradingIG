@@ -1,7 +1,10 @@
 # F011 — Global Market Context Ribbon
 
-> **PRD Policy:** **PROJECT (editable)** — Feature specification.  
-**Last updated:** 2026-05-07
+> **V1.2 reconstruction — 2026-10-22:** [Project conventions](../00_conventions/tradingig_v1_2_conventions.md) and [reconciliation decisions](../01_product/decisions.md) apply. Original text is preserved; documented V1.2 changes govern current scope. No implementation or activation is implied.
+
+
+> **PRD Policy:** **PROJECT (editable)** — Feature specification.\
+**Last updated:** 2026-10-22
 
 ## Goal
 Add a compact, always-visible market context ribbon directly below the main menu / top toolbar. The ribbon summarizes global market drivers with red/yellow/green status indicators so the user can immediately see whether the current macro/news environment supports, weakens, or warns against a trade idea.
@@ -135,3 +138,13 @@ The Settings UI should allow:
 - Use mocked provider adapters for deterministic states: all-green risk-on, mixed/yellow, red event-risk, stale data.
 - Test that high-impact scheduled events inside the configured lookahead window raise at least `YELLOW`, and `RED` if configured as hard warning.
 - Test that a software pending order revalidates macro status at trigger time.
+
+## V1.2 scope alignment
+
+Retain the persistent ribbon placement and colors. Use F005's versioned context; separate direction, event risk, confidence and freshness. Unavailable information is not favorable evidence.
+
+Canonical requirements: [chapter 11](F005_macro_news_context_engine.md), [chapter 12](F012_windows_workspace_and_settings.md), [chapter 19](../90_quality/acceptance_matrix.md).
+
+## V1.2 traceability
+
+[Chapter 4](../10_architecture/overview.md) · [Chapter 11](F005_macro_news_context_engine.md) · [Acceptance matrix](../90_quality/acceptance_matrix.md) · [Definition of Done](../90_quality/definition_of_done.md). Criteria are specifications, not passed test results.

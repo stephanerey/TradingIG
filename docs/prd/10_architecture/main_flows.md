@@ -1,8 +1,11 @@
 # Main Flows
 
+> **V1.2 reconstruction — 2026-10-22:** [Project conventions](../00_conventions/tradingig_v1_2_conventions.md) and [reconciliation decisions](../01_product/decisions.md) apply. Original text is preserved; documented V1.2 changes govern current scope. No implementation or activation is implied.
+
+
 > **PRD Policy:** **PROJECT (editable)** — Fill and update this file for the current project.
 
-**Last updated:** 2026-05-07
+**Last updated:** 2026-10-22
 
 ## Flow 1 — Configure and connect to IG
 1. User opens Settings.
@@ -68,3 +71,9 @@
 
 ## Testing notes
 - Use replay data to test flows 3–5 without market connectivity.
+
+## V1.2 scope alignment
+
+Flow 2 now reads cache → bounded REST backfill → streaming, with I/O outside Qt. Flow 3 uses account/capabilities and risk vetoes. Flow 4 follows F007 canonical states. Flow 5 enters PROTECTED only on broker confirmation and includes CLOSING. ANALYSIS never submits, modifies or closes broker orders.
+
+Canonical requirements: [chapter 6](../30_feature/F003_realtime_market_data_and_charts.md), [chapter 8](../30_feature/F006_ticket_builder_and_risk_engine.md), [chapter 9](../30_feature/F007_software_pending_orders.md), [chapter 10](../30_feature/F008_trade_monitor_and_dynamic_stop_manager.md).

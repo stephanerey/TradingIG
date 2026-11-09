@@ -1,13 +1,10 @@
-# Findings
+# findings.md
 
-## Faits observés
-- 
+## Decouvertes techniques
+- ...
 
-## Écarts documentation / code
-- 
+## Decouvertes metier
+- ...
 
-## Hypothèses
-- 
-
-## Cause probable si bug
-- 
+## Ecarts documentation/code
+- ...

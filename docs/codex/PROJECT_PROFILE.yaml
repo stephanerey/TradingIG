@@ -1,51 +1,229 @@
 project:
-  name: "{PROJECT_NAME}"
-  base_stack: "desktop-pyqt"
-  domain: "{DOMAIN}"
-  risk_level: "medium-high"
-
+  name: TradingIG
+  base_stack: desktop-pyqt
+  domain: trading
+  risk_level: medium-high
+  key: TIG
 python:
-  preferred_version: "3.12"
-  layout: "src-or-package"
-  package_name: ""
-  venv_policy: "use-project-venv"
-  test_framework: "pytest"
-  lint_tool: "ruff"
-  type_checker: "optional"
-
+  preferred_version: '3.12'
+  layout: src-or-package
+  package_name: ''
+  venv_policy: use-project-venv
+  test_framework: pytest
+  lint_tool: ruff
+  type_checker: optional
 codex:
-  require_planning_with_files: true
   require_skill_selection: true
   require_repo_map: true
-  require_review_diff: true
   require_current_state_update: conditional
   prefer_minimal_patch: true
   ask_before_large_refactor: true
-
+  method_label: SR Development Method
+  require_sr_bootstrap_on_resume: true
+  require_domain_skill_for_business_changes: true
+  require_agent_runtime_contract: true
+  require_knowledge_gate: true
+  require_self_evaluation_gate: false
+  require_ui_visual_qa_for_ui: true
+  max_agents_md_lines: 120
+  max_agents_md_tokens: 1200
 skills:
   method:
-    - python-planning-with-files
-    - python-diagnose
-    - python-tdd
-    - python-review-diff
-    - python-architecture-check
-    - python-repomap-maintainer
-    - python-terminal-token-optimizer
-    - python-package-env
-    - python-pyqt-threading
-  domain: []
+  - aurora-diagnose
+  - aurora-ui-visual-qa
+  - aurora-architecture-check
+  - aurora-lot-runner
+  domain:
+  - codex-tradingig-accounts-risk
+  - codex-tradingig-storage-audit
+  - codex-tradingig-analysis-scanner
+  - codex-tradingig-paper-execution
+  - codex-tradingig-supervised-demo-gate
   runtime: []
-
+  global_policy: install_only_method_skills_globally
+  project_local_path: docs/codex/project-skills
+  digest: docs/codex/SKILL_DIGEST.md
+  allow_project_skill_export_to_global: false
+  optional:
+  - aurora-to-prd
+  - aurora-domain-skill-factory
+  deprecated: []
 verification:
-  tests_all: "pytest -q"
-  lint: "ruff check ."
-  format_check: "ruff format --check ."
-  repo_map: "python scripts/codex/generate_python_repo_map.py --write"
-  diff_summary: "python scripts/codex/safe_diff_summary.py"
-  gui_import_smoke: "python -c "print('configure GUI smoke command in PROJECT_PROFILE.yaml')""
-
+  tests_all: pytest -q
+  lint: ruff check .
+  format_check: ruff format --check .
+  repo_map: python scripts/codex/generate_python_repo_map.py --write
+  diff_summary: python scripts/codex/safe_diff_summary.py
+  gui_import_smoke: python -c "print('configure GUI smoke command in PROJECT_PROFILE.yaml')"
+  ui_verify: node scripts/codex/sr_ui_verify.mjs
+  ui_smoke: node scripts/codex/playwright_auth_smoke.mjs
 token_optimization:
   enabled: optional
   preserve_raw_output: true
-  raw_output_dir: ".codex_artifacts/command_logs"
+  raw_output_dir: .codex_artifacts/command_logs
   compact_output_max_lines: 120
+knowledge:
+  mode: core
+  core_sources:
+  - docs/codex/CODEBASE_MAP.md
+  - docs/codex/CODEBASE_MAP.generated.md
+  - docs/codex/REPO_MAP_POLICY.md
+  nexus_kg:
+    enabled: false
+    source: null
+    refresh_command: null
+    context_pack: docs/codex/NEXUS_CONTEXT_PACK.md
+    policy_file: docs/codex/MCP_POLICY.yaml
+  doctrine: RepoMap/KG orientent; le code reel et les tests restent la source finale.
+domain_expertise:
+  bootstrap_required: true
+  required_docs:
+  - docs/domain/DOMAIN_PROFILE.md
+  - docs/domain/GLOSSARY.md
+  - docs/domain/BUSINESS_RULES.md
+  - docs/domain/RISK_REGISTER.md
+  - docs/domain/HUMAN_VALIDATION_RULES.md
+  block_business_changes_without_domain_skill: true
+agent_runtime:
+  public_name: SR Agent Method
+  method_doc: docs/codex/AI_AGENT_RUNTIME_METHOD.md
+  max_builder_candidates_v1: 5
+  require_bounded_product_action: true
+  require_runtime_shape: true
+  require_internal_representation_contract: true
+  require_user_message_builder: true
+  require_tools_actions_split: true
+  require_routing_policy_when_ambiguous: true
+  require_output_schema: true
+  require_test_cases: true
+  require_human_validation_for_critical_actions: true
+  forbid_llm_generated_sql_execution: true
+ui_validation:
+  enabled: false
+  migration_policy: additive_legacy_compatible
+  required_for_ui_lots: false
+  runner:
+    command: node scripts/codex/sr_ui_verify.mjs
+  base_url:
+    env: PLAYWRIGHT_BASE_URL
+    default: http://localhost:3000
+  routes: []
+  viewports:
+  - name: desktop-xl
+    width: 1440
+    height: 900
+  - name: desktop
+    width: 1280
+    height: 800
+  - name: tablet
+    width: 768
+    height: 1024
+  - name: mobile
+    width: 390
+    height: 844
+  auth:
+    required: false
+    mode: none
+    storage_state:
+      path: .playwright/.auth/user.json
+    setup_command: null
+    login_detection:
+      url_patterns:
+      - /login
+      - /signin
+      - /auth
+      - /oauth/
+      - /oidc/
+      - /if/flow/
+  checks:
+    screenshots: true
+    console_errors: true
+    console_error_ignore_patterns: []
+    page_errors: true
+    request_failed: warn
+    request_failed_ignore_patterns: []
+    horizontal_overflow: true
+    horizontal_overflow_tolerance_px: 2
+    unexpected_login_redirect: true
+    wait_until: domcontentloaded
+    wait_after_ms: 300
+  evidence:
+    directory: output/playwright
+    report_file: output/playwright/ui-verification-report.json
+sr_harness:
+  public_name: SR Development Method
+  require_sr_harness_for_multi_lot: true
+  max_lots_per_autonomous_pass: 3
+  require_user_visible_sr_start: true
+  require_user_visible_sr_close: true
+  require_evidence_gate_before_plan: true
+  require_design_gate_for_ui: true
+  require_ui_test_readiness_gate_for_ui: true
+  require_ui_visual_evidence_gate_for_ui: true
+  require_context_budget_gate: true
+  require_self_evaluation_gate: false
+  task_state_file: docs/codex/tasks/YYYY-MM-DD_slug/task_state.yaml
+  legacy_contracts_readable: true
+  require_conversation_transition_decision: true
+  require_propagation_gate_for_reference_changes: true
+  propagation_gate_policy:
+    require_preflight_before_mutation: true
+    require_postcheck_before_done: true
+    human_validation_required_for:
+    - high
+    - critical
+    human_validation_required_for_strict_mode:
+    - medium
+    - high
+    - critical
+    legacy_contract_policy: warn_not_block
+  default_lot_order:
+  - reopened
+  - validated
+  stop_conditions:
+  - red_gate
+  - missing_business_rule
+  - ambiguous_migration
+  - destructive_change
+  - external_secret_needed
+  - user_testing_required
+  - context_budget_risk
+sr_passes:
+  enabled: true
+  passes_file: docs/codex/SR_PASSES.yaml
+  max_lots_per_pass: 5
+  require_pass_planning_gate: true
+  require_preflight_before_pass: true
+  allow_grouped_e2e: true
+  require_pass_contract: false
+  migration_policy: non_breaking_additive
+  pass_runtime_goal:
+    enabled: true
+    builder_script: scripts/codex/build_pass_runtime_goal.py
+    template_file: docs/codex/tasks/_TEMPLATE/pass_runtime_goal.md
+    max_goal_command_chars: 1000
+    hard_limit: 4000
+    allow_planned_dry_run: true
+    executable_statuses:
+    - validated
+    - in_progress
+    forbid_silent_next_pass_chain: true
+    done_requires_user_validation_when_e2e_required: true
+lot_naming:
+  convention: <PROJECT_KEY>-<AREA>-<SEQ>
+  examples:
+  - APP-DESIGN-001
+  - APP-API-001
+  - APP-AUDIT-001
+  legacy_policy: keep legacy IDs but add legacy_lot_id when reopening or migrating
+autonomy_run:
+  default_batch_size: 3
+  require_gate_report_after_each_lot: true
+  allow_continue_when_gates_green: true
+context_budget:
+  context_window_tokens: 258400
+  mode: separate_dimensions
+  check_timing: before_each_significant_response
+  compact_command: python3 scripts/codex/context_budget_report.py --root . --compact
+  hide_green_status: true
+  require_transition_decision: true

@@ -24,6 +24,12 @@ class CandleSeriesUpdated:
 
 
 class CandleAggregationService:
+    def __init__(self) -> None:
+        self._subcandles: dict[
+            tuple[str, int, ChartPriceBasis, int],
+            dict[int, Candle],
+        ] = {}
+
     def from_price_series(
         self,
         series: PriceSeries,
@@ -84,6 +90,29 @@ class CandleAggregationService:
             close=Decimal(str(close_value)),
             volume=Decimal(str(chart_update.volume)) if chart_update.volume is not None else None,
         )
+        source_interval_seconds = _chart_interval_seconds(chart_update.interval)
+        if (
+            interval_seconds is not None
+            and source_interval_seconds is not None
+            and interval_seconds > source_interval_seconds
+        ):
+            bucket_ms = int(timestamp.timestamp() * 1000)
+            subcandle_key = (
+                chart_update.epic,
+                interval_seconds,
+                price_basis,
+                bucket_ms,
+            )
+            subcandles = self._subcandles.setdefault(subcandle_key, {})
+            subcandles[chart_update.timestamp_ms] = Candle(
+                timestamp=datetime.fromtimestamp(chart_update.timestamp_ms / 1000.0, tz=UTC),
+                open=candle.open,
+                high=candle.high,
+                low=candle.low,
+                close=candle.close,
+                volume=candle.volume,
+            )
+            candle = _aggregate_subcandles(timestamp, subcandles)
         candles = list(current)
         for index, existing in enumerate(candles):
             if existing.timestamp == candle.timestamp:
@@ -119,12 +148,15 @@ def price_ohlc_from_payload(
     )
     if close_price is None:
         return None
-    open_price = _basis_decimal_from_payload(
-        payload,
-        bid_keys=["openPrice", "open", "open_price", "BID_OPEN"],
-        ask_keys=["openPrice", "open", "open_price", "OFR_OPEN"],
-        price_basis=price_basis,
-    ) or close_price
+    open_price = (
+        _basis_decimal_from_payload(
+            payload,
+            bid_keys=["openPrice", "open", "open_price", "BID_OPEN"],
+            ask_keys=["openPrice", "open", "open_price", "OFR_OPEN"],
+            price_basis=price_basis,
+        )
+        or close_price
+    )
     high_price = _basis_decimal_from_payload(
         payload,
         bid_keys=["highPrice", "high", "high_price", "BID_HIGH"],
@@ -161,6 +193,12 @@ def chart_update_ohlc(
     price_basis: ChartPriceBasis = ChartPriceBasis.MID,
 ) -> tuple[float, float, float, float] | None:
     raw = chart_update.raw or {}
+    if price_basis == ChartPriceBasis.MID and raw.get("LOCAL_QUOTE_CANDLE") == 1.0:
+        values = tuple(
+            _first_float(raw, [f"MID_{key}"]) for key in ("OPEN", "HIGH", "LOW", "CLOSE")
+        )
+        if all(value is not None for value in values):
+            return values  # type: ignore[return-value]
     close_price = _basis_float_from_payload(
         raw,
         bid_keys=["BID_CLOSE"],
@@ -172,24 +210,33 @@ def chart_update_ohlc(
         if fallback_close is None:
             return None
         close_price = float(fallback_close)
-    open_price = _basis_float_from_payload(
-        raw,
-        bid_keys=["BID_OPEN"],
-        ask_keys=["OFR_OPEN"],
-        price_basis=price_basis,
-    ) or chart_update.open
-    high_price = _basis_float_from_payload(
-        raw,
-        bid_keys=["BID_HIGH"],
-        ask_keys=["OFR_HIGH"],
-        price_basis=price_basis,
-    ) or chart_update.high
-    low_price = _basis_float_from_payload(
-        raw,
-        bid_keys=["BID_LOW"],
-        ask_keys=["OFR_LOW"],
-        price_basis=price_basis,
-    ) or chart_update.low
+    open_price = (
+        _basis_float_from_payload(
+            raw,
+            bid_keys=["BID_OPEN"],
+            ask_keys=["OFR_OPEN"],
+            price_basis=price_basis,
+        )
+        or chart_update.open
+    )
+    high_price = (
+        _basis_float_from_payload(
+            raw,
+            bid_keys=["BID_HIGH"],
+            ask_keys=["OFR_HIGH"],
+            price_basis=price_basis,
+        )
+        or chart_update.high
+    )
+    low_price = (
+        _basis_float_from_payload(
+            raw,
+            bid_keys=["BID_LOW"],
+            ask_keys=["OFR_LOW"],
+            price_basis=price_basis,
+        )
+        or chart_update.low
+    )
     open_price = open_price if open_price is not None else close_price
     high_price = high_price if high_price is not None else max(open_price, close_price)
     low_price = low_price if low_price is not None else min(open_price, close_price)
@@ -225,6 +272,34 @@ def _bucket_timestamp_ms(timestamp_ms: int, interval_seconds: int) -> int:
         return timestamp_ms
     bucket_seconds = (timestamp_ms // 1000 // interval_seconds) * interval_seconds
     return int(bucket_seconds * 1000)
+
+
+def _chart_interval_seconds(interval: str) -> int | None:
+    normalized = interval.strip().upper()
+    mapping = {
+        "1MINUTE": 60,
+        "5MINUTE": 300,
+        "15MINUTE": 900,
+        "30MINUTE": 1800,
+        "HOUR": 3600,
+    }
+    return mapping.get(normalized)
+
+
+def _aggregate_subcandles(
+    timestamp: datetime,
+    subcandles: dict[int, Candle],
+) -> Candle:
+    ordered = [subcandles[key] for key in sorted(subcandles)]
+    volumes = [candle.volume for candle in ordered if candle.volume is not None]
+    return Candle(
+        timestamp=timestamp,
+        open=ordered[0].open,
+        high=max(candle.high for candle in ordered),
+        low=min(candle.low for candle in ordered),
+        close=ordered[-1].close,
+        volume=sum(volumes, Decimal("0")) if volumes else None,
+    )
 
 
 def _first_decimal(payload: dict[str, object], keys: list[str]) -> Decimal | None:

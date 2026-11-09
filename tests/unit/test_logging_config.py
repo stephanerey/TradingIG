@@ -1,8 +1,10 @@
 import logging
 from io import StringIO
+from logging.handlers import TimedRotatingFileHandler
 
 from trading_ig_assistant.utils.logging_config import (
     LOG_FILE_NAME,
+    WindowsSafeTimedRotatingFileHandler,
     configure_logging,
     emit_session_banner,
 )
@@ -36,3 +38,43 @@ def test_emit_session_banner_writes_separator() -> None:
     text = stream.getvalue()
     assert "TradingIG session start" in text
     assert "session_id=" in text
+
+
+def test_windows_locked_rollover_is_deferred_without_dropping_record(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    log_path = tmp_path / "locked-rollover.log"
+    handler = WindowsSafeTimedRotatingFileHandler(
+        log_path,
+        when="midnight",
+        backupCount=7,
+        encoding="utf-8",
+    )
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    handler.rolloverAt = 0
+
+    def locked_rollover(active_handler) -> None:
+        active_handler.stream.close()
+        active_handler.stream = None
+        raise PermissionError("simulated Windows sharing violation")
+
+    monkeypatch.setattr(TimedRotatingFileHandler, "doRollover", locked_rollover)
+    try:
+        handler.emit(
+            logging.LogRecord(
+                name="test",
+                level=logging.INFO,
+                pathname=__file__,
+                lineno=1,
+                msg="record survives locked rollover",
+                args=(),
+                exc_info=None,
+            )
+        )
+        handler.flush()
+    finally:
+        handler.close()
+
+    assert "record survives locked rollover" in log_path.read_text(encoding="utf-8")
+    assert handler.rolloverAt > 0

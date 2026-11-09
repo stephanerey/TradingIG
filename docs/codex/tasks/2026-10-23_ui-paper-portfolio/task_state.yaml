@@ -1,0 +1,23 @@
+schema_version: 1
+status: verified
+objective: Connect the approved GUI proposal to an in-memory Paper session and read-only Positions, Orders and Journal views.
+allowed_scope:
+  - paper-only domain and service boundaries
+  - ticket, main-window and paper portfolio UI
+  - focused tests, RepoMap and factual project documentation
+forbidden_scope:
+  - any IG order mutation or authenticated probe
+  - DEMO, LIVE or AUTO activation
+  - dependencies, migrations or implicit persistent database creation
+decisions:
+  - re-evaluate immediately before local Paper submission
+  - keep the session volatile and append-only in memory
+  - expose no stop or close action in this lot
+evidence:
+  - targeted Paper and Qt regressions 68 passed
+  - full offline suite 204 passed
+  - protected IG order regressions 13 passed
+  - ruff check src tests passed
+  - native Qt offscreen 960x600 smoke passed
+  - SR pack, RepoMap and five project skills verified
+next_action: Human may validate the local Paper workflow, then choose the next bounded offline UI lot.

@@ -1,46 +1,63 @@
 #!/usr/bin/env python3
-"""Verify that the Python Codex Operating Pack is installed in the current project."""
-from __future__ import annotations
-
-import sys
+import json
 from pathlib import Path
 
-REQUIRED = [
-    "AGENTS.md",
-    "DESIGN.md",
-    "docs/CURRENT_STATE.md",
-    "docs/codex/PROJECT_PROFILE.yaml",
-    "docs/codex/SKILL_MAP.md",
-    "docs/codex/WORKFLOW_CODEX.md",
-    "docs/codex/CODEBASE_MAP.md",
-    "docs/codex/REPO_MAP_POLICY.md",
-    "docs/codex/TOKEN_OPTIMIZATION.md",
-    "docs/codex/tasks/_TEMPLATE/task_plan.md",
-    "docs/codex/tasks/_TEMPLATE/findings.md",
-    "docs/codex/tasks/_TEMPLATE/progress.md",
-    "docs/codex/tasks/_TEMPLATE/decisions.md",
-    "docs/codex/tasks/_TEMPLATE/verification.md",
-    "docs/adr/ADR_TEMPLATE.md",
-    "scripts/codex/generate_python_repo_map.py",
-    "scripts/codex/validate_skills.py",
-    "scripts/codex/python_token_run.py",
-    "scripts/codex/safe_diff_summary.py",
-]
+from validate_release_docs import audit as audit_release_docs
+from sr_route_check import check as check_routes
+
+TARGET_VERSION = "4.1.0"
+REMOVED_SKILLS = {
+    "aurora-planning-with-files",
+    "aurora-repomap-maintainer",
+    "aurora-review-diff",
+    "aurora-tdd",
+    "aurora-terminal-token-optimizer",
+}
 
 
 def main() -> int:
-    missing = [p for p in REQUIRED if not Path(p).exists()]
-    if missing:
-        print("Missing files:")
-        for p in missing:
-            print(f"- {p}")
+    root = Path(".").resolve()
+    source_mode = (root / "core/SR_BOOTSTRAP.md").exists()
+    prefix = Path("core") if source_mode else Path("docs/codex")
+    required = [
+        prefix / "SR_PACK_VERSION.json",
+        prefix / "SR_METHOD.md",
+        prefix / "SR_BOOTSTRAP.md",
+        prefix / "SR_ROUTES.json",
+        prefix / "SKILL_DIGEST.md",
+        prefix / "TOKEN_OPTIMIZATION.md",
+        prefix / ("MCP_POLICY.template.yaml" if source_mode else "MCP_POLICY.yaml"),
+        prefix / "UPGRADE_TEST_PLAN.md",
+        Path("core/AGENTS.template.md") if source_mode else Path("AGENTS.md"),
+        Path("tasks/_TEMPLATE/task_state.yaml") if source_mode else Path("docs/codex/tasks/_TEMPLATE/task_state.yaml"),
+        Path("scripts/codex/sr_install_transaction.py"),
+    ]
+    errors = [f"missing required file: {path}" for path in required if not (root / path).exists()]
+    version_path = root / prefix / "SR_PACK_VERSION.json"
+    try:
+        version = json.loads(version_path.read_text())["version"]
+        if version != TARGET_VERSION:
+            errors.append(f"version {version!r} != {TARGET_VERSION!r}")
+    except Exception as exc:
+        errors.append(f"invalid version metadata: {exc}")
+
+    skill_root = root / ("skills-method" if source_mode else "docs/codex/skills-method")
+    for name in REMOVED_SKILLS:
+        if (skill_root / name / "SKILL.md").exists():
+            errors.append(f"removed cognitive skill still present: {name}")
+
+    agents = root / ("core/AGENTS.template.md" if source_mode else "AGENTS.md")
+    if agents.exists() and len(agents.read_text().splitlines()) > 120:
+        errors.append(f"AGENTS kernel exceeds 120 lines: {agents}")
+
+    errors.extend(check_routes(root))
+    errors.extend(f"release docs: {item}" for item in audit_release_docs(root))
+    if errors:
+        print("SR pack verification errors:")
+        for error in errors:
+            print(f"- {error}")
         return 1
-
-    agents_lines = Path("AGENTS.md").read_text(encoding="utf-8").splitlines()
-    if len(agents_lines) > 300:
-        print(f"WARNING: AGENTS.md is long ({len(agents_lines)} lines). Keep it short.")
-
-    print("OK: Python Codex pack files present")
+    print("OK: SR Method 4.1 pack is coherent")
     return 0
 
 

@@ -1,0 +1,16 @@
+task: ui-ticket-relative-levels
+status: verified
+scope:
+  - relative stop and target distances
+  - explicit absolute mode
+  - Paper-only resolved-level preview
+protected:
+  - barrier KO semantics
+  - financial vetoes
+  - IG order methods
+evidence:
+  - targeted ticket risk and shell regressions 69 passed
+  - full offline suite 213 passed
+  - protected IG order regressions 21 passed
+  - Qt 960x600 smoke passed
+next: explicit Paper persistence and recovery lot

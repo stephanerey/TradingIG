@@ -1,0 +1,16 @@
+task: ui-paper-position-controls
+status: verified
+scope:
+  - local Paper stop tightening
+  - local Paper manual close
+  - append-only action audit
+protected:
+  - IG order methods
+  - DEMO and LIVE mutations
+  - persistent storage
+evidence:
+  - targeted Paper and GUI regressions 60 passed
+  - full offline suite 211 passed
+  - protected IG order regressions 21 passed
+  - Qt 960x600 smoke passed
+next: explicit Paper persistence and recovery lot

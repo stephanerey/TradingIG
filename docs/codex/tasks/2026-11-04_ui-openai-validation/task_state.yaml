@@ -1,0 +1,11 @@
+schema_version: 1
+status: done
+objective: "Rendre le test OpenAI visible, explicite et non bloquant dans les Settings Qt."
+next_action: "Composer le fournisseur dans un runtime consultatif manuel, sans exécution."
+protected_state:
+  branch: chore/sr41-upgrade
+  head: 512c16d
+  preserve_dirty_worktree: true
+external_effects:
+  automatic_openai_calls: false
+  ig_calls: false

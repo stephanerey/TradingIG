@@ -1,0 +1,16 @@
+schema_version: 1
+status: completed
+objective: Implement R03 accounts and conservative risk checks without enabling execution.
+allowed_scope:
+  - account state and isolation
+  - risk calculation and vetoes
+  - concurrent exposure reservations
+  - targeted tests and phase evidence
+decisions:
+  settings_precedence: global_account_strategy_market
+open_requirements: []
+evidence:
+  - 122 offline tests passed
+  - ruff check src tests passed
+  - SR 4.1 post-check passed
+next_action: Stop after R03 and present the compact stage summary before R04.

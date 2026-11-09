@@ -18,6 +18,7 @@ from trading_ig_assistant.domain.market_data import (
     PriceSeries,
     Quote,
 )
+from trading_ig_assistant.domain.products import ProductType
 from trading_ig_assistant.services.candle_aggregation_service import (
     chart_update_ohlc,
     live_price_for_quote,
@@ -228,6 +229,7 @@ class ChartView(QtWidgets.QWidget):
         self._hover_state_x_value: float | None = None
         self._hover_state_y_value: float | None = None
         self._last_quote: Quote | None = None
+        self._option_change_unverified = False
         self._selected_anchor_price: float | None = None
         self._display_bars: list[OhlcBar] = []
         self._compressed_timestamps: list[int] = []
@@ -359,6 +361,17 @@ class ChartView(QtWidgets.QWidget):
         self._render_display_bars(self._source_model.bars)
 
     def set_selected_product(self, product: object) -> None:
+        self._option_change_unverified = (
+            getattr(product, "product_type", None) is ProductType.OPTION
+        )
+        tooltip = (
+            "Variation indisponible : la signification des données IG pour cette option "
+            "n'est pas vérifiée."
+            if self._option_change_unverified
+            else ""
+        )
+        self.change_label.setToolTip(tooltip)
+        self.percent_change_label.setToolTip(tooltip)
         name = getattr(product, "name", "Unknown product")
         epic = getattr(product, "epic", "")
         product_type = getattr(getattr(product, "product_type", None), "value", "")
@@ -394,10 +407,12 @@ class ChartView(QtWidgets.QWidget):
             return
         self.bid_label.setText(f"Vente: {_format_number(quote.bid)}")
         self.offer_label.setText(f"Achat: {_format_number(quote.offer)}")
-        self.change_label.setText(f"Variation: {_format_signed_number(quote.net_change)}")
-        self.percent_change_label.setText(
-            f"% Variation: {_format_signed_number(quote.percent_change)}"
+        change = "-" if self._option_change_unverified else _format_signed_number(quote.net_change)
+        percent_change = (
+            "-" if self._option_change_unverified else _format_signed_number(quote.percent_change)
         )
+        self.change_label.setText(f"Variation: {change}")
+        self.percent_change_label.setText(f"% Variation: {percent_change}")
         live_value = live_price_for_quote(quote, self._current_price_basis)
         if live_value is not None:
             if self._live_price_line is not None:
@@ -441,12 +456,18 @@ class ChartView(QtWidgets.QWidget):
     def _refresh_snapshot_labels(self, product: object) -> None:
         self.bid_label.setText(f"Vente: {_format_number(getattr(product, 'bid', None))}")
         self.offer_label.setText(f"Achat: {_format_number(getattr(product, 'offer', None))}")
-        self.change_label.setText(
-            f"Variation: {_format_signed_number(getattr(product, 'net_change', None))}"
+        change = (
+            "-"
+            if self._option_change_unverified
+            else _format_signed_number(getattr(product, "net_change", None))
         )
-        self.percent_change_label.setText(
-            f"% Variation: {_format_signed_number(getattr(product, 'percent_change', None))}"
+        percent_change = (
+            "-"
+            if self._option_change_unverified
+            else _format_signed_number(getattr(product, "percent_change", None))
         )
+        self.change_label.setText(f"Variation: {change}")
+        self.percent_change_label.setText(f"% Variation: {percent_change}")
 
     def _on_resolution_changed(self, _index: int) -> None:
         self._current_interval_seconds = int(self.resolution_combo.currentData() or 300)

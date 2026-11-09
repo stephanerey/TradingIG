@@ -11,6 +11,7 @@ from trading_ig_assistant.adapters.ig_rest import IGSession
 from trading_ig_assistant.domain.market_data import ChartCandleUpdate, Quote
 from trading_ig_assistant.domain.streaming import (
     CHART_CANDLE_SPEC,
+    MARKET_QUOTE_SPEC,
     PRICE_QUOTE_SPEC,
     StreamState,
     StreamSubscriptionSpec,
@@ -55,15 +56,27 @@ class IGStreamingAdapter:
     client_factory: Callable[[str, str | None], Any] | None = None
     _client: Any = field(default=None, init=False, repr=False)
     _price_subscription: Any = field(default=None, init=False, repr=False)
+    _reference_probe_subscription: Any = field(default=None, init=False, repr=False)
     _chart_subscription: Any = field(default=None, init=False, repr=False)
     _current_epic: str | None = field(default=None, init=False, repr=False)
+    _current_chart_epics: tuple[str, ...] = field(default_factory=tuple, init=False, repr=False)
     _current_price_epics: tuple[str, ...] = field(default_factory=tuple, init=False, repr=False)
     _quote_spec: StreamSubscriptionSpec = field(
         default=PRICE_QUOTE_SPEC,
         init=False,
         repr=False,
     )
+    _chart_spec: StreamSubscriptionSpec = field(
+        default=CHART_CANDLE_SPEC,
+        init=False,
+        repr=False,
+    )
+    _chart_scale: str = field(default="1MINUTE", init=False, repr=False)
     _state: StreamState = field(default=StreamState.DISCONNECTED, init=False, repr=False)
+
+    @property
+    def provider_id(self) -> str:
+        return "ig"
 
     def start(self) -> None:
         if self._client is not None:
@@ -96,12 +109,16 @@ class IGStreamingAdapter:
         try:
             if self._price_subscription is not None:
                 self._client.unsubscribe(self._price_subscription)
+            if self._reference_probe_subscription is not None:
+                self._client.unsubscribe(self._reference_probe_subscription)
             if self._chart_subscription is not None:
                 self._client.unsubscribe(self._chart_subscription)
         finally:
             self._price_subscription = None
+            self._reference_probe_subscription = None
             self._chart_subscription = None
             self._current_epic = None
+            self._current_chart_epics = ()
             self._current_price_epics = ()
             try:
                 self._client.disconnect()
@@ -153,9 +170,14 @@ class IGStreamingAdapter:
             self._mask_account_id(self.account_id),
             spec.name,
             len(item_names),
-            item_names,
+            [
+                spec.render_item(epic=epic, account_id=self._mask_account_id(self.account_id))
+                for epic in normalized_epics
+            ],
         )
         subscription = Subscription(spec.mode, item_names, list(spec.fields))
+        if spec.data_adapter:
+            subscription.setDataAdapter(spec.data_adapter)
         subscription.addListener(_SubscriptionListener(self, spec))
         self._price_subscription = subscription
         self._current_price_epics = normalized_epics
@@ -169,26 +191,65 @@ class IGStreamingAdapter:
         *,
         spec: StreamSubscriptionSpec = CHART_CANDLE_SPEC,
     ) -> None:
+        self.subscribe_charts([epic], scale, spec=spec)
+
+    def probe_reference_quote(self, epic: str) -> None:
+        """Try one separate reference subscription without replacing product quotes."""
+        if self._client is None or self._reference_probe_subscription is not None:
+            return
+        item = MARKET_QUOTE_SPEC.render_item(epic=epic, account_id=self.account_id)
+        subscription = Subscription(MARKET_QUOTE_SPEC.mode, [item], list(MARKET_QUOTE_SPEC.fields))
+        if MARKET_QUOTE_SPEC.data_adapter:
+            subscription.setDataAdapter(MARKET_QUOTE_SPEC.data_adapter)
+        subscription.addListener(_ReferenceQuoteProbeListener(self, epic))
+        self._reference_probe_subscription = subscription
+        self._client.subscribe(subscription)
+
+    def subscribe_charts(
+        self,
+        epics: list[str],
+        scale: str = "1MINUTE",
+        *,
+        spec: StreamSubscriptionSpec = CHART_CANDLE_SPEC,
+    ) -> None:
         if self._client is None:
             self.start()
         if self._client is None:
+            return
+        normalized_epics = tuple(dict.fromkeys(epic for epic in epics if epic))
+        if not normalized_epics:
+            return
+        if (
+            self._current_chart_epics == normalized_epics
+            and self._chart_subscription is not None
+            and self._chart_scale == scale
+            and self._chart_spec == spec
+        ):
             return
         if self._chart_subscription is not None:
             self._client.unsubscribe(self._chart_subscription)
             self._chart_subscription = None
         self._set_state(StreamState.SUBSCRIBING)
-        item_name = spec.render_item(epic=epic, account_id=self.account_id, scale=scale)
+        item_names = [
+            spec.render_item(epic=epic, account_id=self.account_id, scale=scale)
+            for epic in normalized_epics
+        ]
         LOGGER.debug(
-            "IG streaming subscribe chart account=%s epic=%s scale=%s item=%s",
+            "IG streaming subscribe chart account=%s epics=%s scale=%s items=%s",
             self._mask_account_id(self.account_id),
-            epic,
+            normalized_epics,
             scale,
-            item_name,
+            item_names,
         )
-        chart_subscription = Subscription(spec.mode, [item_name], list(spec.fields))
-        chart_subscription.addListener(_ChartSubscriptionListener(self, spec, epic, scale))
+        chart_subscription = Subscription(spec.mode, item_names, list(spec.fields))
+        chart_subscription.addListener(
+            _ChartSubscriptionListener(self, spec, normalized_epics, scale)
+        )
         self._chart_subscription = chart_subscription
-        self._current_epic = epic
+        self._current_epic = normalized_epics[0]
+        self._current_chart_epics = normalized_epics
+        self._chart_scale = scale
+        self._chart_spec = spec
         self._client.subscribe(chart_subscription)
 
     def _handle_status(self, status: str) -> None:
@@ -329,39 +390,78 @@ class _SubscriptionListener(SubscriptionListener):
         self._adapter._handle_quote_update(_quote_from_update(update_info))
 
 
+class _ReferenceQuoteProbeListener(SubscriptionListener):
+    """Report probe evidence without feeding the chart or scanner."""
+
+    def __init__(self, adapter: IGStreamingAdapter, epic: str) -> None:
+        self._adapter = adapter
+        self._epic = epic
+        self._received = False
+
+    def onSubscription(self) -> None:  # noqa: N802
+        LOGGER.debug("Reference MARKET probe subscribed epic=%s", self._epic)
+
+    def onSubscriptionError(self, code: int, message: str) -> None:  # noqa: N802
+        LOGGER.debug(
+            "Reference MARKET probe rejected epic=%s code=%s message=%s", self._epic, code, message
+        )
+
+    def onItemUpdate(self, update_info: Any) -> None:  # noqa: N802
+        quote = _quote_from_update(update_info)
+        if (
+            not self._received
+            and quote.epic == self._epic
+            and (quote.bid is not None or quote.offer is not None)
+        ):
+            self._received = True
+            LOGGER.debug("Reference MARKET probe received epic=%s", self._epic)
+
+
 class _ChartSubscriptionListener(SubscriptionListener):
     def __init__(
         self,
         adapter: IGStreamingAdapter,
         spec: StreamSubscriptionSpec,
-        epic: str,
+        epics: tuple[str, ...],
         interval: str,
     ) -> None:
         self._adapter = adapter
         self._spec = spec
-        self._epic = epic
+        self._epics = epics
         self._interval = interval
+
+    @property
+    def _status_scope(self) -> str:
+        return self._epics[0] if len(self._epics) == 1 else f"{len(self._epics)}-markets"
 
     def onSubscription(self) -> None:  # noqa: N802
         self._adapter._state = StreamState.SUBSCRIBED_WAITING_FIRST_TICK
-        self._adapter._handle_status(f"SUBSCRIBED:{self._spec.name}:{self._epic}:{self._interval}")
+        self._adapter._handle_status(
+            f"SUBSCRIBED:{self._spec.name}:{self._status_scope}:{self._interval}"
+        )
 
     def onUnsubscription(self) -> None:  # noqa: N802
         self._adapter._handle_status(
-            f"UNSUBSCRIBED:{self._spec.name}:{self._epic}:{self._interval}"
+            f"UNSUBSCRIBED:{self._spec.name}:{self._status_scope}:{self._interval}"
         )
 
     def onSubscriptionError(self, code: int, message: str) -> None:  # noqa: N802
         self._adapter._handle_subscription_error(
             code,
             message,
-            f"CHART:{self._epic}:{self._interval}",
+            f"CHART:{self._status_scope}:{self._interval}",
         )
 
     def onItemUpdate(self, update_info: Any) -> None:  # noqa: N802
-        self._adapter._handle_chart_update(
-            _chart_update_from_update(update_info, self._epic, self._interval)
-        )
+        epic, interval = _chart_identity_from_update(update_info)
+        if not epic and len(self._epics) == 1:
+            epic = self._epics[0]
+        if not interval:
+            interval = self._interval
+        if epic not in self._epics:
+            self._adapter._emit_error("Lightstreamer chart update has an unexpected item identity")
+            return
+        self._adapter._handle_chart_update(_chart_update_from_update(update_info, epic, interval))
 
 
 def _quote_from_update(update_info: Any) -> Quote:
@@ -384,7 +484,7 @@ def _quote_from_update(update_info: Any) -> Quote:
         )
     )
     market_state = _first_string(update_info, ["MARKET_STATE"])
-    timestamp_ms = _optional_int(_first_value(update_info, ["UPDATE_TIME", "UTM"]))
+    timestamp_ms = _optional_int(_first_value(update_info, ["TIMESTAMP", "UTM", "UPDATE_TIME"]))
     return Quote(
         epic=epic,
         bid=bid,
@@ -415,6 +515,19 @@ def _epic_from_update(update_info: Any) -> str:
     return str(item_name)
 
 
+def _chart_identity_from_update(update_info: Any) -> tuple[str, str]:
+    try:
+        item_name = update_info.getItemName()
+    except Exception:
+        item_name = None
+    if not item_name:
+        return "", ""
+    parts = str(item_name).split(":")
+    if len(parts) == 3 and parts[0] == "CHART":
+        return parts[1], parts[2]
+    return "", ""
+
+
 def _chart_update_from_update(update_info: Any, epic: str, interval: str) -> ChartCandleUpdate:
     fields = {}
     try:
@@ -437,9 +550,7 @@ def _chart_update_from_update(update_info: Any, epic: str, interval: str) -> Cha
         low=_optional_float(
             _first_value(update_info, ["BID_LOW", "OFR_LOW", "LTP_LOW", "DAY_LOW"])
         ),
-        close=_optional_float(
-            _first_value(update_info, ["BID_CLOSE", "OFR_CLOSE", "LTP_CLOSE"])
-        ),
+        close=_optional_float(_first_value(update_info, ["BID_CLOSE", "OFR_CLOSE", "LTP_CLOSE"])),
         volume=_optional_float(_first_value(update_info, ["LTV", "TTV"])),
         tick_count=_optional_int(_first_value(update_info, ["CONS_TICK_COUNT"])),
         end_of_candle=str(_first_value(update_info, ["CONS_END"])) == "1",
@@ -492,7 +603,5 @@ def build_stream_items(
     scale: str | None = None,
 ) -> list[str]:
     return [
-        spec.render_item(epic=epic, account_id=account_id, scale=scale)
-        for epic in epics
-        if epic
+        spec.render_item(epic=epic, account_id=account_id, scale=scale) for epic in epics if epic
     ]

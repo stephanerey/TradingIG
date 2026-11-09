@@ -1,0 +1,14 @@
+objective: "Complete R02 adapter contracts and the approved laptop resize fix, then stop."
+status: completed
+allowed_scope:
+  - broker and market-data domain contracts
+  - provider instrument mappings
+  - fake-adapter contract tests
+  - non-functional Qt minimum-size behavior
+forbidden_scope:
+  - real or demo order execution
+  - authenticated broker actions by Codex
+  - dependencies or migrations
+  - R03/R04 settings inheritance
+open_requirements: []
+next_action: "Stop after R02; obtain the settings-inheritance decision before R03/R04."

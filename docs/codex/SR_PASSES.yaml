@@ -1,0 +1,63 @@
+# SR_PASSES.yaml - orchestration des lots en passes SR
+
+version: "0.2"
+project: "{{PROJECT_NAME}}"
+project_key: "{{PROJECT_KEY}}"
+updated_at: null
+
+pass_naming:
+  pattern: "{{PROJECT_KEY}}-PASS-<SEQ>"
+  sequence_digits: 3
+  examples:
+    - "{{PROJECT_KEY}}-PASS-001"
+
+pass_policy:
+  enabled: true
+  max_lots_per_pass: 5
+  require_pass_planning_gate: true
+  require_preflight_before_pass: true
+  allow_grouped_e2e: true
+  require_pass_contract: false
+  pass_runtime_goal:
+    enabled: true
+    builder_script: "scripts/codex/build_pass_runtime_goal.py"
+    template_file: "docs/codex/tasks/_TEMPLATE/pass_runtime_goal.md"
+    max_goal_command_chars: 1000
+    hard_limit: 4000
+    allow_planned_dry_run: true
+    executable_statuses:
+      - "validated"
+      - "in_progress"
+      - "repair"
+      - "reopened"
+    forbid_silent_next_pass_chain: true
+    done_requires_user_validation_when_e2e_required: true
+  dependency_rules:
+    - "Une dependance vers un lot inclus dans une passe strictement anterieure est valide pour une passe proposed/planned."
+    - "Une passe validated/in_progress/repair/reopened exige que les dependances des passes anterieures soient done ou user_testing."
+    - "Une dependance vers une passe posterieure est interdite."
+    - "Un lot ne doit apparaitre que dans une seule passe."
+    - "dependency_overrides doit nommer explicitement le lot et sa dependance; il ne desactive pas les controles globalement."
+  stop_on:
+    - gate_failure
+    - human_validation_required
+    - missing_secret
+    - migration_failure
+    - dependency_unresolved
+    - context_budget_risk
+
+status_values:
+  - proposed
+  - planned
+  - validated
+  - in_progress
+  - done
+  - user_testing
+  - repair
+  - reopened
+  - blocked
+  - superseded
+
+# Registre volontairement vide a l'installation ou lors d'un upgrade sans passes.
+# Le prompt 08 cree des passes seulement apres lecture des lots et validation humaine.
+passes: []

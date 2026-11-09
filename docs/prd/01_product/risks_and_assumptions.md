@@ -1,8 +1,11 @@
 # Risks and Assumptions
 
+> **V1.2 reconstruction — 2026-10-22:** [Project conventions](../00_conventions/tradingig_v1_2_conventions.md) and [reconciliation decisions](decisions.md) apply. Earlier project text is preserved; explicit V1.2 changes take precedence only on documented conflicts. This is not implementation or activation evidence.
+
+
 > **PRD Policy:** **PROJECT (editable)** — Fill and update this file for the current project.
 
-**Last updated:** 2026-05-07
+**Last updated:** 2026-10-22
 
 ## Assumptions
 - A1: IG demo access can be enabled with the same email as the live account and a generated API key.
@@ -29,3 +32,28 @@
 - Q3: Can `/workingorders` be used for the target products, or must delayed entry remain software/manual assisted?
 - Q4: Which news/economic calendar provider will be used first: IG calendar, public RSS/API, paid provider, or manual event import?
 - Q5: Should live mode initially be restricted to manual confirmation only even if API execution is technically possible?
+
+## V1.2 consolidation
+
+Provenance: [archived V1.1 of 2026-10-20](../95_sources/md/PRD_TradingIG_V1.1_SR4.1_2026-10-20.md), chapter 20; [chapter mapping](../00_conventions/v1_2_source_coverage.md). Claims about implementation, external APIs and the SR release remain dated source assertions unless separately verified. References such as §8 refer to the original numbered chapters in that mapping.
+
+<a id="source-section-20"></a>
+
+## 20. Risques ouverts, limites externes et jalons bloquants
+
+1. **IG Barrières/Options :** disponibilité réelle de la découverte KO, ouverture, modification stop et clôture selon pays, environnement et compte ; exiger un spike documenté de requêtes/réponses **expurgées** avant R07.
+2. **Sessions IG multi-comptes :** déterminer contraintes REST et streaming, changement de contexte atomique, concurrence et comportements de tokens ; tests en démo.
+3. **Historique / quotas :** l'allocation et les limites API peuvent évoluer ; ne pas coder une constante immuable. Vérifier sur le compte réel sans multiplier les requêtes.
+4. **Fournisseur de news/sentiment :** coûts, licences, horodatages, qualité, politique de conservation et capacité de replay ; choix d'adaptateur et fournisseur configurable.
+5. **Précision du risque d'une barrière :** règles de KO, prime, taille, slippage, frais et financement validées sur paramètres broker ; bloquer si prix/contrat insuffisamment décrits.
+6. **Qualité des backtests intraday :** des OHLC M1 sans vraie granularité d'exécution peuvent masquer le chemin intra-bougie ; marquer le résultat comme approximation.
+7. **Exposition dépendance réseau :** une gestion logicielle de stop/ordre pending ne remplace pas une protection effectivement acceptée par le broker.
+8. **Utilisation IA :** sentiment directionnel ≠ probabilité de hausse vérifiée ; score de confiance déclaré ≠ calibration ; l'automatisation exige une comparaison empirique.
+
+**Les points 1, 2 et 5 sont bloquants pour exécuter des Barrières/Options IG en mode réel, pas pour coder les composants abstraits, le Risk Engine ou le mode paper.**
+
+## Consolidation open questions — 2026-10-22
+
+- REQ-RISK-010 and REQ-UI-005 disagree on strategy/market configuration inheritance. D-013 resolves implementation precedence as `global -> account -> strategy -> market`; both original requirements remain preserved for traceability.
+- Real broker capabilities, explicit safe parameter bounds and precision/schema choices still need evidence/design review. No capability, test or migration is certified by this PRD.
+- SR 4.1 release metadata and installer behavior must be checked against the official source during a separately authorized SR00 task. No method installation is implied by this reconstruction.

@@ -1,0 +1,9 @@
+objective: "Add deterministic dataset fingerprints and explicit chronological validation plans"
+scope:
+  allowed: "offline replay validation domain/service code, synthetic tests, R08 documentation"
+  forbidden: "implicit ratios, strategy selection, performance, broker calls, AUTO, persistence, GUI"
+skills:
+  - codex-tradingig-analysis-scanner
+  - codex-tradingig-paper-execution
+status: core_complete_activation_not_authorized
+next_action: "Select a concrete strategy, dataset and split parameters before consuming partitions"

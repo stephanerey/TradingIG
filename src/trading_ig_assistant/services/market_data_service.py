@@ -5,9 +5,12 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
 
-from trading_ig_assistant.domain.market_data import ChartCandleUpdate, PriceSeries, Quote
+from trading_ig_assistant.domain.adapter_contracts import (
+    HistoricalMarketDataProvider,
+    StreamingMarketDataProvider,
+)
+from trading_ig_assistant.domain.market_data import ChartCandleUpdate, Quote
 from trading_ig_assistant.domain.streaming import (
     PRICE_QUOTE_SPEC,
     StreamState,
@@ -18,42 +21,8 @@ from trading_ig_assistant.services.candle_aggregation_service import (
     CandleSeriesUpdated,
 )
 
-
-class RestMarketDataAdapter(Protocol):
-    def get_prices(
-        self,
-        epic: str,
-        *,
-        resolution: str | None = None,
-        max_points: int | None = None,
-        start_time: object | None = None,
-        end_time: object | None = None,
-    ) -> PriceSeries:
-        """Return historical prices."""
-
-
-class StreamingMarketDataAdapter(Protocol):
-    def start(self) -> None:
-        """Start streaming."""
-
-    def stop(self) -> None:
-        """Stop streaming."""
-
-    def subscribe_quote(
-        self,
-        epic: str,
-        *,
-        spec: StreamSubscriptionSpec = PRICE_QUOTE_SPEC,
-    ) -> None:
-        """Subscribe to a quote item."""
-
-    @property
-    def event_sink(self) -> object | None:
-        """Current sink."""
-
-    @event_sink.setter
-    def event_sink(self, value: object | None) -> None:
-        """Set sink."""
+RestMarketDataAdapter = HistoricalMarketDataProvider
+StreamingMarketDataAdapter = StreamingMarketDataProvider
 
 
 @dataclass

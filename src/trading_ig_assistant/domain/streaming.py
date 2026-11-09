@@ -27,6 +27,7 @@ class StreamSubscriptionSpec:
     kind: str
     mode: str = "MERGE"
     scale: str | None = None
+    data_adapter: str | None = None
 
     def render_item(
         self,
@@ -126,6 +127,7 @@ PRICE_QUOTE_SPEC = StreamSubscriptionSpec(
     item_template="PRICE:{account_id}:{epic}",
     fields=PRICE_QUOTE_FIELDS,
     kind="quote",
+    data_adapter="Pricing",
 )
 
 CHART_CANDLE_SPEC = StreamSubscriptionSpec(

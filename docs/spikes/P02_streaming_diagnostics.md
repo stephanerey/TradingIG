@@ -7,7 +7,7 @@ from the CLI first.
 
 ## Tested Environment
 
-- Environment: pending manual run
+- Environment: DEMO read-only, validated 2026-10-23
 - Branch: `codex/p01-product-discovery-gui`
 - Command: `trading-ig-assistant stream-market`
 
@@ -59,12 +59,15 @@ from the CLI first.
 
 ## Which Template Works
 
-- Pending manual validation with real IG credentials.
-- The CLI now reports explicit success/failure for each template independently.
+- `PRICE:{account_id}:{epic}` works when its Lightstreamer data adapter is explicitly `Pricing`.
+  A bounded representative DEMO run received the first tick and 50 updates in six seconds.
+- `MARKET:{epic}` was rejected with Lightstreamer code 21 (`Invalid group`) in the same DEMO
+  environment and is not retained as a fallback.
+- The CLI reports explicit success/failure for each template independently.
 
 ## Observed Error Codes
 
-- Pending manual validation
+- `MARKET` on the current DEMO endpoint: code 21, `Invalid group`.
 - Expected possibilities:
   - subscription item rejected
   - subscription limit exceeded
@@ -72,8 +75,8 @@ from the CLI first.
 
 ## Remaining Unknowns
 
-- Which quote template is most reliable for barrier and option products on the user account.
-- Whether `MARKET:{epic}` is supported for the same EPICs as `PRICE:{account_id}:{epic}`.
+- Whether representative Barrier and Option products expose `PRICE` streaming on this DEMO CFD
+  account; the read-only metadata probes were inconclusive.
 - Whether some products stream only chart updates and not quote updates.
 - Which subscriptions are account-permission dependent versus market-type dependent.
 

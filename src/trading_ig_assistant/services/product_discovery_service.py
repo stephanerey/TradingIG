@@ -197,6 +197,19 @@ class ProductDiscoveryService:
     def __init__(self, adapter: ProductDiscoveryAdapter) -> None:
         self._adapter = adapter
 
+    def search_product_summaries(self, search_term: str) -> ProductDiscoveryResult:
+        """One explicit search request, without a per-product details crawl."""
+        term = search_term.strip()
+        if not 3 <= len(term) <= 100:
+            raise ValueError("Search term must contain 3 to 100 characters")
+        summaries = self._adapter.search_markets(term)
+        unique = {summary.epic: summary for summary in summaries if summary.epic}
+        return ProductDiscoveryResult(
+            search_term=f"targeted-search:{term}",
+            candidates_count=len(unique),
+            products=[self.classify_product(summary, None) for summary in unique.values()],
+        )
+
     def discover_products(self, search_term: str) -> ProductDiscoveryResult:
         LOGGER.debug("Product discovery search start search_term=%r", search_term)
         errors: list[ProductDiscoveryError] = []
@@ -278,8 +291,7 @@ class ProductDiscoveryService:
                 search_term="categories",
                 candidates_count=len(summaries_by_epic),
                 products=[
-                    self.classify_product(summary, None)
-                    for summary in summaries_by_epic.values()
+                    self.classify_product(summary, None) for summary in summaries_by_epic.values()
                 ],
                 errors=errors,
             )
@@ -629,11 +641,15 @@ def _contains_api_allowance_error(errors: list[ProductDiscoveryError]) -> bool:
 
 
 def _classify_product_type(text: str, summary: MarketSummary) -> ProductType:
+    instrument_type = (summary.instrument_type or "").upper()
+    # An ETF/ETP may contain "option" or "barrier" in its name while IG explicitly
+    # identifies the instrument itself as a share. OPT_SHARES remains a derivative.
+    if instrument_type == "SHARES":
+        return ProductType.CASH_OR_DFB
     if any(token in text for token in ("barrier", "knockout", "knock-out", "knock out")):
         return ProductType.BARRIER
     if any(token in text for token in (" option", "option ", "vanilla", " call ", " put ")):
         return ProductType.OPTION
-    instrument_type = (summary.instrument_type or "").upper()
     expiry = (summary.expiry or "").upper()
     if expiry in {"DFB", "-"} or "CASH" in text:
         return ProductType.CASH_OR_DFB
@@ -681,16 +697,20 @@ def _classify_asset_class(text: str, summary: MarketSummary) -> AssetClass:
 
 
 def _product_from_mapping(data: dict[str, Any]) -> TradableProduct:
+    instrument_type = _optional_string(data.get("instrument_type"))
+    product_type = _enum_or_default(ProductType, data.get("product_type"), ProductType.UNKNOWN)
+    direction = _enum_or_default(ProductDirection, data.get("direction"), ProductDirection.UNKNOWN)
+    # Correct old discovery reports in memory without rewriting the user's cache.
+    if instrument_type and instrument_type.upper() == "SHARES":
+        if product_type in {ProductType.OPTION, ProductType.BARRIER}:
+            direction = ProductDirection.UNKNOWN
+        product_type = ProductType.CASH_OR_DFB
     return TradableProduct(
         epic=str(data.get("epic", "")),
         name=str(data.get("name", "")),
-        product_type=_enum_or_default(ProductType, data.get("product_type"), ProductType.UNKNOWN),
-        direction=_enum_or_default(
-            ProductDirection,
-            data.get("direction"),
-            ProductDirection.UNKNOWN,
-        ),
-        instrument_type=_optional_string(data.get("instrument_type")),
+        product_type=product_type,
+        direction=direction,
+        instrument_type=instrument_type,
         expiry=_optional_string(data.get("expiry")),
         currency=_optional_string(data.get("currency")),
         min_size=_optional_float_value(data.get("min_size")),

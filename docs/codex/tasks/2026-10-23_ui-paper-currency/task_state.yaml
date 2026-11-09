@@ -1,0 +1,17 @@
+schema_version: 1
+status: verified
+objective: Allow explicit product-currency confirmation without weakening FX risk vetoes.
+allowed_scope:
+  - Paper ticket UI and focused tests
+  - factual task and project documentation
+forbidden_scope:
+  - inferred currency or fabricated FX rate
+  - IG order calls or authenticated probes
+  - dependencies, migrations or persistence
+evidence:
+  - user screenshot reproduces missing product currency
+  - targeted ticket risk and Qt regressions 62 passed
+  - full offline suite 209 passed
+  - protected IG order regressions 13 passed
+  - native 960x600 smoke approved the reproduced Barrier case without horizontal overflow
+next_action: User can retest by confirming the product currency explicitly in the Paper ticket.

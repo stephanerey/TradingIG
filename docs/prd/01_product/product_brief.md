@@ -1,8 +1,11 @@
 # Product Brief — IG Trading Assistant
 
+> **V1.2 reconstruction — 2026-10-22:** [Project conventions](../00_conventions/tradingig_v1_2_conventions.md) and [reconciliation decisions](decisions.md) apply. Earlier project text is preserved; explicit V1.2 changes take precedence only on documented conflicts. This is not implementation or activation evidence.
+
+
 > **PRD Policy:** **PROJECT (editable)** — Fill and update this file for the current project.
 
-**Last updated:** 2026-05-07
+**Last updated:** 2026-10-22
 
 ## Problem statement
 The user trades IG Barriers/Options manually on instruments such as US Tech 100, France 40, Germany 40, and Spot Gold. The current workflow relies on reading the IG web platform, manually estimating the best trade, selecting a barrier/option, entering quantity/stop/limit, and then manually adjusting the stop after the trade starts moving.
@@ -82,3 +85,48 @@ The product solves this by building a disciplined assistant connected to IG APIs
 
 ## Success criteria
 See `01_product/kpis.md`.
+
+## V1.2 consolidation
+
+Provenance: [archived V1.1 of 2026-10-20](../95_sources/md/PRD_TradingIG_V1.1_SR4.1_2026-10-20.md), chapter 1; [chapter mapping](../00_conventions/v1_2_source_coverage.md). Claims about implementation, external APIs and the SR release remain dated source assertions unless separately verified. References such as §8 refer to the original numbered chapters in that mapping.
+
+<a id="source-section-1"></a>
+
+## 1. Vision, objectif et frontières
+
+### 1.1 Vision
+
+Construire une **station locale de trading assisté, supervisé puis automatisé**, capable de surveiller plusieurs marchés, sélectionner et expliquer des opportunités à court terme, préparer des ordres compatibles avec le courtier, gérer les positions et enregistrer toutes les décisions. La plateforme doit rester multi-courtiers par architecture, même si IG est l'unique courtier opérationnel au départ.
+
+**Horizon des trades :** quelques minutes à quelques heures, principalement intraday. Aucun volume minimal de transactions imposé au moteur : `NO_TRADE` est un résultat normal et souhaitable lorsque les conditions sont défavorables.
+
+### 1.2 Objectifs produit
+
+1. Exploiter **IG CFD** et **IG Barrières/Options**, avec une vue consolidée et des contraintes propres à chaque compte/produit.
+2. Acquisition OHLC/quotes fiable : **historique initial mesuré + cache local + streaming continu**, indépendante des ordres.
+3. Scanner configurable multi-marchés et multi-stratégies, avec score, risque, gain espéré, **commentaire de justification** et statut explicite.
+4. Stratégies initiales : **trend following, breakout, pullback et événements** ; indicateurs techniques configurables et contexte/sentiment de marché.
+5. Trading en **trois modes** : analyse seule, ordre supervisé, ordre automatique (désactivé par défaut).
+6. **Gestion dynamique** : stop, take profit, passage à l'équilibre net, sécurisation de profit, trailing et clôture suivant règles.
+7. **Risque paramétrable** : valeurs initiales 1 % par transaction, 3 % de drawdown journalier, 1 position globale et 1 position par sous-jacent, règles tenant compte des expositions sur plusieurs comptes.
+8. Interface Windows multipanneaux, onglets, statistiques P&L et diagnostics, fonctionnement continu tant que l'application est ouverte.
+9. Recorder de recherche conservant autant les signaux non exécutés que les trades réalisés ; backtest/replay puis validation quantitative des modèles IA.
+10. Notifications choisies dans l'interface : Windows, e-mail, Telegram et, indirectement, téléphone via ces canaux.
+
+### 1.3 Hors périmètre de la première livraison utilisable
+
+- Aucun rendement garanti ou objectif de rentabilité contractuel.
+- Aucun LLM finement entraîné comme prérequis pour trader.
+- Aucun service Windows, déploiement Linux, web app distante ou application mobile native en V1.
+- Aucun scrapping de TradingView ou contournement de son mode d'accès aux données ; intégration uniquement via interfaces officiellement utilisables/licenciées.
+- Aucune exécution live tant que l'API IG, le contrôle du compte, les tests d'ordres, la réconciliation et les garde-fous n'ont pas été validés.
+- Aucun calcul de P&L estimé présenté comme exact s'il manque cours de sortie, taux FX, frais ou financement.
+
+### 1.4 Indicateurs de réussite (mesurables)
+
+- **Intégrité marché :** zéro bougie M5 incorrecte sur la suite de fixtures M1 de référence ; aucun doublon logique OHLC après redémarrage.
+- **Sécurité :** zéro ordre réel dans les modes Analyse/Paper ; toutes les commandes sont rattachées à un compte explicite ; aucune réémission automatique après réponse inconnue.
+- **Traçabilité :** 100 % des propositions, autorisations, refus, commandes et transitions de position produisent des événements horodatés.
+- **Disponibilité :** état de connexion, fraîcheur et capacité des API toujours visibles ; une interruption ne doit pas être masquée comme « connecté ».
+- **Qualité des modèles :** toute stratégie/IA est comparée à un baseline hors échantillon, nette de coûts, avant admission au mode automatique.
+- **UX :** ouverture des onglets et manipulation du graphique sans bloquer sur une requête réseau ; paramètres persistés et restaurés.

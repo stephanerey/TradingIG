@@ -1,0 +1,11 @@
+schema_version: 1
+status: completed
+objective: "Implémenter trois stratégies techniques configurables et auditables."
+next_action: "Implémenter EVENT_DRIVEN avec contexte/source/prix post-événement explicites."
+protected_state:
+  branch: chore/sr41-upgrade
+  head: 512c16d
+  preserve_dirty_worktree: true
+external_effects:
+  network_calls: false
+  broker_orders: false

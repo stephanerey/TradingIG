@@ -1,7 +1,10 @@
 # API001 — IG REST Adapter
 
-> **PRD Policy:** **PROJECT (editable)** — Feature specification.  
-**Last updated:** 2026-05-07
+> **V1.2 reconstruction — 2026-10-22:** [Project conventions](../00_conventions/tradingig_v1_2_conventions.md) and [reconciliation decisions](../01_product/decisions.md) apply. Original text is preserved; documented V1.2 changes govern current scope. No implementation or activation is implied.
+
+
+> **PRD Policy:** **PROJECT (editable)** — Feature specification.\
+**Last updated:** 2026-10-22
 
 
 ## Goal
@@ -50,3 +53,9 @@ class IGRestAdapter:
 ## Testing notes
 - Use HTTP response fixtures with fake tokens.
 - Integration tests opt-in via environment flag.
+
+## V1.2 scope alignment
+
+Historical signatures are illustrative, not proof of actual IG support. Require AccountRef and per-product/account capabilities. ANALYSIS forbids submit/update/close; ambiguous responses require reconciliation. Real HTTP payloads and error codes must be evidenced during R07, not invented here.
+
+Canonical requirements: [chapter 4](../10_architecture/overview.md), [chapter 5](F001_ig_connection_and_settings.md), [chapter 9](F007_software_pending_orders.md), [chapter 17](../10_architecture/domain_contracts.md).

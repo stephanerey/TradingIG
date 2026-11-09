@@ -8,6 +8,8 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
+QUOTE_FRESHNESS_SECONDS = 30
+
 
 class ChartPriceBasis(StrEnum):
     BID = "bid"
@@ -49,6 +51,21 @@ class Quote:
     timestamp_ms: int | None = None
     snapshot: bool = False
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
+
+    @property
+    def delayed(self) -> bool | None:
+        """Return the IG delay flag when explicitly supplied; absence remains unknown."""
+        for key in ("DELAY", "MARKET_DELAY"):
+            value = self.raw.get(key)
+            if value is None or value == "":
+                continue
+            normalized = str(value).strip().lower()
+            if normalized in {"1", "true"}:
+                return True
+            if normalized in {"0", "false"}:
+                return False
+            return None
+        return None
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,4 @@
+interface:
+  display_name: "TradingIG Paper Execution"
+  short_description: "Encadrer PaperBroker, pending et stops"
+  default_prompt: "Use $codex-tradingig-paper-execution to implement or review a deterministic paper-only trading workflow."
