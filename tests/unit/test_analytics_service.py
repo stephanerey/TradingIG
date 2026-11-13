@@ -1,10 +1,14 @@
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 
 from trading_ig_assistant.domain.journal import JournalEvent, PnlPeriod, PnlStatus
-from trading_ig_assistant.services.analytics_service import aggregate_realized_pnl
+from trading_ig_assistant.services.analytics_service import (
+    aggregate_realized_pnl,
+    summarize_realized_trades,
+)
 
 
 def _pnl_event(
@@ -83,3 +87,39 @@ def test_realized_pnl_totals_are_reproducible_by_period_and_currency() -> None:
 def test_unknown_timezone_is_rejected_instead_of_silently_falling_back() -> None:
     with pytest.raises(ValueError, match="Unknown timezone"):
         aggregate_realized_pnl([], timezone_name="Invalid/Timezone")
+
+
+def test_realized_trade_statistics_use_only_attested_paper_closures() -> None:
+    start = datetime(2026, 10, 22, 10, 0, tzinfo=UTC)
+    amounts = ("10", "-4", "2", "-6", "0")
+    closures = tuple(
+        replace(
+            _pnl_event(
+                f"CLOSE-{index}",
+                start + timedelta(minutes=index),
+                Decimal(amount),
+                "EUR",
+                PnlStatus.REALIZED,
+            ),
+            event_type="PAPER_POSITION_CLOSED",
+        )
+        for index, amount in enumerate(amounts)
+    )
+    unrelated = _pnl_event(
+        "UNRELATED",
+        start + timedelta(hours=1),
+        Decimal("999"),
+        "EUR",
+        PnlStatus.REALIZED,
+    )
+
+    summary = summarize_realized_trades((*closures, unrelated))[0]
+
+    assert summary.currency == "EUR"
+    assert summary.trade_count == 5
+    assert summary.win_count == 2
+    assert summary.loss_count == 2
+    assert summary.flat_count == 1
+    assert summary.win_rate == Decimal("0.4")
+    assert summary.profit_factor == Decimal("1.2")
+    assert summary.max_drawdown == Decimal("8")

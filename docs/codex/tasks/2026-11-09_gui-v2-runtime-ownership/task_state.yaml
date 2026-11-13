@@ -1,0 +1,44 @@
+schema_version: 1
+task_id: TIG-GUI2-R09-03B
+status: complete
+objective: >-
+  Move the read-only IG session lifecycle behind the shared TradingRuntime while
+  preserving the legacy GUI behavior, offline tests, and all broker execution gates.
+authority:
+  user_validation: "2026-11-09: ok je valide tu peux commencer"
+  continuation_instruction: >-
+    Chain bounded implementation steps and group verification without intermediate
+    approval while scope and safety remain unchanged.
+skills:
+  - aurora-lot-runner
+  - aurora-architecture-check
+scope:
+  allowed:
+    - src/trading_ig_assistant/app/runtime/
+    - src/trading_ig_assistant/ui/main_window.py
+    - tests/unit/
+    - docs/codex/CODEBASE_MAP.md
+    - docs/codex/tasks/2026-11-09_gui-v2-runtime-ownership/task_state.yaml
+  forbidden:
+    - live or automatic broker execution
+    - changes to IGRestAdapter order methods or LiveTradingDisabledError
+    - real network calls, real credentials, OpenAI calls, persistence migrations
+    - V2 page data binding beyond account and health foundations
+dependencies:
+  - TIG-GUI2-PASS-A complete with 622 passing tests
+  - existing IGConnectionRequest and read-only IGRestAdapter mode
+decisions:
+  - TradingRuntime composes one read-only IG session owner.
+  - ConnectionWorker remains a thin Qt worker and delegates lifecycle work to the runtime.
+  - Legacy private connection access remains as a compatibility property during migration.
+  - No visual QA is required because this lot does not change rendered widgets.
+verification:
+  targeted_tests: "83 passed in 24.07s"
+  full_tests: "626 passed in 40.25s"
+  lint: "ruff check --no-cache src tests: passed"
+  format: "ruff format --check on new runtime and test files: passed"
+  diff_check: passed
+next_action: >-
+  Start R09-03c by exposing bounded read-only connect, disconnect and confirmed
+  account-switch intents to MainWindowV2 through an application controller; do not
+  expose any order command and keep network actions explicit.

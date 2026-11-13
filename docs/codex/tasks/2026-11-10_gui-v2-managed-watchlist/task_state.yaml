@@ -1,0 +1,71 @@
+schema_version: 1
+task_id: TIG-GUI2-MANAGED-WATCHLIST
+status: complete
+objective: >-
+  Replace the fixed GUI V2 watchlist with an operator-managed list of exact products from the
+  current IG catalogue, persisted independently per environment and account, while keeping all
+  broker access read-only and preserving the existing reference scanner as a separate concern.
+skills:
+  - aurora-diagnose
+scope:
+  - AppConfig watchlist persistence contract
+  - catalogue add and watchlist remove UI actions
+  - PageRouter/MainWindow context orchestration
+  - bounded PRICE stream priority for followed products
+  - session-only M1 display candles derived from exact product PRICE quotes
+assumptions:
+  - An EPIC identifies an exact IG product; selections must never be translated between DEMO and LIVE.
+  - A first unseen environment/account context has an empty followed-product list.
+  - The fixed reference scanner remains available under Marches/Scanner and is not silently
+    reinterpreted as the selected product's price history.
+  - No broker order, LIVE execution or automatic trading path is added or enabled.
+proof_plan:
+  - configuration round-trip and malformed-input tests
+  - focused Qt tests for add, remove, context isolation and quote candles
+  - stream-priority regression test
+  - targeted Ruff and full offline pytest suite
+decisions:
+  - Persist only exact EPIC sequences under an environment/account scope key.
+  - Resolve persisted EPICs against the current catalogue before rendering them.
+  - Use direct product PRICE quotes for the followed-product chart; never feed these local candles
+    into the reference scanner as verified underlying CHART candles.
+  - Keep the broad catalogue PRICE scope active only while the Scanner page is displayed; outside
+    that page, retain only followed products, protected simulations and configured priorities.
+  - Do not start Lightstreamer while the REST connection worker has merely exposed an unconfirmed
+    session; wait for the GUI connection-success boundary before activating subscriptions.
+  - In the Scanner, keep the full account-specific catalogue but place direct major-market products
+    ahead of option chains; filtering remains immediate and local, while header sorting is explicit.
+changed_files:
+  - src/trading_ig_assistant/app/config.py
+  - src/trading_ig_assistant/app/qt_market_stream_controller.py
+  - src/trading_ig_assistant/ui/pages/scanner_page.py
+  - src/trading_ig_assistant/ui/pages/watchlist_page.py
+  - src/trading_ig_assistant/ui/shell/page_router.py
+  - src/trading_ig_assistant/ui/shell/main_window_v2.py
+  - src/trading_ig_assistant/ui/chart_view.py
+  - src/trading_ig_assistant/ui/i18n/catalogs.py
+verification:
+  targeted_tests: 70 passed for managed-watchlist, fallback-analysis and binding regressions
+  lint: targeted ruff check passed
+  full_suite: 717 passed in 63.62s
+  ui_proof: >-
+    Offline Qt tests instantiate the catalogue, router, managed watchlist and chart; protected LIVE
+    account acceptance remains human-only because no credentials or network calls are used in tests.
+  regression: >-
+    A synchronous catalogue subscriber now re-enters sync_inventory during Scanner scope reduction
+    without repeating stale publication, stopping the adapter or raising an error. Frequent live
+    catalogue refreshes also no longer restart the Scanner scope timer indefinitely; its first
+    visible 40-row scope is published while followed-product ticks continue.
+    A grouped PRICE code-21 rejection now switches once to per-market subscriptions, isolates the
+    unsupported EPIC and keeps every other visible quotation active without failing the stream.
+    When an account rejects a configured reference CHART, exact-product PRICE candles now feed a
+    separate analysis series for that followed product. Progress, signals and provenance retain the
+    exact product EPIC and never masquerade as the unavailable underlying chart.
+limits:
+  - Persisted EPICs absent from the current catalogue remain stored but are not rendered or subscribed.
+  - Existing technical analysis is shown only when an explicit product-market binding exists; no
+    binding is inferred from a product label.
+next_action: >-
+  Restart GUI V2 and reconnect the LIVE account. France 40, Spot Gold and US Crude must progress
+  from 0/24 using their exact followed-product M1 candles, while US Tech 100 and Germany 40 retain
+  their authorized reference-CHART analysis. No broker order is created by this validation.

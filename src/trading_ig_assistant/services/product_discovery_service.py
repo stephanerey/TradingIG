@@ -501,7 +501,7 @@ class ProductDiscoveryService:
             instrument_type=summary.instrument_type
             or _first_string(details_raw, ["instrumentType"]),
             expiry=summary.expiry or _first_string(details_raw, ["expiry"]),
-            currency=_first_string(
+            currency=_currency_code(
                 {"summary": summary.raw, "details": details_raw},
                 ["currency", "currencies", "baseCurrency", "quoteCurrency"],
             ),
@@ -771,6 +771,27 @@ def _first_string(payload: Any, keys: list[str]) -> str | None:
     if isinstance(value, list):
         return ", ".join(str(item) for item in value)
     return str(value)
+
+
+def _currency_code(payload: Any, keys: list[str]) -> str | None:
+    value = _first_value(payload, keys)
+    candidates = value if isinstance(value, list) else [value]
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            candidate = next(
+                (
+                    candidate.get(key)
+                    for key in ("code", "currencyCode", "value")
+                    if candidate.get(key)
+                ),
+                None,
+            )
+        if candidate is None:
+            continue
+        code = str(candidate).strip().upper()
+        if len(code) == 3 and code.isalpha():
+            return code
+    return None
 
 
 def _first_float(payload: Any, keys: list[str]) -> float | None:

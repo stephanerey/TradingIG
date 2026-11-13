@@ -1,0 +1,31 @@
+schema_version: 1
+task_id: TIG-GUI2-LIVE-READONLY
+status: complete
+objective: >-
+  Add an explicit IG LIVE read-only connection choice to GUI V2 while preserving PAPER-only
+  execution and the hard broker-order boundary.
+allowed_scope:
+  - src/trading_ig_assistant/app/qt_connection_controller.py
+  - src/trading_ig_assistant/app/runtime/ig_session_runtime.py
+  - src/trading_ig_assistant/ui/shell/account_header.py
+  - src/trading_ig_assistant/ui/shell/main_window_v2.py
+  - src/trading_ig_assistant/ui/i18n/catalogs.py
+  - tests/unit/test_gui_v2_connection_controller.py
+  - tests/unit/test_ig_session_runtime.py
+  - documentation for this task and maintained repo state
+decisions:
+  - DEMO and LIVE are explicit connection intents; only one read-only IG session may exist.
+  - Both environments keep execution_mode PAPER and instantiate IGRestAdapter read_only=True.
+  - No broker order command, LIVE execution capability, AUTO mode or capability relaxation is added.
+  - A freshly issued CST rejected by IG on the first authenticated read triggers exactly one delayed,
+    clean-session retry; a second rejection fails with an actionable localized message.
+  - Supervised IG DEMO submission is a separate future lot using the existing risk and capability
+    gates; LIVE submission remains default-deny and requires a later explicit validation phase.
+verification:
+  lint: "ruff check src tests: passed"
+  targeted_tests: "28 passed for REST adapter, connection controller and read-only runtime"
+  live_boundary_regression: "11 passed after compact header labels; LIVE adapter asserted read_only=True"
+  full_suite: "711 passed in 70.20s"
+next_action: >-
+  Human-test LIVE read-only login, account identity, catalogue/stream and disconnect. Then design
+  a separate supervised IG DEMO execution lot; keep LIVE mutation default-deny.

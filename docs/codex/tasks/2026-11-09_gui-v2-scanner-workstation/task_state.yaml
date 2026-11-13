@@ -1,0 +1,37 @@
+schema_version: 1
+task_id: TIG-GUI2-R09-05-08A
+status: complete
+objective: >-
+  Continue GUI V2 through bounded scanner session analysis, watchlist charts, read-only
+  Paper/analytics pages, diagnostics and safe settings without activating broker actions.
+authority:
+  user_feedback: "2026-11-09: ne t'arrête que s'il y a quelque chose à valider d'important"
+stream_budget:
+  total_items: 40
+  account_items: 1
+  reference_chart_items: 5
+  catalogue_price_items: 34
+  connection_count: 1
+decisions:
+  - Keep the five configured reference markets visible even before analysis is available.
+  - Collect only session M1 chart updates; do not load REST history or persisted candles.
+  - Re-evaluate deterministic scanner services on each newly observed session candle.
+  - Preserve UNKNOWN and NO_TRADE when context, cost, risk or candle evidence is missing.
+  - Use the shared chart stream for Watchlist and convert reference chart closes to catalogue quotes.
+  - Keep broker positions/orders unavailable rather than mixing them with local Paper positions.
+  - Expose no AI call, strategy mutation, risk mutation, LIVE order or AUTO control.
+verification:
+  targeted_tests: "77 passed for GUI catalogue/watchlist plus legacy ChartView"
+  visual:
+    - .codex_artifacts/gui_v2/scanner-fr_FR-1366x768.png
+    - .codex_artifacts/gui_v2/watchlist-fr_FR-1366x768.png
+    - .codex_artifacts/gui_v2/positions-fr_FR-1366x768.png
+    - .codex_artifacts/gui_v2/diagnostics-fr_FR-1366x768.png
+    - .codex_artifacts/gui_v2/settings-fr_FR-1366x768.png
+    - .codex_artifacts/gui_v2/workstation-en_US-1920x1080.png
+  visual_limit: offscreen Qt omits text glyphs and does not replace native Windows acceptance
+  lint: passed
+  full_tests: "657 passed in 53.89s"
+next_action: >-
+  Native Windows validation with a real DEMO session, then advanced provider-backed Macro/AI
+  and complete Paper save/restore workflows only under their existing explicit permissions.

@@ -1,0 +1,40 @@
+schema_version: 1
+task_id: TIG-GUI2-R09-05D
+status: complete
+superseded_by: TIG-GUI2-R09-05E
+objective: >-
+  Keep key reference markets continuously live while retaining automatic streaming
+  coverage for visible catalogue rows under IG's 40-item default limit.
+authority:
+  user_feedback: >-
+    2026-11-09: US Tech 100 and other key quotations must remain updated when the
+    operator scrolls elsewhere in the catalogue.
+allocation:
+  total_item_budget: 40
+  permanent_priority_budget_observed: 10
+  remaining_visible_budget: 30
+  permanent_reference_epics:
+    - IX.D.NASDAQ.IFD.IP
+    - IX.D.CAC.IMF.IP
+    - IX.D.DAX.IFMM.IP
+    - CS.D.CFEGOLD.CEF.IP
+    - CC.D.CL.UEF.IP
+    - IX.D.SPTRD.IFE.IP
+    - IX.D.DOW.IFE.IP
+    - IX.D.FTSE.IFE.IP
+    - CS.D.EURUSD.CEF.IP
+    - CS.D.GBPUSD.CFD.IP
+decisions:
+  - Priority reference EPICs are prepended and deduplicated on every scope change.
+  - Valid configured product-to-market bindings can add reference EPICs to priorities.
+  - Spread is not used as the primary subscription selector because stale, unsubscribed spreads would create a circular blind spot.
+  - Spread remains suitable for ranking derivative execution candidates only after a reference-market signal exists.
+  - Coverage text separates total active streams, permanent priorities and filtered rows.
+verification:
+  targeted_tests: "13 passed in 2.07s before final formatting"
+  priority_cache_probe: "10/10 default priority EPICs present in the 565-product DEMO inventory"
+  lint: passed
+  full_tests: "643 passed in 73.85s"
+next_action: >-
+  Add a scanner scheduler that promotes attested opportunity/reference markets into
+  the permanent set and rotates non-priority underlyings with explicit quote age.

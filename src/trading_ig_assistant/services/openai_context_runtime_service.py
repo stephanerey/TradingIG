@@ -23,6 +23,7 @@ def run_openai_market_context(
     macro_state: MacroRibbonState,
     instrument_id: str,
     now: datetime | None = None,
+    response_language: str | None = None,
 ) -> MarketContextSnapshot:
     """Execute one bounded consultative call; this service has no broker dependency."""
 
@@ -40,6 +41,11 @@ def run_openai_market_context(
         macro_state=macro_state,
         generated_at_utc=generated_at,
         valid_for=timedelta(minutes=10),
-        prompt_version="openai-market-context-v1",
+        prompt_version=(
+            f"openai-market-context-v2-{response_language}"
+            if response_language is not None
+            else "openai-market-context-v1"
+        ),
         provider=provider,
+        response_language=response_language,
     )

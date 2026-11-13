@@ -1,0 +1,24 @@
+schema_version: 1
+task_id: TIG-GUI2-R09-04C
+status: complete
+objective: >-
+  Consume one bounded, read-only IG ACCOUNT Lightstreamer item and project attested
+  equity, balance, available funds, PnL and margin into GUI V2.
+authority:
+  user_feedback: "2026-11-09: continue les lots suivants sans pause sauf validation importante"
+decisions:
+  - Reserve one of the default 40 Lightstreamer items for ACCOUNT; the following scanner
+    lot further partitions the remaining 39 between PRICE and CHART items.
+  - Keep one Lightstreamer client per active account and subscribe ACCOUNT only once.
+  - Merge partial ACCOUNT ticks without erasing prior REST /accounts values.
+  - Prefer AVAILABLE_TO_DEAL over AVAILABLE_CASH and MARGIN over DEPOSIT when streamed.
+  - Display equity only when the ACCOUNT stream supplies it; never derive it from REST balance.
+  - Reject account ticks whose item identity differs from the active account.
+safety:
+  - Read-only subscription only; no order command or broker mutation added.
+  - DEMO/PAPER gates and stale runtime-generation rejection remain unchanged.
+verification:
+  targeted_tests: "25 passed"
+  full_tests: "648 passed after the account-stream lot"
+next_action: >-
+  Completed by TIG-GUI2-R09-05-08A.

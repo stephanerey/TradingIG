@@ -30,6 +30,8 @@ Thumbs.db
 .pytest-tmp/
 .codex/skills/
 .codex_backups/
+.codex_artifacts/
 .local_backups/
+docs/codex/upgrade_backups/
 # SR local authentication state
 .playwright/.auth/

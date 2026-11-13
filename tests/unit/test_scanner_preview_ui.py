@@ -69,6 +69,15 @@ def test_preview_excludes_last_chart_candle_and_is_deterministic() -> None:
     )
     assert all(signal.strategy_version == PREVIEW_RULES_VERSION for signal in first.signals)
     assert "NO_COMPLETE_SCANNER_SCORE" in first.limitations
+    assert tuple((indicator.name, indicator.state.value) for indicator in first.indicators) == (
+        ("ema", "ready"),
+        ("ema", "ready"),
+        ("atr", "ready"),
+        ("recent_levels", "ready"),
+        ("rsi", "ready"),
+    )
+    assert all(indicator.observed_points == 29 for indicator in first.indicators)
+    assert first.indicators == second.indicators
 
 
 def test_chart_conversion_rejects_unknown_resolution_and_warms_up_with_one_candle() -> None:
@@ -118,6 +127,8 @@ def test_preview_uses_only_continuous_suffix_after_cache_gap() -> None:
     assert "DATA_GAP_EARLIER_CANDLES_EXCLUDED" in preview.limitations
     assert all(signal.data_state.value == "warming_up" for signal in preview.signals)
     assert all(signal.side.value == "flat" for signal in preview.signals)
+    assert all(indicator.state.value == "warming_up" for indicator in preview.indicators)
+    assert all(indicator.observed_points == 4 for indicator in preview.indicators)
 
 
 def test_preview_rejects_a_stale_persisted_snapshot() -> None:

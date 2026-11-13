@@ -32,7 +32,7 @@ class PaperPortfolioWidget(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(self)
 
         banner = QtWidgets.QLabel(
-            "SESSION PAPER LOCALE — aucune transmission à IG; "
+            "SESSION DE SIMULATION LOCALE — aucune transmission à IG; "
             "persistance uniquement sur action explicite"
         )
         banner.setWordWrap(True)
@@ -47,7 +47,7 @@ class PaperPortfolioWidget(QtWidgets.QWidget):
         layout.addWidget(self.summary)
 
         persistence_actions = QtWidgets.QHBoxLayout()
-        self.save_session_button = QtWidgets.QPushButton("Sauvegarder la session Paper")
+        self.save_session_button = QtWidgets.QPushButton("Sauvegarder la simulation")
         self.restore_session_button = QtWidgets.QPushButton("Restaurer la dernière session")
         persistence_actions.addWidget(self.save_session_button)
         persistence_actions.addWidget(self.restore_session_button)
@@ -87,7 +87,7 @@ class PaperPortfolioWidget(QtWidgets.QWidget):
         self.tabs.addTab(self.journal_table, "Journal")
         layout.addWidget(self.tabs, stretch=1)
 
-        actions = QtWidgets.QGroupBox("Actions sur la position Paper sélectionnée")
+        actions = QtWidgets.QGroupBox("Actions sur la position simulée sélectionnée")
         actions_layout = QtWidgets.QVBoxLayout(actions)
         self.action_help = QtWidgets.QLabel(
             "Simulation locale uniquement. Un stop peut être resserré, jamais élargi. "
@@ -105,9 +105,9 @@ class PaperPortfolioWidget(QtWidgets.QWidget):
         stop_form.addRow("Nouveau stop absolu", self.stop_value)
         actions_layout.addLayout(stop_form)
 
-        self.tighten_stop_button = QtWidgets.QPushButton("Resserrer le stop Paper")
+        self.tighten_stop_button = QtWidgets.QPushButton("Resserrer le stop simulé")
         self.close_position_button = QtWidgets.QPushButton(
-            "Clôturer la position Paper sélectionnée"
+            "Clôturer la position simulée sélectionnée"
         )
         self.tighten_stop_button.setEnabled(False)
         self.close_position_button.setEnabled(False)
@@ -256,7 +256,7 @@ class PaperPortfolioWidget(QtWidgets.QWidget):
                 intent.direction.value,
                 _decimal(intent.quantity),
                 result.status.value,
-                result.message or "",
+                _simulation_label(result.message or ""),
             )
             _set_row(self.orders_table, row, values)
         self.orders_table.resizeColumnsToContents()
@@ -266,7 +266,7 @@ class PaperPortfolioWidget(QtWidgets.QWidget):
         for row, event in enumerate(events):
             values = (
                 event.timestamp_utc.strftime("%H:%M:%S"),
-                event.event_type,
+                _simulation_label(event.event_type),
                 event.instrument_id or "",
                 event.correlation_id,
                 _decimal(event.pnl_amount),
@@ -299,3 +299,11 @@ def _decimal(value: Decimal | None) -> str:
     if value is None:
         return "—"
     return format(value.quantize(Decimal("0.0001")), "f").rstrip("0").rstrip(".") or "0"
+
+
+def _simulation_label(value: str) -> str:
+    return (
+        value.replace("PAPER_", "SIMULATION_")
+        .replace("PAPER-", "SIMULATION-")
+        .replace("Paper", "simulation")
+    )

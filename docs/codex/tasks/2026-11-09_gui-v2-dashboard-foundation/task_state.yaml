@@ -1,0 +1,60 @@
+schema_version: 1
+task_id: TIG-GUI2-R09-04A
+status: complete
+objective: >-
+  Add an honest read-only dashboard foundation backed by existing Paper session
+  snapshots and realized-PnL analytics, with immutable typed projections and N/A
+  for unavailable equity or unproven statistics.
+authority:
+  user_validation: "2026-11-09: ok je valide tu peux commencer"
+skills:
+  - aurora-lot-runner
+  - aurora-architecture-check
+  - aurora-ui-visual-qa
+  - codex-tradingig-paper-execution
+scope:
+  allowed:
+    - src/trading_ig_assistant/app/projections/
+    - src/trading_ig_assistant/app/runtime/
+    - src/trading_ig_assistant/app/ui_facade.py
+    - src/trading_ig_assistant/app/qt_runtime_bridge.py
+    - src/trading_ig_assistant/ui/pages/
+    - src/trading_ig_assistant/ui/models/
+    - src/trading_ig_assistant/ui/shell/
+    - src/trading_ig_assistant/ui/i18n/
+    - src/trading_ig_assistant/ui/main_window.py
+    - tests/unit/
+    - docs/codex/CODEBASE_MAP.md
+    - docs/codex/tasks/2026-11-09_gui-v2-dashboard-foundation/task_state.yaml
+  forbidden:
+    - Paper submit, close, stop, save or restore behavior changes
+    - broker positions or broker equity inferred from account balance
+    - synthetic equity history, win rate, profit factor or drawdown
+    - LIVE/AUTO/order commands, real network calls, schema migrations
+decisions:
+  - Dashboard mode is explicitly PAPER; no Paper+broker aggregation.
+  - Realized PnL reuses aggregate_realized_pnl and remains separated by currency.
+  - Open-position PnL is marked estimated and unavailable when the Paper quote is stale.
+  - Dashboard widgets are read-only and expose no Paper or broker command.
+verification:
+  targeted_tests: "65 passed in 3.12s"
+  full_tests: "633 passed in 40.83s"
+  lint: "ruff check --no-cache src tests: passed"
+  format: "ruff format --check on the new/modified V2 foundation files: passed"
+  visual:
+    status: passed_with_limit
+    captures:
+      - .codex_artifacts/gui_v2/dashboard-fr_FR-1366x768.png
+      - .codex_artifacts/gui_v2/dashboard-en_US-1920x1080.png
+    checks:
+      - nine KPI cards and the position table fit the target viewports
+      - no observed horizontal overflow
+      - empty and unavailable regions remain explicit
+    limit: offscreen Qt capture omits text glyphs and does not replace native Windows acceptance
+  protected_order_regressions: >-
+    paper broker/session, automation readiness, supervised DEMO gate and IG REST adapter
+    included in the 65-test protected subset; passed
+  diff_check: passed
+next_action: >-
+  Stop this three-lot autonomous pass and prepare R09-05 scanner/catalogue projections
+  as the next bounded pass; native Windows visual acceptance remains grouped for a later milestone.

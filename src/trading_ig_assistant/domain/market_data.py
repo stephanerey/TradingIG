@@ -69,6 +69,23 @@ class Quote:
 
 
 @dataclass(frozen=True)
+class AccountMetricsUpdate:
+    """Partial account metrics delivered by IG Lightstreamer."""
+
+    account_id: str
+    funds: float | None = None
+    available_cash: float | None = None
+    available_to_deal: float | None = None
+    profit_loss: float | None = None
+    deposit: float | None = None
+    equity: float | None = None
+    margin: float | None = None
+    equity_used: float | None = None
+    snapshot: bool = False
+    raw: dict[str, Any] = field(default_factory=dict, repr=False)
+
+
+@dataclass(frozen=True)
 class ChartCandleUpdate:
     epic: str
     interval: str

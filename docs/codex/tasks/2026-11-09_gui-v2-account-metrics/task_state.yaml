@@ -1,0 +1,33 @@
+schema_version: 1
+task_id: TIG-GUI2-R09-04B
+status: complete
+objective: >-
+  Display attested IG account balances in the persistent header and GUI V2 dashboard
+  while keeping Paper analytics separate and avoiding an invented real-time equity.
+authority:
+  user_feedback: "2026-11-09: account data does not appear; continue development"
+source_contract:
+  endpoint: GET /accounts v1
+  fields:
+    balance: balance of funds in the account
+    available: amount available for trading
+    profitLoss: account profit and loss amount
+    deposit: minimum deposit amount required for margins
+decisions:
+  - Convert REST floats through Decimal(str(value)) and preserve the account currency.
+  - Mark every metric as an ig-rest-accounts snapshot with receipt timestamp provenance.
+  - Show Solde IG, Disponible and PnL in the header; show four IG cards in the dashboard.
+  - Keep realized day/week/month PnL and positions explicitly scoped to local Paper.
+  - Do not label REST balance as real-time equity; equity remains unavailable until an attested ACCOUNT stream exists.
+  - Refresh the snapshot on DEMO connection and confirmed account switch only.
+verification:
+  targeted_tests: "19 passed before final responsive-card adjustment"
+  visual:
+    capture: .codex_artifacts/gui_v2/dashboard-account-metrics-fr_FR-1366x768.png
+    minimum_size_hint: "1120x445"
+    limit: offscreen Qt capture omits text glyphs and does not replace native Windows acceptance
+  lint: passed
+  full_tests: "645 passed in 50.95s"
+next_action: >-
+  Add one bounded IG ACCOUNT subscription for live EQUITY/AVAILABLE/PnL evidence, after
+  explicitly reserving its place in the global streaming budget.

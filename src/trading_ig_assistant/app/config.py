@@ -51,11 +51,94 @@ class IGConnectionProfileConfig:
         )
 
 
+@dataclass
+class ApiProviderConfig:
+    """Non-secret provider preferences safe for the functional config file."""
+
+    enabled: bool = False
+    last_success_at_utc: str | None = None
+
+    def to_file_dict(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "last_success_at_utc": self.last_success_at_utc,
+        }
+
+    @classmethod
+    def from_mapping(cls, data: dict[str, Any]) -> ApiProviderConfig:
+        return cls(
+            enabled=bool(data.get("enabled", False)),
+            last_success_at_utc=(
+                str(data["last_success_at_utc"])
+                if data.get("last_success_at_utc")
+                else None
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class MarketIntelligenceConfig:
+    """Safe, user-configurable evidence validity windows in hours."""
+
+    breaking_news_hours: int = 6
+    macroeconomics_hours: int = 24
+    monetary_policy_hours: int = 72
+    geopolitics_hours: int = 168
+
+    def __post_init__(self) -> None:
+        if any(
+            not 1 <= value <= 24 * 30
+            for value in (
+                self.breaking_news_hours,
+                self.macroeconomics_hours,
+                self.monetary_policy_hours,
+                self.geopolitics_hours,
+            )
+        ):
+            raise ValueError("market intelligence windows must be between 1 and 720 hours")
+
+    def to_file_dict(self) -> dict[str, int]:
+        return {
+            "breaking_news_hours": self.breaking_news_hours,
+            "macroeconomics_hours": self.macroeconomics_hours,
+            "monetary_policy_hours": self.monetary_policy_hours,
+            "geopolitics_hours": self.geopolitics_hours,
+        }
+
+    @classmethod
+    def from_mapping(cls, data: dict[str, Any]) -> MarketIntelligenceConfig:
+        defaults = cls()
+        try:
+            return cls(
+                breaking_news_hours=int(
+                    data.get("breaking_news_hours", defaults.breaking_news_hours)
+                ),
+                macroeconomics_hours=int(
+                    data.get("macroeconomics_hours", defaults.macroeconomics_hours)
+                ),
+                monetary_policy_hours=int(
+                    data.get("monetary_policy_hours", defaults.monetary_policy_hours)
+                ),
+                geopolitics_hours=int(
+                    data.get("geopolitics_hours", defaults.geopolitics_hours)
+                ),
+            )
+        except (TypeError, ValueError):
+            return defaults
+
+
 @dataclass(frozen=True)
 class WorkspaceState:
     window_width: int | None = None
     window_height: int | None = None
     splitter_sizes: tuple[int, ...] = ()
+    layout_version: int = 1
+    window_geometry: str | None = None
+    active_page: str = "dashboard"
+    active_subtabs: tuple[tuple[str, int], ...] = ()
+    sidebar_collapsed: bool = False
+    theme: str = "dark"
+    locale: str = "fr_FR"
 
     def __post_init__(self) -> None:
         if self.window_width is not None and self.window_width <= 0:
@@ -64,12 +147,29 @@ class WorkspaceState:
             raise ValueError("window_height must be positive")
         if any(size < 0 for size in self.splitter_sizes):
             raise ValueError("splitter_sizes must not contain negative values")
+        if self.layout_version < 1:
+            raise ValueError("layout_version must be positive")
+        if not self.active_page.strip():
+            raise ValueError("active_page must not be blank")
+        if any(not page.strip() or index < 0 for page, index in self.active_subtabs):
+            raise ValueError("active_subtabs must contain page names and non-negative indexes")
+        if self.theme not in {"dark"}:
+            raise ValueError("unsupported workspace theme")
+        if self.locale not in {"fr_FR", "en_US"}:
+            raise ValueError("unsupported workspace locale")
 
     def to_file_dict(self) -> dict[str, Any]:
         return {
             "window_width": self.window_width,
             "window_height": self.window_height,
             "splitter_sizes": list(self.splitter_sizes),
+            "layout_version": self.layout_version,
+            "window_geometry": self.window_geometry,
+            "active_page": self.active_page,
+            "active_subtabs": dict(self.active_subtabs),
+            "sidebar_collapsed": self.sidebar_collapsed,
+            "theme": self.theme,
+            "locale": self.locale,
         }
 
     @classmethod
@@ -77,14 +177,31 @@ class WorkspaceState:
         width = data.get("window_width")
         height = data.get("window_height")
         sizes = data.get("splitter_sizes", [])
+        active_subtabs = data.get("active_subtabs", {})
         try:
             parsed_width = int(width) if width is not None else None
             parsed_height = int(height) if height is not None else None
             parsed_sizes = tuple(int(size) for size in sizes) if isinstance(sizes, list) else ()
+            parsed_subtabs = (
+                tuple(sorted((str(page), int(index)) for page, index in active_subtabs.items()))
+                if isinstance(active_subtabs, dict)
+                else ()
+            )
             return cls(
                 window_width=parsed_width,
                 window_height=parsed_height,
                 splitter_sizes=parsed_sizes,
+                layout_version=int(data.get("layout_version", 1)),
+                window_geometry=(
+                    str(data["window_geometry"])
+                    if data.get("window_geometry") is not None
+                    else None
+                ),
+                active_page=str(data.get("active_page", "dashboard")),
+                active_subtabs=parsed_subtabs,
+                sidebar_collapsed=bool(data.get("sidebar_collapsed", False)),
+                theme=str(data.get("theme", "dark")),
+                locale=str(data.get("locale", "fr_FR")),
             )
         except (TypeError, ValueError):
             return cls()
@@ -245,6 +362,7 @@ class AppConfig:
     ig_api_key: SecretValue | None = field(default=None, repr=False)
     selected_account_id: str | None = None
     last_selected_product_epic: str | None = None
+    followed_product_epics: dict[str, tuple[str, ...]] = field(default_factory=dict)
     chart_source_overrides: dict[str, str] = field(default_factory=dict)
     product_market_bindings: tuple[IGProductMarketBinding, ...] = ()
     connection_profiles: dict[IGEnvironment, IGConnectionProfileConfig] = field(
@@ -256,12 +374,19 @@ class AppConfig:
     )
     scanner_scoring: ScannerScoringConfig = field(default_factory=ScannerScoringConfig)
     scanner_profiles: ScannerProfileCatalog = field(default_factory=ScannerProfileCatalog)
+    api_providers: dict[str, ApiProviderConfig] = field(default_factory=dict)
+    market_intelligence: MarketIntelligenceConfig = field(
+        default_factory=MarketIntelligenceConfig
+    )
     read_only: bool = True
     enable_live_trading: bool = False
 
     def __post_init__(self) -> None:
         if isinstance(self.environment, str):
             self.environment = IGEnvironment(self.environment.lower())
+        self.followed_product_epics = _normalize_followed_product_epics(
+            self.followed_product_epics
+        )
         self.chart_source_overrides = _normalize_chart_source_overrides(self.chart_source_overrides)
         self.product_market_bindings = _normalize_product_market_bindings(
             self.product_market_bindings
@@ -272,6 +397,15 @@ class AppConfig:
             legacy_identifier=self.ig_username,
             legacy_account_id=self.selected_account_id,
         )
+        self.api_providers = {
+            str(provider_id).strip().lower(): (
+                value
+                if isinstance(value, ApiProviderConfig)
+                else ApiProviderConfig.from_mapping(value)
+            )
+            for provider_id, value in self.api_providers.items()
+            if str(provider_id).strip() and isinstance(value, (ApiProviderConfig, dict))
+        }
         if self.enable_live_trading and self.read_only:
             raise ValueError("enable_live_trading cannot be true while read_only is true.")
 
@@ -287,6 +421,10 @@ class AppConfig:
             "ig_username": self.ig_username,
             "selected_account_id": self.selected_account_id,
             "last_selected_product_epic": self.last_selected_product_epic,
+            "followed_product_epics": {
+                key: list(epics)
+                for key, epics in sorted(self.followed_product_epics.items())
+            },
             "chart_source_overrides": dict(sorted(self.chart_source_overrides.items())),
             "product_market_bindings": [
                 {
@@ -308,6 +446,11 @@ class AppConfig:
             "scanner_execution_costs": self.scanner_execution_costs.to_file_dict(),
             "scanner_scoring": self.scanner_scoring.to_file_dict(),
             "scanner_profiles": self.scanner_profiles.to_file_dict(),
+            "api_providers": {
+                provider_id: settings.to_file_dict()
+                for provider_id, settings in sorted(self.api_providers.items())
+            },
+            "market_intelligence": self.market_intelligence.to_file_dict(),
             "read_only": self.read_only,
             "enable_live_trading": False,
         }
@@ -352,11 +495,28 @@ class AppConfig:
         )
         scanner_profiles_data = data.get("scanner_profiles", {})
         scanner_profiles = ScannerProfileCatalog.from_mapping(scanner_profiles_data)
+        api_provider_data = data.get("api_providers", {})
+        api_providers = {
+            str(provider_id): ApiProviderConfig.from_mapping(settings)
+            for provider_id, settings in api_provider_data.items()
+            if isinstance(settings, dict)
+        } if isinstance(api_provider_data, dict) else {}
+        market_intelligence_data = data.get("market_intelligence", {})
+        market_intelligence = MarketIntelligenceConfig.from_mapping(
+            market_intelligence_data
+            if isinstance(market_intelligence_data, dict)
+            else {}
+        )
         return cls(
             environment=IGEnvironment(str(data.get("environment", IGEnvironment.DEMO)).lower()),
             ig_username=str(data.get("ig_username", "")),
             selected_account_id=data.get("selected_account_id") or None,
             last_selected_product_epic=data.get("last_selected_product_epic") or None,
+            followed_product_epics=(
+                data.get("followed_product_epics", {})
+                if isinstance(data.get("followed_product_epics", {}), dict)
+                else {}
+            ),
             chart_source_overrides={
                 str(key): str(value)
                 for key, value in data.get("chart_source_overrides", {}).items()
@@ -372,9 +532,52 @@ class AppConfig:
             scanner_execution_costs=scanner_execution_costs,
             scanner_scoring=scanner_scoring,
             scanner_profiles=scanner_profiles,
+            api_providers=api_providers,
+            market_intelligence=market_intelligence,
             read_only=read_only,
             enable_live_trading=enable_live_trading,
         )
+
+    def followed_epics_for(
+        self,
+        environment: IGEnvironment | str,
+        account_id: str | None,
+    ) -> tuple[str, ...]:
+        key = followed_product_scope_key(environment, account_id)
+        return () if key is None else self.followed_product_epics.get(key, ())
+
+    def set_followed_epics(
+        self,
+        environment: IGEnvironment | str,
+        account_id: str | None,
+        epics: object,
+    ) -> tuple[str, ...]:
+        key = followed_product_scope_key(environment, account_id)
+        if key is None:
+            return ()
+        normalized = _normalize_epic_sequence(epics)
+        if normalized:
+            self.followed_product_epics[key] = normalized
+        else:
+            self.followed_product_epics.pop(key, None)
+        return normalized
+
+
+def followed_product_scope_key(
+    environment: IGEnvironment | str,
+    account_id: str | None,
+) -> str | None:
+    """Return the stable non-secret scope used for an exact-product watchlist."""
+
+    normalized_account = str(account_id or "").strip()
+    if not normalized_account:
+        return None
+    normalized_environment = (
+        environment.value
+        if isinstance(environment, IGEnvironment)
+        else IGEnvironment(str(environment).strip().lower()).value
+    )
+    return f"{normalized_environment}:{normalized_account}"
 
 
 def load_config(path: Path, *, allow_live_trading: bool = False) -> AppConfig:
@@ -450,11 +653,46 @@ def _default_chart_source_overrides() -> dict[str, str]:
     }
 
 
+def _normalize_followed_product_epics(
+    values: dict[str, object] | object,
+) -> dict[str, tuple[str, ...]]:
+    if not isinstance(values, dict):
+        return {}
+    normalized: dict[str, tuple[str, ...]] = {}
+    for raw_key, raw_epics in values.items():
+        key = str(raw_key).strip()
+        if not key or ":" not in key:
+            continue
+        environment, account_id = key.split(":", 1)
+        if environment not in {item.value for item in IGEnvironment} or not account_id.strip():
+            continue
+        epics = _normalize_epic_sequence(raw_epics)
+        if epics:
+            normalized[f"{environment}:{account_id.strip()}"] = epics
+    return normalized
+
+
+def _normalize_epic_sequence(values: object) -> tuple[str, ...]:
+    if not isinstance(values, (tuple, list)):
+        return ()
+    return tuple(
+        dict.fromkeys(
+            text
+            for value in values
+            if (text := str(value).strip())
+        )
+    )
+
+
 def _default_product_market_bindings() -> tuple[IGProductMarketBinding, ...]:
     us_tech_provenance = ("configuration:validated-us-tech-reference-2026-11-05",)
     verified_barrier_provenance = (
         "local-evidence:live-product-discovery-2026-11-06",
         "operator:approved-exact-barrier-pairs-2026-11-06",
+    )
+    verified_gold_barrier_provenance = (
+        "local-evidence:live-product-discovery-2026-11-10",
+        "operator:selected-exact-live-product-2026-11-10",
     )
     return (
         IGProductMarketBinding(
@@ -510,6 +748,18 @@ def _default_product_market_bindings() -> tuple[IGProductMarketBinding, ...]:
             canonical_underlying_id=CanonicalUnderlyingId.US_CRUDE,
             reference_epic="CC.D.CL.UEF.IP",
             provenance=verified_barrier_provenance,
+        ),
+        IGProductMarketBinding(
+            product_epic="CS.D.CFDGOLD.OPTCALL2.IP",
+            canonical_underlying_id=CanonicalUnderlyingId.SPOT_GOLD,
+            reference_epic="CS.D.CFEGOLD.CEF.IP",
+            provenance=verified_gold_barrier_provenance,
+        ),
+        IGProductMarketBinding(
+            product_epic="CS.D.CFDGOLD.OPTPUT2.IP",
+            canonical_underlying_id=CanonicalUnderlyingId.SPOT_GOLD,
+            reference_epic="CS.D.CFEGOLD.CEF.IP",
+            provenance=verified_gold_barrier_provenance,
         ),
     )
 

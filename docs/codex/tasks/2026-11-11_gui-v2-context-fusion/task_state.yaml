@@ -1,0 +1,42 @@
+objective: >-
+  Raccorder le dernier contexte macro/IA atteste au scanner GUI V2 afin de
+  produire un score de contexte explicable, sans ordre ni automatisation.
+status: complete
+method: SR Development Method 4.1
+allowed_scope:
+  - runtime GUI V2 et controles de generation
+  - controleurs Macro/IA et Scanner
+  - tests unitaires et documentation SR associee
+forbidden_scope:
+  - ordre IG reel ou automatique
+  - activation LIVE/AUTO
+  - inference de produit ou de portee IA
+  - appel reseau reel pendant les tests
+decisions:
+  - Le snapshot de contexte reste un contrat domaine immuable, distinct de sa projection GUI.
+  - Le runtime rejette les generations obsoletes et efface le contexte lors d'une nouvelle generation.
+  - Une nouvelle collecte d'actualites invalide le resultat IA precedent jusqu'a une nouvelle analyse explicite.
+  - Le scanner conserve UNKNOWN quand aucun contexte atteste n'est disponible ou applicable.
+  - Le contexte reste consultatif, explicable et sans surface de commande broker.
+lots:
+  - id: GUI-V2-CONTEXT-001
+    label: stockage runtime et garde de generation
+    status: complete
+  - id: GUI-V2-CONTEXT-002
+    label: publication Macro IA et invalidation
+    status: complete
+  - id: GUI-V2-CONTEXT-003
+    label: injection explicable dans le scanner
+    status: complete
+  - id: GUI-V2-CONTEXT-004
+    label: projection lisible dans scanner et watchlist
+    status: complete
+  - id: GUI-V2-CONTEXT-005
+    label: ruban compact macro et IA dans le shell
+    status: complete
+verification:
+  targeted: passed (22 tests)
+  lint: passed
+  full_suite: passed (756 tests)
+next_action: >-
+  Lot clos. Poursuivre avec la projection detaillee des indicateurs techniques.

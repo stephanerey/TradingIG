@@ -158,7 +158,7 @@ class ProductSelectorWidget(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Ignored,
         )
         self.details_tabs.addTab(self.market_summary, "Marché")
-        self.details_tabs.addTab(self.paper_ticket, "Ticket Paper")
+        self.details_tabs.addTab(self.paper_ticket, "Simulation")
         self.details_tabs.currentChanged.connect(self._on_details_tab_changed)
 
         layout.addWidget(title)

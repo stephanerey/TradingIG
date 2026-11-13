@@ -17,6 +17,10 @@ OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 class OpenAIContextProviderError(RuntimeError):
     """Raised when the external response cannot satisfy the typed context contract."""
 
+    def __init__(self, message: str, *, reason_code: str = "AI_PROVIDER_ERROR") -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+
 
 @dataclass(frozen=True)
 class OpenAIHttpResponse:
@@ -138,6 +142,7 @@ def _request_payload(
     context = {
         "instrument_id": request.instrument_id,
         "prompt_version": request.prompt_version,
+        "response_language": request.response_language,
         "generated_at_utc": request.generated_at_utc.isoformat(),
         "aggregate": {
             "regime": request.macro_state.regime.value,
@@ -172,6 +177,16 @@ def _request_payload(
             )
         ],
     }
+    language_instruction = {
+        "fr": (
+            "Write the summary and human-readable risk_flags in French. Keep JSON keys, "
+            "enum values and exact source_signal_ids unchanged."
+        ),
+        "en": (
+            "Write the summary and human-readable risk_flags in English. Keep JSON keys, "
+            "enum values and exact source_signal_ids unchanged."
+        ),
+    }.get(request.response_language, "")
     payload = {
         "model": model,
         "store": False,
@@ -189,7 +204,12 @@ def _request_payload(
             "URLs support every statement. "
             "Treat missing evidence as unknown. source_signal_ids must contain only "
             "supplied signals where eligible_for_citation is true and must contain at least one "
-            "and at most five distinct exact signal_id values. Return the strict JSON schema."
+            "and at most five distinct exact signal_id values. If article contents are absent, "
+            "contradictory or insufficient, use directional_bias unknown, event_risk unknown, "
+            "add WAIT_INSUFFICIENT_EVIDENCE, and never manufacture certainty. Extract only "
+            "concise source-bound facts; an empty facts array is valid. Return the strict "
+            "JSON schema. "
+            f"{language_instruction}"
         ),
         "input": json.dumps(context, separators=(",", ":"), ensure_ascii=False),
         "text": {
@@ -229,6 +249,25 @@ def _output_schema(eligible_source_ids: tuple[str, ...]) -> dict[str, object]:
                 "minItems": 1,
                 "maxItems": min(5, len(eligible_source_ids)),
             },
+            "facts": {
+                "type": "array",
+                "maxItems": 12,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "statement": {"type": "string"},
+                        "category": {"type": "string"},
+                        "source_signal_ids": {
+                            "type": "array",
+                            "items": {"type": "string", "enum": list(eligible_source_ids)},
+                            "minItems": 1,
+                            "maxItems": min(5, len(eligible_source_ids)),
+                        },
+                    },
+                    "required": ["statement", "category", "source_signal_ids"],
+                    "additionalProperties": False,
+                },
+            },
         },
         "required": [
             "directional_bias",
@@ -237,6 +276,7 @@ def _output_schema(eligible_source_ids: tuple[str, ...]) -> dict[str, object]:
             "summary",
             "risk_flags",
             "source_signal_ids",
+            "facts",
         ],
         "additionalProperties": False,
     }
@@ -258,7 +298,10 @@ def _parse_response(
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise OpenAIContextProviderError("OpenAI response contains invalid JSON") from exc
     if not isinstance(document, Mapping) or document.get("status") != "completed":
-        raise OpenAIContextProviderError("OpenAI response is incomplete")
+        raise OpenAIContextProviderError(
+            "OpenAI response is incomplete",
+            reason_code="AI_PROVIDER_RESPONSE_INCOMPLETE",
+        )
     texts: list[str] = []
     output = document.get("output")
     if not _is_sequence(output):
@@ -273,7 +316,10 @@ def _parse_response(
             if not isinstance(part, Mapping):
                 continue
             if part.get("type") == "refusal" or part.get("refusal"):
-                raise OpenAIContextProviderError("OpenAI refused the context request")
+                raise OpenAIContextProviderError(
+                    "OpenAI refused the context request",
+                    reason_code="AI_PROVIDER_REFUSED",
+                )
             if part.get("type") == "output_text":
                 text = part.get("text")
                 if not isinstance(text, str) or not text.strip():
@@ -313,8 +359,25 @@ def _fetch_response(
             response_body = raw_response.read(max_response_bytes + 1)
             final_url = raw_response.geturl()
             content_type = raw_response.headers.get("Content-Type", "")
-    except (HTTPError, URLError, TimeoutError, OSError) as exc:
-        raise OpenAIContextProviderError("OpenAI context request failed") from exc
+    except HTTPError as exc:
+        reason_code = (
+            "AI_PROVIDER_AUTH_ERROR"
+            if exc.code in {401, 403}
+            else "AI_PROVIDER_RATE_LIMITED"
+            if exc.code == 429
+            else "AI_PROVIDER_REQUEST_REJECTED"
+            if 400 <= exc.code < 500
+            else "AI_PROVIDER_UNAVAILABLE"
+        )
+        raise OpenAIContextProviderError(
+            "OpenAI context request failed",
+            reason_code=reason_code,
+        ) from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        raise OpenAIContextProviderError(
+            "OpenAI context request failed",
+            reason_code="AI_PROVIDER_UNREACHABLE",
+        ) from exc
     if len(response_body) > max_response_bytes:
         raise OpenAIContextProviderError("OpenAI response exceeds its size limit")
     return OpenAIHttpResponse(

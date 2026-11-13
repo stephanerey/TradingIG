@@ -1,0 +1,26 @@
+schema_version: 1
+status: user_testing
+objective: "Préparer des séries MACD attestées sans imposer de paramètres à une stratégie."
+scope:
+  - indicator_series_set_contract
+  - indicator_service_macd_series
+  - conditional_watchlist_macd_panel
+  - deterministic_alignment_tests
+skills:
+  - codex-tradingig-analysis-scanner
+constraints:
+  - no_ig_orders
+  - no_auto
+  - no_default_periods_invented
+  - closed_candles_only
+decisions:
+  - "La ligne MACD commence à la première EMA lente attestée."
+  - "Le signal et l'histogramme commencent seulement après leur propre chauffe."
+  - "Le panneau GUI est proposé uniquement lorsqu'un signal atteste macd_fast_period, macd_slow_period et macd_signal_period."
+  - "Le panneau affiche ligne, signal et histogramme sur une échelle symétrique avec zéro central."
+  - "Le panneau multi-courbes affiche une légende compacte afin de distinguer MACD, signal et histogramme."
+verification:
+  - "37 tests ciblés réussis après raccordement GUI."
+  - "Suite complète : 768 tests réussis."
+  - "Ruff ciblé réussi."
+next_action: "Valider visuellement le panneau lorsqu'un profil réel fournira explicitement les trois périodes MACD."

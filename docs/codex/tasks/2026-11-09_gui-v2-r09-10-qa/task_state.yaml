@@ -1,0 +1,35 @@
+schema_version: 1
+task_id: TIG-GUI2-R09-10-QA
+status: complete
+objective: >-
+  Verify GUI V2 navigation, localization, responsive sizing and current streaming labels
+  after the Paper/history integration.
+findings:
+  - The Watchlist absolute Variation field dropped DAY_NET_CHG_MID even though the shared
+    CHART subscription received it; percent variation was already propagated.
+  - The original two-row ChartView header forced the full shell to about 2092 px wide once
+    all lazy pages had been created.
+fixes:
+  - Propagate net_change through catalogue and scanner projections into ChartView.
+  - Use a compact three-row chart header with shrinkable chips and controls.
+  - Remove synthetic percentage-based Stop/Limit/KO levels and render only exact signal entry,
+    invalidation and target levels, with individual FR/EN overlay controls.
+verification:
+  variation_regression: "Variation +198.5 and percent +0.8 rendered from one attested update"
+  responsive_smoke: "8 pages, 50 FR/EN cycles, 0.921 s, shell stayed 1366x768"
+  watchlist_minimum: "580x646; full shell minimum 1358x759"
+  visual_artifacts:
+    - .codex_artifacts/gui_v2/watchlist-r09-10-fr_FR-1366x768.png
+    - .codex_artifacts/gui_v2/history-r09-10-fr_FR-1366x768.png
+    - .codex_artifacts/gui_v2/diagnostics-r09-10-fr_FR-1366x768.png
+    - .codex_artifacts/gui_v2/positions-r09-10-fr_FR-1366x768.png
+  visual_limit: offscreen Qt omits text glyphs and does not replace native Windows review
+  lint: passed
+  full_tests: "675 passed in 71.03s"
+  latest_full_tests: "686 passed offscreen; one known offscreen-only width-metric failure"
+  latest_native_responsive_test: "1 passed"
+  latest_watchlist_tests: "3 passed offscreen"
+  latest_lint: passed
+  diff_check: passed
+safety:
+  - Smoke used no IG connection, external provider or trading action.

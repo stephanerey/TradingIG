@@ -1,0 +1,43 @@
+schema_version: 1
+task_id: TIG-GUI2-R09-05A
+status: complete
+objective: >-
+  Add an explicit manual IG DEMO catalogue search to the V2 Scanner page using the
+  existing authenticated read-only runtime adapter and one bounded REST search request.
+authority:
+  user_feedback: "2026-11-09: connection observed; continue"
+skills:
+  - aurora-lot-runner
+  - aurora-architecture-check
+  - aurora-ui-visual-qa
+  - codex-tradingig-analysis-scanner
+scope:
+  forbidden:
+    - automatic full-catalog crawl or mass subscription
+    - scanner score invention without closed candles
+    - ticket preparation, Paper execution, LIVE/AUTO or broker orders
+    - implicit network call on page navigation
+decisions:
+  - Search is manual and validates 3-100 characters.
+  - The first increment calls search_markets only; it does not crawl market details.
+  - Catalogue rows expose quote/status provenance and keep missing fields unavailable.
+verification:
+  targeted_tests: "39 passed in 2.81s after final compact-layout fix"
+  full_tests: "636 passed in 42.79s"
+  lint: "ruff check --no-cache src tests: passed"
+  format: passed
+  diff_check: passed
+  user_feedback_repairs:
+    - "2026-11-09: dark palette added for inputs, combos/popups, disabled states and scrollbars"
+    - "Catalogue status now identifies REST snapshot timestamp and manual refresh semantics"
+  post_feedback_targeted_tests: "17 passed in 3.61s"
+  post_feedback_full_tests: "637 passed in 54.82s"
+  post_feedback_visual: .codex_artifacts/gui_v2/controls-dark-fr_FR-1366x768.png
+  visual:
+    status: passed_with_limit
+    capture: .codex_artifacts/gui_v2/catalogue-fr_FR-1366x768.png
+    minimum_size_hint: "1085x502"
+    limit: offscreen Qt capture omits text glyphs and does not replace native Windows acceptance
+next_action: >-
+  Continue R09-05B with bounded quote/closed-candle projections and deterministic
+  Scanner results; do not add automatic bulk subscriptions or execution actions.

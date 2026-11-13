@@ -1,0 +1,75 @@
+schema_version: 1
+task_id: TIG-GUI2-PASS-A
+status: complete
+objective: >-
+  Implement validated GUI V2 pass A (R09-01 through R09-03): centralized
+  theme and FR/EN localization foundations, an opt-in V2 shell, and a typed
+  read-only UI facade/runtime boundary while preserving the legacy default.
+allowed_scope:
+  lots:
+    - R09-01
+    - R09-02
+    - R09-03
+  paths:
+    - src/trading_ig_assistant/app
+    - src/trading_ig_assistant/ui
+    - tests/unit
+    - pyproject.toml
+    - docs/codex/CODEBASE_MAP.md
+    - docs/codex/tasks/2026-11-09_gui-v2-pass-a/task_state.yaml
+protected_state:
+  - IG broker mutation methods and LiveTradingDisabledError
+  - LIVE and AUTO remain disabled
+  - session-only OHLC policy
+  - explicit-only Paper save and restore
+  - exact product-to-underlying bindings
+  - existing untracked .codex_artifacts and docs/codex/upgrade_backups
+decisions:
+  - Legacy GUI remains the production default until a later validated milestone.
+  - V2 shell uses explicit unavailable/empty states; no production mock financial data.
+  - No new third-party dependency is authorized in this pass.
+  - Localization uses a Qt QTranslator-compatible in-process catalog because lrelease is unavailable.
+  - Pass A exposes read-only snapshots only; Paper commands and broker execution are out of scope.
+open_requirements:
+  - GUI2-ARCH-001 through GUI2-ARCH-009 foundations
+  - GUI2-NAV-001 through GUI2-NAV-009 shell foundations
+  - GUI2-DS-001 through GUI2-DS-007
+  - GUI2-I18N-001 through GUI2-I18N-007 foundations
+  - GUI2-DATA-001 through GUI2-DATA-006 read-only foundations
+evidence:
+  baseline_commit: 615747d0078db6e37839008fec03fc981d9d9e04
+  baseline_tests: "606 passed in 39.86s"
+  baseline_lint: "ruff check --no-cache src tests: passed"
+changed_files:
+  - docs/codex/tasks/2026-11-09_gui-v2-pass-a/task_state.yaml
+  - docs/codex/CODEBASE_MAP.md
+  - pyproject.toml
+  - src/trading_ig_assistant/app/config.py
+  - src/trading_ig_assistant/app/projections/
+  - src/trading_ig_assistant/app/qt_runtime_bridge.py
+  - src/trading_ig_assistant/app/runtime/
+  - src/trading_ig_assistant/app/ui_facade.py
+  - src/trading_ig_assistant/main.py
+  - src/trading_ig_assistant/ui/i18n/
+  - src/trading_ig_assistant/ui/main_window.py
+  - src/trading_ig_assistant/ui/shell/
+  - src/trading_ig_assistant/ui/theme/
+  - tests/unit/test_config.py
+  - tests/unit/test_gui_v2_foundation.py
+  - tests/unit/test_main_cli.py
+final_verification:
+  targeted_tests: "48 passed in 2.48s (post-format and final health-semantics patch)"
+  targeted_lint: passed
+  full_tests_before_legacy_projection_bridge: "620 passed in 39.61s"
+  final_full_tests: "622 passed in 40.68s"
+  final_lint: "ruff check --no-cache src tests: passed"
+  final_format: "ruff format --check on new projection and V2 foundation test files: passed"
+  diff_check: passed
+  visual_evidence:
+    - .codex_artifacts/gui_v2/shell-fr_FR-1366x768.png
+    - .codex_artifacts/gui_v2/shell-en_US-1920x1080.png
+  visual_limit: offscreen capture does not replace native Windows human acceptance
+next_action: >-
+  Continue with R09-03b: move read-only connection and streaming ownership
+  behind TradingRuntime before binding broker-backed data to V2 pages; keep the
+  legacy GUI as the default and preserve all LIVE/AUTO safeguards.

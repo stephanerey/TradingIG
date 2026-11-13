@@ -1,0 +1,36 @@
+objective: >-
+  Centraliser les cles API dans le coffre du systeme, exposer leur gestion dans
+  Parametres et permettre le rechargement Tavily/OpenAI sans redemarrage.
+status: complete
+method: SR Development Method 4.1
+allowed_scope:
+  - contrats et service ApiCredentialManager
+  - keyring Windows et repli variables d'environnement
+  - Parametres API & fournisseurs de donnees
+  - tests de connexion explicites sur worker Qt
+  - raccordement consultatif IG, Tavily, GDELT et OpenAI
+forbidden_scope:
+  - secret en JSON, YAML, SQLite ou logs
+  - test reseau automatique
+  - abonnement ou paiement automatique
+  - ordre IG reel ou automatique
+decisions:
+  - Priorite coffre systeme puis variable d'environnement puis acces public.
+  - Les preferences d'activation et dates de test sont non secretes et persistent en JSON.
+  - Le test Tavily explicite peut consommer un credit Basic; aucun test n'est automatique.
+  - Les erreurs traversees par Qt sont des codes stables sans payload fournisseur.
+lots:
+  - id: TIG-CRED-001
+    label: contrats, registre et coffre
+    status: complete
+  - id: TIG-CRED-002
+    label: ecran Parametres et worker Qt
+    status: complete
+  - id: TIG-CRED-003
+    label: reconfiguration a chaud et tests
+    status: complete
+verification:
+  targeted: 59 passed
+  full_suite: 739 passed
+  lint: passed
+next_action: Validation manuelle de Tavily dans Parametres sans redemarrage.

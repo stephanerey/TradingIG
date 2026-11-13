@@ -1,0 +1,14 @@
+schema_version: 1
+status: user_testing
+objective: "Afficher un RSI attesté dans un sous-panneau synchronisé de la Watchlist."
+scope:
+  - indicator_service
+  - chart_indicator_panel
+  - watchlist_rsi_projection
+  - tests_and_i18n
+constraints:
+  - no_ig_orders
+  - no_auto
+  - no_network_backfill
+  - no_invented_history
+next_action: "Valider visuellement le panneau RSI synchronisé avec le signal affiché après redémarrage."

@@ -5,7 +5,7 @@
 - Auteur : Codex / humain
 
 ## Résumé court
-Application desktop PyQt5 existante, conservée et reprise sans reconstruction. SR Method 4.1 est installé et vérifié. R00–R07 et les lots GUI Paper sont terminés avec preuves locales. Une proposition validée peut ouvrir une position dans une session Paper strictement locale, avec vues Positions/Ordres/Journal, suivi du P&L estimé, resserrement manuel du stop et clôture locale explicite. Deux actions explicites permettent de sauvegarder ou restaurer le dernier checkpoint local append-only et contrôlé par checksum ; aucune base n'est ouverte au démarrage. Le ticket propose par défaut des distances relatives stop/objectif `4/12`, cohérentes avec le profil initial equity 1 000 EUR/risque 1 %/taille 1, avec un mode absolu alternatif ; le KO Barrière reste absolu et sa perte max initiale de 9 EUR est une hypothèse Paper à vérifier. Le test R07 DEMO borné a confirmé une ouverture CFD minimale, un resserrement de stop et une clôture avec zéro position finale. R05 dispose de frontières typées pour macro/news et IA ainsi que de sources automatisées Fed/BCE en lecture seule. Le probe GUI OpenAI a été validé humainement avec `gpt-6-luna`. Après ce probe, une action manuelle ou un consentement distinct de session peut envoyer au modèle jusqu'à 20 titres officiels autorisés, sous forme de preuves grises sans score, puis afficher une analyse consultative séparée dans le ruban. Le consentement périodique, désactivé et non persisté par défaut, déclenche au plus un appel toutes les 15 minutes et le résultat ne touche ni scanner, ni ticket, ni ordre. R08 dispose d'un gate AUTO default-deny, de métriques replay, d'un flux future-blind, d'un orchestrateur de signaux et de plans chronologiques/walk-forward liés à l'empreinte du dataset, purement hors ligne et sans chemin broker. AUTO et LIVE restent désactivés.
+Application desktop PyQt5 existante, conservée et reprise sans reconstruction. SR Method 4.1 est installé et vérifié. R00–R07 et les lots GUI Paper sont terminés avec preuves locales. Une proposition validée peut ouvrir une position dans une session Paper strictement locale, avec vues Positions/Ordres/Journal, suivi du P&L estimé, resserrement manuel du stop et clôture locale explicite. Deux actions explicites permettent de sauvegarder ou restaurer le dernier checkpoint local append-only et contrôlé par checksum ; aucune base n'est ouverte au démarrage. Le ticket propose par défaut des distances relatives stop/objectif `4/12`, cohérentes avec le profil initial equity 1 000 EUR/risque 1 %/taille 1, avec un mode absolu alternatif ; le KO Barrière reste absolu et sa perte max initiale de 9 EUR est une hypothèse Paper à vérifier. Le test R07 DEMO borné a confirmé une ouverture CFD minimale, un resserrement de stop et une clôture avec zéro position finale. R05 dispose de frontières typées pour macro/news et IA ainsi que de sources automatisées Fed/BCE en lecture seule. Le probe GUI OpenAI a été validé humainement avec `gpt-6-luna`. Après ce probe, une action manuelle ou un consentement distinct de session peut envoyer au modèle jusqu'à 20 titres officiels autorisés, sous forme de preuves grises sans score, puis afficher une analyse consultative séparée dans le ruban. Le consentement périodique, désactivé et non persisté par défaut, déclenche au plus un appel toutes les 15 minutes et le résultat ne touche ni scanner, ni ticket, ni ordre. R08 dispose d'un gate AUTO default-deny, de métriques replay, d'un flux future-blind, d'un orchestrateur de signaux et de plans chronologiques/walk-forward liés à l'empreinte du dataset, purement hors ligne et sans chemin broker. La GUI V2 propose désormais DEMO ou LIVE en lecture seule et affiche partout le mode Simulation ; les contrats internes historiques restent nommés PAPER pour compatibilité. AUTO et toute exécution broker LIVE restent désactivés.
 
 ## Stack détectée
 - Python : 3.12.6 dans `.venv` projet (`pyproject.toml` exige >=3.11)
@@ -19,6 +19,22 @@ Application desktop PyQt5 existante, conservée et reprise sans reconstruction. 
   sont terminés localement, sans commit.
 
 ## Tranche active
+- Le moteur technique écrit désormais chaque évaluation de stratégie et chaque échec explicite
+  dans le journal SQLite append-only existant, avec bougies closes, indicateurs, niveaux,
+  décisions et provenance. Le compte IG est pseudonymisé dans la base. Une commande dédiée
+  exporte un paquet de validation encore plus strict, sans identifiant de compte, PnL, ticket,
+  ordre ni position, pour dépôt manuel dans Rooms. Cet ajout est purement observationnel : il
+  ne modifie aucun signal et n'ouvre aucun chemin d'exécution IG.
+  La régression complète associée passe avec 776 tests ; une session GUI déjà ouverte doit être
+  relancée avant de produire ses premiers événements exportables.
+- Le bandeau GUI V2 regroupe maintenant à gauche le choix DEMO/LIVE et une action unique de
+  connexion : PLAY bleu avant connexion, STOP vert lorsque la session read-only est active.
+  L'action STOP permet la déconnexion et le sélecteur d'environnement reste alors verrouillé.
+  À droite, Equity IG, Solde, Disponible et PnL IG sont affichés dans quatre cartes à chiffres
+  agrandis; seul le PnL attesté utilise le vert/rouge financier. Les rafraîchissements temps réel
+  ne reconstruisent plus le menu des comptes, supprimant son scintillement. Les noms et types
+  broker, y compris SPREAD BET/ACTIONS ou un type brut inconnu, rendent tout compte supplémentaire
+  identifiable. Les captures Qt natives sont lisibles et la suite complète passe avec 693 tests.
 - Dans la liste des produits, une analyse IA du marché de référence peut être affichée pour un
   produit uniquement si son EPIC exact possède un binding explicite vers cet EPIC de référence.
   La mention « référence » et la provenance du binding sont visibles ; les dates, périmètres et
@@ -68,7 +84,8 @@ Application desktop PyQt5 existante, conservée et reprise sans reconstruction. 
 - R08 est active hors ligne : gate AUTO default-deny, métriques replay, flux future-blind,
   orchestration signal-only et planification train/validation/test/walk-forward implémentés, sans
   activation ni liaison à l'exécution. Les capacités
-  Barrières/Options/working orders, AUTO et LIVE restent explicitement non supportées.
+  Barrières/Options/working orders, AUTO et exécution broker LIVE restent explicitement non
+  supportés ; la connexion LIVE read-only n'accorde aucune capacité de mutation.
 - R05-AI3 est validé humainement depuis le 2026-11-05 : le contexte consultatif Fed/BCE a été
   accepté avec `openai-responses:gpt-6-luna` et affiché séparément en état `unknown`, sans ticket ni
   ordre. Le contrat borne les citations aux IDs de sources exacts et expose un diagnostic sûr
@@ -98,6 +115,15 @@ Application desktop PyQt5 existante, conservée et reprise sans reconstruction. 
 - Le catalogue d'indicateurs R05 couvre désormais SMA, EMA, RSI, ATR, MACD, Bollinger,
   momentum/ROC, niveaux récents, volatilité réalisée et ratio de volume fourni. Les sorties
   multi-valeurs, paramètres, warmup/invalidité et provenance sont explicites.
+- La Watchlist GUI V2 projette les EMA du signal sur le prix et propose un unique sous-graphe
+  synchronisé `Aucun/RSI/ATR/MACD`, calculé uniquement sur la suite continue de bougies clôturées.
+  MACD n'apparaît que si le signal atteste explicitement ses trois périodes ; aucune valeur par
+  défaut n'est inventée. Le premier affichage privilégie un signal READY directionnel, le choix
+  reste synchronisé avec la table technique et est mémorisé par marché et stratégie pendant la
+  session, y compris lorsque le signal est réémis à la bougie suivante. Ce choix ne modifie ni
+  signal, ni recommandation, ni ordre.
+- L'onglet `Macro / IA > Analyses IA` sépare les extraits utilisés et le résultat dans deux zones
+  verticales redimensionnables, sans changer le consentement explicite ni les données transmises.
 - `TREND_FOLLOW`, `BREAKOUT` et `PULLBACK` sont implémentées comme moteurs techniques
   configurables sans défaut runtime : BUY/SELL/FLAT, niveaux ATR, exclusions, configuration
   complète et replay future-blind sont audités. `EVENT_DRIVEN` exige désormais événement HIGH à
@@ -215,6 +241,40 @@ Application desktop PyQt5 existante, conservée et reprise sans reconstruction. 
 - Le repli d'un groupe CHART est limité à une erreur de permissions de ce groupe : une erreur PRICE
   ou une erreur d'un groupe de taille différente ne réinitialise plus les flux Scanner. Cette
   correction est couverte hors ligne et ne modifie pas la session DEMO actuellement ouverte.
+- Le 2026-11-10, la GUI V2 a reproduit en LIVE Barrières/Options le refus
+  `CHART:5-markets:1MINUTE: -1 Insufficient permissions` alors que REST, Lightstreamer et le flux
+  `ACCOUNT` étaient actifs. Ce n'est donc pas une panne de connexion générale. La GUI V2 retente
+  désormais une seule fois chaque référence CHART dans une souscription isolée : un refus propre à
+  un marché le marque indisponible sans couper les autres cotations ni les données de compte. Une
+  erreur PRICE demeure bloquante et aucun flux de référence n'est inventé. Ce repli est en lecture
+  seule et n'ajoute aucun chemin d'ordre.
+  La validation humaine qui a suivi confirme le résultat par marché : US Tech 100
+  (`IX.D.NASDAQ.IFD.IP`) et Allemagne 40 (`IX.D.DAX.IFMM.IP`) reçoivent leurs bougies M1 ; France 40
+  (`IX.D.CAC.IMF.IP`), Or Spot (`CS.D.CFEGOLD.CEF.IP`) et Pétrole US (`CC.D.CL.UEF.IP`) sont chacun
+  refusés par IG avec `Insufficient permissions`. Les données ACCOUNT et les cotations PRICE
+  autorisées continuent parallèlement. Ces trois absences ne doivent pas être remplacées par des
+  bougies d'un instrument différent sans binding et provenance explicites.
+  La validation a également révélé deux défauts de présentation corrigés : les références CHART
+  autorisées n'existent pas nécessairement comme produits dans le catalogue LIVE Barrières, donc
+  leur dernier Bid/Offer et leur variation sont maintenant projetés directement dans le Scanner
+  avec provenance `LIVE_REFERENCE_CHART_QUOTE`. Si IG omet les champs de variation mais fournit
+  `DAY_OPEN_MID`, ceux-ci sont calculés à partir du MID courant et de cette ouverture attestée.
+  Enfin, toute connexion ou bascule de compte purge les bougies de la page Valeurs suivies : une
+  série DEMO antérieure ne peut plus rester affichée sous une étiquette LIVE.
+  Une seconde régression observée visuellement est aussi corrigée : la reconstruction du Scanner
+  déclenchée par une cotation Catalogue sans rapport ne remet plus à `N/A` le Bid/Offer et la
+  variation d'une référence CHART absente du catalogue Barrières. La dernière preuve
+  `LIVE_REFERENCE_CHART_QUOTE` reste conservée jusqu'à une nouvelle cotation ou un changement de
+  génération/session.
+- Le 2026-11-10, la liste « Valeurs suivies » a été découplée des cinq références fixes du Scanner.
+  Chaque environnement et compte IG possède désormais sa propre séquence persistée d'EPIC exacts,
+  vide au premier usage. L'opérateur ajoute uniquement un produit présent dans le catalogue courant
+  et peut le retirer depuis la watchlist ; aucun nom ni EPIC DEMO n'est traduit vers LIVE. Les
+  produits suivis sont prioritaires dans le budget PRICE et leurs ticks construisent des bougies M1
+  locales isolées par environnement/compte/produit. Ces bougies restent des données d'affichage du
+  produit exact et ne sont jamais promues en bougies de référence du Scanner. Un binding explicite
+  demeure obligatoire pour projeter une analyse existante ou préparer une simulation, et aucun
+  chemin d'ordre IG n'a été ajouté.
 - La validation LIVE France 40 du 2026-11-06 a ensuite montré une limite distincte : après le repli
   mono-graphique, IG refuse encore `CHART:IX.D.CAC.IMF.IP:1MINUTE` tout en continuant les cotations
   `PRICE` de la Barrière sélectionnée. Le runtime bascule désormais dans ce cas sur des bougies M1
@@ -347,9 +407,10 @@ pytest -q
 - Ruff repository-wide et format-check restent rouges sur des fichiers préexistants/générés hors périmètre R01 ; `ruff check src tests` passe.
 
 ## Risques ouverts
-- Connexion LIVE, bougies et cotation directe Barrière validées manuellement par l'utilisateur.
+- Connexion LIVE read-only ajoutée à la GUI V2 mais restant à valider manuellement avec le profil
+  utilisateur ; bougies et cotation directe Barrière ont été validées séparément.
   R07 a validé une seule séquence CFD DEMO bornée, non réutilisable comme autorisation générale.
-  Barrières/Options/working orders, AUTO et LIVE restent non supportés. Fuseaux IANA non-UTC
+  Barrières/Options/working orders, AUTO et exécution broker LIVE restent non supportés. Fuseaux IANA non-UTC
   indisponibles dans ce Python Windows sans `tzdata` ; aucun fallback temporel silencieux.
 - Le runtime GUI ne consomme plus le quota historique IG. Après chaque redémarrage, les indicateurs
   techniques doivent se réchauffer depuis le flux M1 de la nouvelle session ; M5/H1 nécessitent
@@ -407,3 +468,8 @@ pytest -q
 - La session GUI Paper reste en mémoire par défaut. Une action visible peut écrire un checkpoint complet dans SQLite v2 et une autre restaurer le dernier checkpoint ; aucune I/O base n'a lieu à l'import ou au démarrage, et une session active n'est jamais remplacée sans confirmation. Les positions ouvertes peuvent être resserrées ou clôturées explicitement dans cette seule session locale ; les vues Ordres et Journal restent des projections d'audit.
 - Une devise produit absente d'IG peut être confirmée manuellement dans le ticket Paper ; elle n'est jamais déduite silencieusement. Une confirmation erronée reste un risque humain explicite.
 - Les contrôles GUI actuels sont fonctionnels et provisoires ; la refonte visuelle globale est différée jusqu'à stabilisation des fonctions métier.
+- TIG-INTEL-007 enrichit désormais au plus cinq actualités après consentement : extrait Tavily
+  Search prioritaire, puis Extract Basic borné si nécessaire. L'interface affiche volume/coût
+  estimés, extraits utilisés et liens sources. Les extraits restent en mémoire ; SQLite v3 ne
+  conserve que les analyses, faits structurés, timestamps et références. GDELT dispose d'un
+  circuit breaker Retry-After et ne bloque pas Tavily ni les sources officielles.

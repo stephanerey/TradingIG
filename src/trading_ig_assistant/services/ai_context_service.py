@@ -9,6 +9,7 @@ from decimal import Decimal, InvalidOperation
 from trading_ig_assistant.domain.ai_context import (
     AIAnalysisStatus,
     MarketAIAnalysis,
+    MarketAIFact,
     MarketAIProvider,
     MarketAIRequest,
     MarketContextSnapshot,
@@ -28,6 +29,7 @@ _OUTPUT_FIELDS = {
     "risk_flags",
     "source_signal_ids",
 }
+_OUTPUT_FIELDS_WITH_FACTS = {*_OUTPUT_FIELDS, "facts"}
 
 
 def build_market_context_snapshot(
@@ -39,6 +41,7 @@ def build_market_context_snapshot(
     valid_for: timedelta,
     prompt_version: str,
     provider: MarketAIProvider | None,
+    response_language: str | None = None,
 ) -> MarketContextSnapshot:
     _require_utc(generated_at_utc)
     if valid_for <= timedelta(0):
@@ -84,10 +87,11 @@ def build_market_context_snapshot(
                     prompt_version=prompt_version,
                     macro_state=macro_state,
                     generated_at_utc=generated_at_utc,
+                    response_language=response_language,
                 )
                 try:
                     output = provider.analyze(request)
-                except Exception:  # provider boundary must degrade without leaking provider errors
+                except Exception as exc:  # provider boundary must degrade without leaking details
                     analysis = _fallback_analysis(
                         model_id=model_id,
                         prompt_version=prompt_version,
@@ -96,6 +100,11 @@ def build_market_context_snapshot(
                         valid_for=valid_for,
                     )
                     reason_codes.append("AI_PROVIDER_ERROR")
+                    detailed_reason = _safe_provider_reason_code(
+                        exc, "AI_PROVIDER_ERROR"
+                    )
+                    if detailed_reason != "AI_PROVIDER_ERROR":
+                        reason_codes.append(detailed_reason)
                 else:
                     try:
                         analysis = _parse_analysis(
@@ -151,7 +160,10 @@ def _parse_analysis(
     generated_at_utc: datetime,
     valid_for: timedelta,
 ) -> MarketAIAnalysis:
-    if not isinstance(output, Mapping) or set(output) != _OUTPUT_FIELDS:
+    if not isinstance(output, Mapping) or frozenset(output) not in {
+        frozenset(_OUTPUT_FIELDS),
+        frozenset(_OUTPUT_FIELDS_WITH_FACTS),
+    }:
         raise ValueError("AI output fields do not match the typed contract")
     source_signal_ids = _string_sequence(output["source_signal_ids"], "source_signal_ids")
     active_signals = {
@@ -162,6 +174,21 @@ def _parse_analysis(
     if not source_signal_ids or any(item not in active_signals for item in source_signal_ids):
         raise ValueError("AI output references unavailable context signals")
 
+    cited_tags = {
+        tag
+        for source_id in source_signal_ids
+        for tag in active_signals[source_id].tags
+    }
+    directional_bias = DirectionalBias(_text(output["directional_bias"], "directional_bias"))
+    event_risk = EventRisk(_text(output["event_risk"], "event_risk"))
+    risk_flags = _string_sequence(output["risk_flags"], "risk_flags")
+    if "article_metadata_only" in cited_tags and "article_excerpt" not in cited_tags and (
+        directional_bias is not DirectionalBias.UNKNOWN
+        or event_risk is not EventRisk.UNKNOWN
+        or "WAIT_INSUFFICIENT_EVIDENCE" not in risk_flags
+    ):
+        raise ValueError("metadata-only evidence must remain UNKNOWN / WAIT")
+
     confidence = _decimal(output["confidence"], "confidence")
     requested_valid_until = generated_at_utc + valid_for
     source_expiries = [
@@ -170,20 +197,68 @@ def _parse_analysis(
         if active_signals[item].valid_until_utc is not None
     ]
     valid_until = min((requested_valid_until, *source_expiries))
+    facts = _parse_facts(
+        output.get("facts", ()),
+        active_signals=active_signals,
+        analysis_source_ids=source_signal_ids,
+        generated_at_utc=generated_at_utc,
+        valid_until_utc=valid_until,
+    )
     return MarketAIAnalysis(
         status=AIAnalysisStatus.AVAILABLE,
         model_id=model_id,
         prompt_version=prompt_version,
         market_scope=instrument_id,
-        directional_bias=DirectionalBias(_text(output["directional_bias"], "directional_bias")),
-        event_risk=EventRisk(_text(output["event_risk"], "event_risk")),
+        directional_bias=directional_bias,
+        event_risk=event_risk,
         confidence=confidence,
         summary=_text(output["summary"], "summary"),
-        risk_flags=_string_sequence(output["risk_flags"], "risk_flags"),
+        risk_flags=risk_flags,
         source_signal_ids=source_signal_ids,
         generated_at_utc=generated_at_utc,
         valid_until_utc=valid_until,
+        facts=facts,
     )
+
+
+def _parse_facts(
+    value: object,
+    *,
+    active_signals: Mapping[str, object],
+    analysis_source_ids: tuple[str, ...],
+    generated_at_utc: datetime,
+    valid_until_utc: datetime,
+) -> tuple[MarketAIFact, ...]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise TypeError("AI output facts must be an array")
+    facts: list[MarketAIFact] = []
+    for item in value:
+        if not isinstance(item, Mapping) or set(item) != {
+            "statement",
+            "category",
+            "source_signal_ids",
+        }:
+            raise ValueError("AI fact fields do not match the typed contract")
+        source_ids = _string_sequence(item["source_signal_ids"], "facts.source_signal_ids")
+        if not source_ids or any(
+            source_id not in analysis_source_ids or source_id not in active_signals
+            for source_id in source_ids
+        ):
+            raise ValueError("AI fact references unavailable context signals")
+        observed_at = max(
+            active_signals[source_id].observed_at_utc
+            for source_id in source_ids
+        )
+        facts.append(
+            MarketAIFact(
+                statement=_text(item["statement"], "facts.statement"),
+                category=_text(item["category"], "facts.category"),
+                source_signal_ids=source_ids,
+                observed_at_utc=observed_at,
+                valid_until_utc=max(valid_until_utc, generated_at_utc + timedelta(seconds=1)),
+            )
+        )
+    return tuple(facts)
 
 
 def _fallback_analysis(
@@ -234,3 +309,16 @@ def _string_sequence(value: object, field: str) -> tuple[str, ...]:
 def _require_utc(value: datetime) -> None:
     if value.tzinfo is None or value.utcoffset() != UTC.utcoffset(value):
         raise ValueError("market context generation must use UTC")
+
+
+def _safe_provider_reason_code(exc: Exception, fallback: str) -> str:
+    """Keep only stable, non-secret diagnostics exported by provider adapters."""
+
+    reason_code = getattr(exc, "reason_code", fallback)
+    if (
+        not isinstance(reason_code, str)
+        or not reason_code.startswith("AI_")
+        or len(reason_code) > 80
+    ):
+        return fallback
+    return reason_code

@@ -111,6 +111,17 @@ CHART_CANDLE_FIELDS: tuple[str, ...] = (
     "TTV",
 )
 
+ACCOUNT_METRICS_FIELDS: tuple[str, ...] = (
+    "PNL",
+    "DEPOSIT",
+    "AVAILABLE_CASH",
+    "FUNDS",
+    "MARGIN",
+    "AVAILABLE_TO_DEAL",
+    "EQUITY",
+    "EQUITY_USED",
+)
+
 GENERIC_QUOTE_FIELDS: tuple[str, ...] = tuple(
     dict.fromkeys([*MARKET_QUOTE_FIELDS, *PRICE_QUOTE_FIELDS])
 )
@@ -128,6 +139,13 @@ PRICE_QUOTE_SPEC = StreamSubscriptionSpec(
     fields=PRICE_QUOTE_FIELDS,
     kind="quote",
     data_adapter="Pricing",
+)
+
+ACCOUNT_METRICS_SPEC = StreamSubscriptionSpec(
+    name="ACCOUNT",
+    item_template="ACCOUNT:{account_id}",
+    fields=ACCOUNT_METRICS_FIELDS,
+    kind="account",
 )
 
 CHART_CANDLE_SPEC = StreamSubscriptionSpec(

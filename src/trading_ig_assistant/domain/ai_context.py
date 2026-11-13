@@ -26,6 +26,29 @@ class AIAnalysisStatus(StrEnum):
 
 
 @dataclass(frozen=True)
+class MarketAIFact:
+    """Durable source-bound fact; it intentionally excludes article excerpts."""
+
+    statement: str
+    category: str
+    source_signal_ids: tuple[str, ...]
+    observed_at_utc: datetime
+    valid_until_utc: datetime
+
+    def __post_init__(self) -> None:
+        if not self.statement.strip() or len(self.statement) > 500:
+            raise ValueError("AI fact statement must contain at most 500 characters")
+        if not self.category.strip() or not self.source_signal_ids:
+            raise ValueError("AI fact category and sources are required")
+        if len(set(self.source_signal_ids)) != len(self.source_signal_ids):
+            raise ValueError("AI fact source IDs must be unique")
+        _require_utc(self.observed_at_utc, "AI fact observation")
+        _require_utc(self.valid_until_utc, "AI fact validity")
+        if self.valid_until_utc <= self.observed_at_utc:
+            raise ValueError("AI fact validity must follow observation")
+
+
+@dataclass(frozen=True)
 class MarketAIAnalysis:
     status: AIAnalysisStatus
     model_id: str
@@ -39,6 +62,7 @@ class MarketAIAnalysis:
     source_signal_ids: tuple[str, ...]
     generated_at_utc: datetime
     valid_until_utc: datetime
+    facts: tuple[MarketAIFact, ...] = ()
 
     def __post_init__(self) -> None:
         required = (self.model_id, self.prompt_version, self.market_scope, self.summary)
@@ -54,6 +78,12 @@ class MarketAIAnalysis:
             raise ValueError("AI analysis risk flags must be unique")
         if len(set(self.source_signal_ids)) != len(self.source_signal_ids):
             raise ValueError("AI analysis source signal IDs must be unique")
+        if any(
+            source_id not in self.source_signal_ids
+            for fact in self.facts
+            for source_id in fact.source_signal_ids
+        ):
+            raise ValueError("AI facts must cite analysis source signals")
         if self.status is AIAnalysisStatus.AVAILABLE:
             if self.confidence is None or not self.source_signal_ids:
                 raise ValueError("available AI analysis requires confidence and source signals")
@@ -103,6 +133,11 @@ class MarketAIRequest:
     prompt_version: str
     macro_state: MacroRibbonState
     generated_at_utc: datetime
+    response_language: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.response_language not in {None, "fr", "en"}:
+            raise ValueError("AI response language must be fr, en or unspecified")
 
 
 class MarketAIProvider(Protocol):

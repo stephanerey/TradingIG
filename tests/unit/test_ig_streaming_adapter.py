@@ -5,12 +5,14 @@ from dataclasses import dataclass
 from trading_ig_assistant.adapters.ig_rest import IGSession
 from trading_ig_assistant.adapters.ig_streaming import (
     IGStreamingAdapter,
+    _account_metrics_from_update,
     _chart_update_from_update,
     _quote_from_update,
     build_stream_items,
 )
-from trading_ig_assistant.domain.market_data import ChartCandleUpdate
+from trading_ig_assistant.domain.market_data import AccountMetricsUpdate, ChartCandleUpdate
 from trading_ig_assistant.domain.streaming import (
+    ACCOUNT_METRICS_SPEC,
     CHART_CANDLE_SPEC,
     MARKET_QUOTE_SPEC,
     PRICE_QUOTE_SPEC,
@@ -80,6 +82,7 @@ class RecordingSink:
         self.statuses: list[str] = []
         self.quotes = []
         self.charts = []
+        self.account_metrics = []
         self.errors: list[str] = []
 
     def on_stream_status(self, status: str) -> None:
@@ -90,6 +93,9 @@ class RecordingSink:
 
     def on_chart(self, chart_update) -> None:
         self.charts.append(chart_update)
+
+    def on_account_metrics(self, update) -> None:
+        self.account_metrics.append(update)
 
     def on_stream_error(self, message: str) -> None:
         self.errors.append(message)
@@ -221,6 +227,71 @@ def test_streaming_adapter_connects_and_parses_quotes() -> None:
     assert sink.statuses[-1] == "DISCONNECTED"
 
 
+def test_streaming_adapter_subscribes_and_parses_account_metrics() -> None:
+    client = FakeLightstreamerClient("https://stream.example", "DEFAULT")
+    sink = RecordingSink()
+    adapter = IGStreamingAdapter(
+        session=IGSession(
+            cst="fake-cst",
+            security_token="fake-security-token",
+            current_account_id="ACC123",
+            lightstreamer_endpoint="https://stream.example",
+        ),
+        account_id="ACC123",
+        event_sink=sink,
+        client_factory=lambda server_address, adapter_set: client,
+    )
+
+    adapter.subscribe_account()
+    adapter.subscribe_account()
+
+    assert len(client.subscriptions) == 1
+    subscription = client.subscriptions[0]
+    assert subscription.getItems() == ["ACCOUNT:ACC123"]
+    assert subscription.getFields() == list(ACCOUNT_METRICS_SPEC.fields)
+    subscription.getListeners()[0].onItemUpdate(
+        FakeUpdate(
+            {
+                "FUNDS": "10000.50",
+                "AVAILABLE_TO_DEAL": "9250.25",
+                "PNL": "-12.5",
+                "MARGIN": "750.25",
+                "EQUITY": "9988.0",
+            },
+            snapshot=True,
+            item_name="ACCOUNT:ACC123",
+        )
+    )
+
+    assert sink.account_metrics == [
+        AccountMetricsUpdate(
+            account_id="ACC123",
+            funds=10000.5,
+            available_to_deal=9250.25,
+            profit_loss=-12.5,
+            equity=9988.0,
+            margin=750.25,
+            snapshot=True,
+            raw={
+                "FUNDS": "10000.50",
+                "AVAILABLE_TO_DEAL": "9250.25",
+                "PNL": "-12.5",
+                "MARGIN": "750.25",
+                "EQUITY": "9988.0",
+            },
+        )
+    ]
+
+    adapter.stop()
+    assert subscription in client.unsubscribed
+
+
+def test_account_metric_parser_rejects_no_identity_by_returning_empty_account() -> None:
+    update = _account_metrics_from_update(FakeUpdate({"EQUITY": "100"}))
+    assert update.account_id == ""
+    assert update.equity == 100.0
+
+
 def test_streaming_adapter_emits_chart_updates() -> None:
     client = FakeLightstreamerClient("https://stream.example", "DEFAULT")
     sink = RecordingSink()
@@ -301,6 +372,83 @@ def test_streaming_adapter_subscribes_multiple_chart_markets_in_one_subscription
     adapter.subscribe_charts(["EPIC.ONE", "EPIC.TWO"], "1MINUTE")
     assert len(client.subscriptions) == 1
     assert client.unsubscribed == []
+
+
+def test_streaming_adapter_can_isolate_chart_permissions_per_market() -> None:
+    client = FakeLightstreamerClient("https://stream.example", "DEFAULT")
+    sink = RecordingSink()
+    adapter = IGStreamingAdapter(
+        session=IGSession(
+            cst="fake-cst",
+            security_token="fake-security-token",
+            current_account_id="ACC123",
+            lightstreamer_endpoint="https://stream.example",
+        ),
+        account_id="ACC123",
+        event_sink=sink,
+        client_factory=lambda server_address, adapter_set: client,
+    )
+    adapter.subscribe_charts(["EPIC.ONE", "EPIC.TWO"], "1MINUTE")
+    grouped = client.subscriptions[0]
+
+    adapter.subscribe_charts_individually(["EPIC.ONE", "EPIC.TWO"], "1MINUTE")
+
+    assert grouped in client.unsubscribed
+    assert [subscription.getItems() for subscription in client.subscriptions[1:]] == [
+        ["CHART:EPIC.ONE:1MINUTE"],
+        ["CHART:EPIC.TWO:1MINUTE"],
+    ]
+    client.subscriptions[1].getListeners()[0].onItemUpdate(
+        FakeUpdate(
+            {"UTM": "1778490000000", "BID_CLOSE": "11.5", "CONS_END": "1"},
+            item_name="CHART:EPIC.ONE:1MINUTE",
+        )
+    )
+    assert sink.charts[0].epic == "EPIC.ONE"
+    adapter.stop()
+    assert all(
+        subscription in client.unsubscribed for subscription in client.subscriptions[1:]
+    )
+
+
+def test_streaming_adapter_can_isolate_invalid_price_market() -> None:
+    client = FakeLightstreamerClient("https://stream.example", "DEFAULT")
+    sink = RecordingSink()
+    adapter = IGStreamingAdapter(
+        session=IGSession(
+            cst="fake-cst",
+            security_token="fake-security-token",
+            current_account_id="ACC123",
+            lightstreamer_endpoint="https://stream.example",
+        ),
+        account_id="ACC123",
+        event_sink=sink,
+        client_factory=lambda server_address, adapter_set: client,
+    )
+    adapter.subscribe_markets(["EPIC.ONE", "EPIC.TWO"])
+    grouped = client.subscriptions[0]
+
+    adapter.subscribe_markets_individually(["EPIC.ONE", "EPIC.TWO"])
+
+    assert grouped in client.unsubscribed
+    assert [subscription.getItems() for subscription in client.subscriptions[1:]] == [
+        ["PRICE:ACC123:EPIC.ONE"],
+        ["PRICE:ACC123:EPIC.TWO"],
+    ]
+    listener = client.subscriptions[2].getListeners()[0]
+    listener.onSubscriptionError(21, "Invalid group")
+    assert sink.errors == ["Subscription error for PRICE:EPIC.TWO: 21 Invalid group"]
+    listener.onItemUpdate(
+        FakeUpdate(
+            {"BID": "11.5", "OFFER": "11.7"},
+            item_name="PRICE:ACC123:EPIC.TWO",
+        )
+    )
+    assert sink.quotes[0].epic == "EPIC.TWO"
+    adapter.stop()
+    assert all(
+        subscription in client.unsubscribed for subscription in client.subscriptions[1:]
+    )
 
 
 def test_multi_chart_subscription_rejects_unexpected_update_identity() -> None:

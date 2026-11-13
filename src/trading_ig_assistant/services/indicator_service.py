@@ -8,6 +8,9 @@ from decimal import Decimal
 from trading_ig_assistant.domain.analysis import (
     DataState,
     IndicatorInput,
+    IndicatorSeriesPoint,
+    IndicatorSeriesSetValue,
+    IndicatorSeriesValue,
     IndicatorSetValue,
     IndicatorValue,
 )
@@ -169,6 +172,44 @@ def ema(indicator_input: IndicatorInput, period: int) -> IndicatorValue:
     return _result(indicator_input, name, period, state=DataState.READY, value=current)
 
 
+def ema_series(indicator_input: IndicatorInput, period: int) -> IndicatorSeriesValue:
+    """Return every attested EMA point, aligned to its closed source candle."""
+
+    name = "ema"
+    issue = _validate(indicator_input, name, period)
+    provenance = indicator_input.provenance() + (f"indicator:{name}", f"period:{period}")
+    if issue is not None:
+        return IndicatorSeriesValue(
+            name=name,
+            state=issue.state,
+            points=(),
+            required_points=issue.required_points,
+            observed_points=issue.observed_points,
+            reason_codes=issue.reason_codes,
+            provenance=provenance,
+        )
+    values = _ema_series_values(
+        [candle.close for candle in indicator_input.candles],
+        period,
+    )
+    points = tuple(
+        IndicatorSeriesPoint(
+            timestamp_utc=indicator_input.candles[period - 1 + index].timestamp_utc,
+            value=value,
+        )
+        for index, value in enumerate(values)
+    )
+    return IndicatorSeriesValue(
+        name=name,
+        state=DataState.READY,
+        points=points,
+        required_points=period,
+        observed_points=len(indicator_input.candles),
+        reason_codes=(),
+        provenance=provenance,
+    )
+
+
 def rsi(indicator_input: IndicatorInput, period: int) -> IndicatorValue:
     """Return Wilder RSI, including explicit zero-gain/loss edge cases."""
     name = "rsi"
@@ -185,15 +226,7 @@ def rsi(indicator_input: IndicatorInput, period: int) -> IndicatorValue:
     for gain, loss in zip(gains[period:], losses[period:], strict=False):
         average_gain = ((average_gain * Decimal(period - 1)) + gain) / Decimal(period)
         average_loss = ((average_loss * Decimal(period - 1)) + loss) / Decimal(period)
-    if average_gain == 0 and average_loss == 0:
-        value = Decimal("50")
-    elif average_loss == 0:
-        value = Decimal("100")
-    elif average_gain == 0:
-        value = Decimal("0")
-    else:
-        relative_strength = average_gain / average_loss
-        value = Decimal("100") - (Decimal("100") / (Decimal("1") + relative_strength))
+    value = _rsi_value(average_gain, average_loss)
     return _result(
         indicator_input,
         name,
@@ -201,6 +234,52 @@ def rsi(indicator_input: IndicatorInput, period: int) -> IndicatorValue:
         period=period,
         state=DataState.READY,
         value=value,
+    )
+
+
+def rsi_series(indicator_input: IndicatorInput, period: int) -> IndicatorSeriesValue:
+    """Return Wilder RSI points aligned to their closed source candles."""
+
+    name = "rsi"
+    required = period + 1
+    issue = _validate(indicator_input, name, period, required)
+    provenance = indicator_input.provenance() + (f"indicator:{name}", f"period:{period}")
+    if issue is not None:
+        return IndicatorSeriesValue(
+            name=name,
+            state=issue.state,
+            points=(),
+            required_points=issue.required_points,
+            observed_points=issue.observed_points,
+            reason_codes=issue.reason_codes,
+            provenance=provenance,
+        )
+    closes = [candle.close for candle in indicator_input.candles]
+    changes = [current - previous for previous, current in zip(closes, closes[1:], strict=False)]
+    gains = [max(change, Decimal("0")) for change in changes]
+    losses = [max(-change, Decimal("0")) for change in changes]
+    average_gain = sum(gains[:period], Decimal("0")) / Decimal(period)
+    average_loss = sum(losses[:period], Decimal("0")) / Decimal(period)
+    values = [_rsi_value(average_gain, average_loss)]
+    for gain, loss in zip(gains[period:], losses[period:], strict=False):
+        average_gain = ((average_gain * Decimal(period - 1)) + gain) / Decimal(period)
+        average_loss = ((average_loss * Decimal(period - 1)) + loss) / Decimal(period)
+        values.append(_rsi_value(average_gain, average_loss))
+    points = tuple(
+        IndicatorSeriesPoint(
+            timestamp_utc=indicator_input.candles[period + index].timestamp_utc,
+            value=value,
+        )
+        for index, value in enumerate(values)
+    )
+    return IndicatorSeriesValue(
+        name=name,
+        state=DataState.READY,
+        points=points,
+        required_points=required,
+        observed_points=len(indicator_input.candles),
+        reason_codes=(),
+        provenance=provenance,
     )
 
 
@@ -226,14 +305,64 @@ def atr(indicator_input: IndicatorInput, period: int) -> IndicatorValue:
     return _result(indicator_input, name, period, state=DataState.READY, value=current_atr)
 
 
-def macd(
+def atr_series(indicator_input: IndicatorInput, period: int) -> IndicatorSeriesValue:
+    """Return Wilder ATR points aligned to their closed source candles."""
+
+    name = "atr"
+    issue = _validate(indicator_input, name, period)
+    provenance = indicator_input.provenance() + (f"indicator:{name}", f"period:{period}")
+    if issue is not None:
+        return IndicatorSeriesValue(
+            name=name,
+            state=issue.state,
+            points=(),
+            required_points=issue.required_points,
+            observed_points=issue.observed_points,
+            reason_codes=issue.reason_codes,
+            provenance=provenance,
+        )
+    candles = indicator_input.candles
+    true_ranges = [candles[0].high - candles[0].low]
+    for previous, current in zip(candles, candles[1:], strict=False):
+        true_ranges.append(
+            max(
+                current.high - current.low,
+                abs(current.high - previous.close),
+                abs(current.low - previous.close),
+            )
+        )
+    current_atr = sum(true_ranges[:period], Decimal("0")) / Decimal(period)
+    values = [current_atr]
+    for true_range in true_ranges[period:]:
+        current_atr = ((current_atr * Decimal(period - 1)) + true_range) / Decimal(period)
+        values.append(current_atr)
+    points = tuple(
+        IndicatorSeriesPoint(
+            timestamp_utc=indicator_input.candles[period - 1 + index].timestamp_utc,
+            value=value,
+        )
+        for index, value in enumerate(values)
+    )
+    return IndicatorSeriesValue(
+        name=name,
+        state=DataState.READY,
+        points=points,
+        required_points=period,
+        observed_points=len(indicator_input.candles),
+        reason_codes=(),
+        provenance=provenance,
+    )
+
+
+def macd_series(
     indicator_input: IndicatorInput,
     *,
     fast_period: int,
     slow_period: int,
     signal_period: int,
-) -> IndicatorSetValue:
-    """Return MACD line, signal line and histogram using EMA seeds."""
+) -> IndicatorSeriesSetValue:
+    """Return timestamped MACD, signal and histogram curves using EMA seeds."""
+
     if fast_period <= 0 or slow_period <= 0 or signal_period <= 0:
         raise ValueError("MACD periods must be positive")
     if fast_period >= slow_period:
@@ -247,22 +376,99 @@ def macd(
     )
     issue = _validate(indicator_input, name, slow_period, required)
     if issue:
-        return _set_from_issue(indicator_input, name, issue, parameters=parameters)
+        return IndicatorSeriesSetValue(
+            name=name,
+            state=issue.state,
+            series=(),
+            required_points=required,
+            observed_points=len(indicator_input.candles),
+            reason_codes=issue.reason_codes,
+            provenance=indicator_input.provenance()
+            + (f"indicator:{name}", *parameters),
+        )
     closes = [candle.close for candle in indicator_input.candles]
-    fast_series = _ema_series(closes, fast_period)
-    slow_series = _ema_series(closes, slow_period)
-    aligned_fast = fast_series[slow_period - fast_period :]
-    macd_series = [fast - slow for fast, slow in zip(aligned_fast, slow_series, strict=True)]
-    signal_series = _ema_series(macd_series, signal_period)
-    line = macd_series[-1]
-    signal = signal_series[-1]
+    fast_values = _ema_series_values(closes, fast_period)
+    slow_values = _ema_series_values(closes, slow_period)
+    aligned_fast = fast_values[slow_period - fast_period :]
+    line_values = [
+        fast - slow for fast, slow in zip(aligned_fast, slow_values, strict=True)
+    ]
+    signal_values = _ema_series_values(line_values, signal_period)
+    aligned_line_values = line_values[signal_period - 1 :]
+    histogram_values = [
+        line - signal
+        for line, signal in zip(aligned_line_values, signal_values, strict=True)
+    ]
+    line_timestamps = indicator_input.candles[slow_period - 1 :]
+    signal_timestamps = indicator_input.candles[required - 1 :]
+    provenance = indicator_input.provenance() + (f"indicator:{name}", *parameters)
+    component_values = (
+        ("line", line_values, line_timestamps),
+        ("signal", signal_values, signal_timestamps),
+        ("histogram", histogram_values, signal_timestamps),
+    )
+    series = tuple(
+        IndicatorSeriesValue(
+            name=component,
+            state=DataState.READY,
+            points=tuple(
+                IndicatorSeriesPoint(timestamp_utc=candle.timestamp_utc, value=value)
+                for candle, value in zip(timestamps, values, strict=True)
+            ),
+            required_points=required,
+            observed_points=len(indicator_input.candles),
+            reason_codes=(),
+            provenance=provenance + (f"component:{component}",),
+        )
+        for component, values, timestamps in component_values
+    )
+    return IndicatorSeriesSetValue(
+        name=name,
+        state=DataState.READY,
+        series=series,
+        required_points=required,
+        observed_points=len(indicator_input.candles),
+        reason_codes=(),
+        provenance=provenance,
+    )
+
+
+def macd(
+    indicator_input: IndicatorInput,
+    *,
+    fast_period: int,
+    slow_period: int,
+    signal_period: int,
+) -> IndicatorSetValue:
+    """Return the latest MACD line, signal line and histogram values."""
+
+    series_result = macd_series(
+        indicator_input,
+        fast_period=fast_period,
+        slow_period=slow_period,
+        signal_period=signal_period,
+    )
+    parameters = (
+        f"fast_period:{fast_period}",
+        f"slow_period:{slow_period}",
+        f"signal_period:{signal_period}",
+    )
+    if series_result.state is not DataState.READY:
+        return _set_result(
+            indicator_input,
+            "macd",
+            series_result.required_points,
+            parameters=parameters,
+            state=series_result.state,
+            reason_codes=series_result.reason_codes,
+        )
     return _set_result(
         indicator_input,
-        name,
-        required,
+        "macd",
+        series_result.required_points,
         parameters=parameters,
         state=DataState.READY,
-        values=(("line", line), ("signal", signal), ("histogram", line - signal)),
+        values=tuple((item.name, item.points[-1].value) for item in series_result.series),
     )
 
 
@@ -456,7 +662,7 @@ def volume_ratio(indicator_input: IndicatorInput, period: int) -> IndicatorValue
     )
 
 
-def _ema_series(values: list[Decimal], period: int) -> list[Decimal]:
+def _ema_series_values(values: list[Decimal], period: int) -> list[Decimal]:
     current = sum(values[:period], Decimal("0")) / Decimal(period)
     result = [current]
     alpha = Decimal("2") / Decimal(period + 1)
@@ -464,6 +670,17 @@ def _ema_series(values: list[Decimal], period: int) -> list[Decimal]:
         current = ((value - current) * alpha) + current
         result.append(current)
     return result
+
+
+def _rsi_value(average_gain: Decimal, average_loss: Decimal) -> Decimal:
+    if average_gain == 0 and average_loss == 0:
+        return Decimal("50")
+    if average_loss == 0:
+        return Decimal("100")
+    if average_gain == 0:
+        return Decimal("0")
+    relative_strength = average_gain / average_loss
+    return Decimal("100") - (Decimal("100") / (Decimal("1") + relative_strength))
 
 
 def _population_standard_deviation(values: list[Decimal]) -> Decimal:
@@ -477,9 +694,13 @@ class IndicatorService:
 
     sma = staticmethod(sma)
     ema = staticmethod(ema)
+    ema_series = staticmethod(ema_series)
     rsi = staticmethod(rsi)
+    rsi_series = staticmethod(rsi_series)
     atr = staticmethod(atr)
+    atr_series = staticmethod(atr_series)
     macd = staticmethod(macd)
+    macd_series = staticmethod(macd_series)
     bollinger_bands = staticmethod(bollinger_bands)
     momentum = staticmethod(momentum)
     rate_of_change = staticmethod(rate_of_change)

@@ -1,0 +1,31 @@
+schema_version: 1
+task_id: TIG-GUI2-ACCOUNT-HEADER-REDESIGN
+status: complete
+objective: >-
+  Redesign the persistent account header with left-aligned environment connection controls and
+  prominent right-aligned account KPI cards without changing connection or execution semantics.
+decisions:
+  - A DEMO/LIVE selector feeds one connect action; the selector is locked while connected.
+  - The same action becomes a green Connected control and disconnects when clicked again.
+  - The connection action uses media semantics: Play while disconnected, Stop while connected.
+  - Quote/account-metric refreshes must never rebuild the account combo model; only account-list,
+    environment or locale changes may do so.
+  - Broker-returned account names and recognized/raw account types remain visible so additional
+    accounts are not presented as anonymous generic entries.
+  - Equity, balance, available funds and account PnL remain distinct attested values; missing
+    values display N/A and only PnL receives profit/loss semantic coloring.
+  - Simulation and read-only status remain visible; no broker execution capability changes.
+verification:
+  lint: "ruff check src tests: passed"
+  targeted_tests: "24 passed before responsive correction; 7 focused responsive tests passed"
+  full_suite: "693 passed offscreen after media-button and account-combo stability fix"
+  native_visual_smoke: >-
+    Synthetic native Qt captures inspected at 1366px and 1000px; KPI values remain visible and
+    account identity truncates only at 1000px with its full tooltip retained.
+  evidence:
+    - .codex_artifacts/account_header_play.png
+    - .codex_artifacts/account_header_stop.png
+  interaction_regression: >-
+    Account metric refresh emits no row insertion/removal in the account combo model and retains
+    the selected account; broker names and account types are rendered explicitly.
+next_action: Human-check PLAY/STOP and the stable three-account dropdown in an authenticated session.

@@ -1,0 +1,42 @@
+schema_version: 1
+task_id: TIG-GUI2-R09-07-PAPER-TICKET-PREPARATION
+status: complete
+objective: >-
+  Open a governed local-Paper preparation and confirmation path from the exact selected catalogue
+  row, refusing inferred bindings and stale, delayed or non-live quotes and never reaching IG orders.
+decisions:
+  - A catalogue double-click carries the exact ProductRowVM and EPIC; names are never rematched.
+  - Only an explicit ProductMarketBinding for that exact product can make preparation applicable.
+  - READY requires TRADEABLE status, known currency, positive bid/offer, Lightstreamer provenance,
+    no delayed marker and receipt age within the shared 30-second quote window.
+  - Missing binding or unknown product type is NOT_APPLICABLE; stale or delayed evidence is STALE.
+  - The preparation page exposes evidence, blockers and local draft evaluation; its only submit
+    control opens a local Paper position after a separate explicit confirmation.
+  - An exact configured product triggers one targeted read-only market-details lookup; it never
+    crawls the catalogue and never replaces Lightstreamer price provenance.
+  - The existing PaperTicketWidget, TicketBuilder and RiskEngine are reused after the evidence
+    gate; the canonical underlying binding is passed explicitly.
+  - A targeted details response only fills missing metadata; it cannot overwrite an already
+    attested catalogue product type, direction or asset class with account-level keywords.
+  - An approved draft is rebuilt on click, displayed in a default-No confirmation dialog and
+    submitted only to PaperSessionController/PaperSessionService after explicit confirmation.
+  - A live quote update for the same product preserves the approved action instead of disabling
+    it on every tick; the click still rebuilds and re-evaluates the draft with that latest quote.
+  - Open local Paper products are protected ahead of the visible catalogue scope within the same
+    bounded Lightstreamer budget, so valuation and stop processing do not silently lose prices.
+safety:
+  - No IG order method, LIVE/AUTO activation, Paper fill or account mutation is reachable.
+  - The only new network action is a single GET market-details call for the explicitly selected,
+    configured product; no broker mutation is reachable.
+  - The only enabled opening path is local Paper; it checks quote age and draft expiry again at
+    the controller boundary and never imports or calls an IG order method.
+verification:
+  targeted_tests: "6 Paper preparation tests plus compressed-axis gap test passed"
+  gui_v2_tests: "64 passed"
+  full_tests: "685 passed in 118.77s"
+  responsive_smoke: "8 pages, 50 locale cycles at 1366x768"
+  lint: passed
+  diff_check: passed
+next_action: >-
+  Keep broker execution outside GUI V2 validation. Any future product-type extension must retain
+  the exact binding, fresh-quote and explicit local-Paper confirmation gates.

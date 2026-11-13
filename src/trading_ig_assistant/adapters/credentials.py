@@ -82,6 +82,62 @@ class InMemoryCredentialStore:
         self._credentials.pop(username, None)
 
 
+class InMemoryApiKeyStore:
+    """Test-only provider API-key store."""
+
+    def __init__(self) -> None:
+        self._keys: dict[str, SecretValue] = {}
+
+    def get(self, provider_id: str) -> SecretValue | None:
+        return self._keys.get(provider_id)
+
+    def set(self, provider_id: str, key: SecretValue) -> None:
+        self._keys[provider_id] = key
+
+    def delete(self, provider_id: str) -> None:
+        self._keys.pop(provider_id, None)
+
+
+class KeyringApiKeyStore:
+    """Provider API keys stored in the operating-system credential manager."""
+
+    def __init__(
+        self,
+        service_name: str = "trading-ig-assistant-api-providers",
+        *,
+        keyring_backend: object | None = None,
+    ) -> None:
+        if keyring_backend is None:
+            try:
+                import keyring  # type: ignore[import-not-found]
+            except ImportError as exc:
+                raise RuntimeError("The secure keyring backend is unavailable.") from exc
+            keyring_backend = keyring
+        self._keyring = keyring_backend
+        self._service_name = service_name
+
+    @staticmethod
+    def _entry(provider_id: str) -> str:
+        return f"provider:{provider_id}:api-key"
+
+    def get(self, provider_id: str) -> SecretValue | None:
+        value = self._keyring.get_password(self._service_name, self._entry(provider_id))
+        return SecretValue(value) if value else None
+
+    def set(self, provider_id: str, key: SecretValue) -> None:
+        self._keyring.set_password(
+            self._service_name,
+            self._entry(provider_id),
+            key.reveal(),
+        )
+
+    def delete(self, provider_id: str) -> None:
+        try:
+            self._keyring.delete_password(self._service_name, self._entry(provider_id))
+        except Exception:
+            return
+
+
 class KeyringCredentialStore:
     """OS keyring-backed credential store.
 

@@ -1,0 +1,44 @@
+schema_version: 1
+task_id: TIG-GUI2-R09-05C
+status: complete
+superseded_by: TIG-GUI2-R09-05D
+objective: >-
+  Restore the full cached IG catalogue as the first Scanner tab, add immediate local
+  filtering, and automatically allocate the bounded IG streaming budget to the
+  visible/filtered product scope without per-row follow buttons.
+authority:
+  user_feedback: >-
+    2026-11-09: remove the manual quote button, restore the full default catalogue,
+    filter as the user types, and place Catalogue IG first.
+constraints:
+  official_ig_default_stream_items: 40
+  observed_local_demo_inventory_products: 565
+  legacy_gui_stream_items_limit: 20
+scope:
+  forbidden:
+    - claiming that all 565 cached products are simultaneously live
+    - REST polling per row or multiple concurrent Lightstreamer connections
+    - LIVE/AUTO activation, ticket preparation or broker orders
+decisions:
+  - Load the sanitized discovery cache without any network call at V2 startup and after account generation changes.
+  - Filter all displayed columns locally through QSortFilterProxyModel on each text change.
+  - Use one PRICE subscription containing at most 40 currently visible/filtered EPICs.
+  - Reallocate the scope after a 250 ms debounce on filtering or scrolling.
+  - Preserve quotes and mark released/disconnected stream rows STALE instead of erasing them.
+  - Display source provenance as LIVE, STALE, CACHE or REST and expose stream coverage.
+  - Keep targeted IG search as an explicit additive action, not the primary filter path.
+verification:
+  targeted_tests: "22 passed in 4.21s before final cache-error guard"
+  full_tests: "642 passed in 54.26s after final cache-error guard"
+  lint: passed
+  format_changed_files: passed
+  runtime_cache_probe: "565 products loaded as inventory without an IG call"
+  visual:
+    status: passed_with_limit
+    capture: .codex_artifacts/gui_v2/catalogue-live-filter-fr_FR-1366x768.png
+    observed: "Catalogue IG first; 565 source rows; France 40 filter reduced to 3 rows"
+    limit: offscreen Qt capture omits text glyphs and does not replace native Windows acceptance
+next_action: >-
+  Build the scanner scheduler around canonical underlying/reference markets: continuous
+  priority streams plus a bounded rotating sweep, with explicit quote age and promotion
+  of detected candidates; never allocate one permanent stream per derivative strike.

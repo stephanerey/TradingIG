@@ -134,6 +134,31 @@ def test_openai_provider_builds_strict_bounded_request_without_web_or_broker_dat
     assert "order" not in supplied_context
 
 
+def test_openai_provider_requests_human_readable_output_in_active_ui_language() -> None:
+    captured: dict[str, object] = {}
+
+    def transport(_url, _headers, body, _timeout, _max_bytes):
+        captured.update(json.loads(body))
+        return _response()
+
+    provider = OpenAIResponsesMarketContextProvider(
+        OpenAIContextProviderConfig(
+            model="explicit-model-snapshot",
+            api_key=FAKE_KEY,
+            max_output_tokens=600,
+        ),
+        transport=transport,
+    )
+    from dataclasses import replace
+
+    provider.analyze(replace(_request(), response_language="fr"))
+
+    supplied = json.loads(captured["input"])
+    assert supplied["response_language"] == "fr"
+    assert "in French" in captured["instructions"]
+    assert "enum values" in captured["instructions"]
+
+
 def test_openai_payload_excludes_expired_and_future_signals() -> None:
     from dataclasses import replace
 

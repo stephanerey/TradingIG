@@ -1,0 +1,50 @@
+schema_version: 1
+task_id: TIG-GUI2-R09-03C
+status: complete
+objective: >-
+  Bind the opt-in V2 account header to explicit DEMO read-only connection,
+  disconnection, and confirmed account-switch intents through a Qt application
+  controller and the single TradingRuntime.
+authority:
+  user_validation: "2026-11-09: ok je valide tu peux commencer"
+skills:
+  - aurora-lot-runner
+  - aurora-architecture-check
+  - aurora-ui-visual-qa
+scope:
+  allowed:
+    - src/trading_ig_assistant/app/
+    - src/trading_ig_assistant/ui/shell/
+    - src/trading_ig_assistant/ui/i18n/
+    - tests/unit/
+    - docs/codex/CODEBASE_MAP.md
+    - docs/codex/tasks/2026-11-09_gui-v2-readonly-account/task_state.yaml
+  forbidden:
+    - LIVE connection controls, AUTO, broker order commands
+    - synchronous HTTP on the Qt GUI thread
+    - automatic connection, implicit credential creation, real network tests
+    - OpenAI calls, persistence migrations, financial values inferred from balance
+decisions:
+  - Only DEMO read-only connect is exposed in V2 during this milestone.
+  - Credentials remain in the existing OS credential store and are loaded only after an explicit intent.
+  - The controller publishes account/health projections; the shell never imports an IG adapter.
+  - Account changes execute in a worker and are accepted only when IG confirms the requested account.
+verification:
+  targeted_tests: "87 passed in 25.16s"
+  full_tests: "630 passed in 40.15s"
+  lint: "ruff check --no-cache src tests: passed"
+  format: "ruff format --check on new and modified V2/runtime files: passed"
+  visual:
+    status: passed_with_limit
+    captures:
+      - .codex_artifacts/gui_v2/shell-account-fr_FR-1366x768.png
+      - .codex_artifacts/gui_v2/shell-account-en_US-1920x1080.png
+    checks:
+      - localized account-control row fits both target viewports
+      - no horizontal overflow in the captured shell structure
+      - DEMO read-only control only; no LIVE or AUTO control
+    limit: offscreen Qt capture omits text glyphs and does not replace native Windows acceptance
+  diff_check: passed
+next_action: >-
+  Continue with R09-04 foundation: typed dashboard and Paper position projections
+  from existing services, preserving N/A for unavailable broker equity and analytics.

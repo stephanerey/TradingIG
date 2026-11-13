@@ -1,0 +1,28 @@
+schema_version: 1
+task_id: TIG-GUI2-R09-08-MACRO-OFFICIAL-NEWS
+status: complete
+objective: >-
+  Expose bounded official Fed/ECB news metadata in GUI V2 only after an explicit
+  user refresh, then allow one separately consented advisory OpenAI analysis without
+  inferring deterministic sentiment or enabling execution.
+decisions:
+  - Do not collect news when the page opens or when tabs change.
+  - Run the explicit RSS refresh in a Qt worker and always terminate the worker thread.
+  - Preserve source, publication time, category, importance and usage rights only.
+  - Require an explicit model, output limit, payload preview and one-use consent before
+    each potentially billed OpenAI request.
+  - Send at most 20 eligible official metadata items and exclude account, ticket, order,
+    position and article-body data.
+  - Render model, prompt scope, confidence caveat, cited signal IDs and validity without
+    creating an apply or broker command.
+  - Request human-readable summary and risk flags in the active FR/EN locale while
+    preserving stable JSON keys, enums and source IDs.
+  - Keep Trading Economics calendar unavailable until its separately acknowledged,
+    potentially billed configuration is activated.
+verification:
+  targeted_tests: "22 macro/dashboard/foundation tests passed"
+  responsive_smoke: "8 pages, 50 FR/EN cycles, shell remained 1366x768"
+  lint: passed
+safety:
+  - No automatic network or external AI call, broker order or LIVE/AUTO capability.
+  - Calendar data is never invented when the licensed provider is inactive.

@@ -20,10 +20,14 @@ class WindowsSafeTimedRotatingFileHandler(TimedRotatingFileHandler):
     def doRollover(self) -> None:
         try:
             super().doRollover()
-        except PermissionError:
+        except OSError:
             # A second running process can hold the shared log open on Windows. Retrying for every
             # record floods stderr and drops useful diagnostics, so defer rotation to the next
-            # interval while continuing to append to the current file.
+            # interval while continuing to append to the current file.  TimedRotatingFileHandler
+            # may already have closed its stream before the filesystem operation fails, so reopen
+            # it explicitly; otherwise the live application keeps running with a silent log.
+            if self.stream is None:
+                self.stream = self._open()
             self.rolloverAt = self.computeRollover(int(time.time()))
 
 

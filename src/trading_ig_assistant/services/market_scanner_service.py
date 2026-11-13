@@ -177,6 +177,11 @@ def _build_market_preview(
         limitations=tuple(
             dict.fromkeys(limitation for preview in previews for limitation in preview.limitations)
         ),
+        indicators=tuple(
+            dict.fromkeys(
+                indicator for preview in previews for indicator in preview.indicators
+            )
+        ),
     )
 
 

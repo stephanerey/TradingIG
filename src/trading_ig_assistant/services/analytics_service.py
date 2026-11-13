@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC
 from decimal import Decimal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -13,6 +14,58 @@ from trading_ig_assistant.domain.journal import (
     PnlStatus,
     PnlTotal,
 )
+
+
+@dataclass(frozen=True)
+class RealizedTradeStatistics:
+    currency: str
+    trade_count: int
+    win_count: int
+    loss_count: int
+    flat_count: int
+    win_rate: Decimal
+    profit_factor: Decimal | None
+    max_drawdown: Decimal
+
+
+def summarize_realized_trades(
+    events: tuple[JournalEvent, ...] | list[JournalEvent],
+) -> tuple[RealizedTradeStatistics, ...]:
+    """Summarize only attested Paper closures, independently per currency."""
+
+    grouped: defaultdict[str, list[JournalEvent]] = defaultdict(list)
+    for event in events:
+        if (
+            event.event_type != "PAPER_POSITION_CLOSED"
+            or event.pnl_status is not PnlStatus.REALIZED
+            or event.pnl_amount is None
+            or event.pnl_currency is None
+        ):
+            continue
+        grouped[event.pnl_currency.upper()].append(event)
+
+    summaries: list[RealizedTradeStatistics] = []
+    for currency, currency_events in sorted(grouped.items()):
+        ordered = sorted(currency_events, key=lambda event: event.timestamp_utc)
+        values = tuple(event.pnl_amount for event in ordered if event.pnl_amount is not None)
+        wins = tuple(value for value in values if value > 0)
+        losses = tuple(value for value in values if value < 0)
+        flats = len(values) - len(wins) - len(losses)
+        gross_profit = sum(wins, start=Decimal("0"))
+        gross_loss = abs(sum(losses, start=Decimal("0")))
+        summaries.append(
+            RealizedTradeStatistics(
+                currency=currency,
+                trade_count=len(values),
+                win_count=len(wins),
+                loss_count=len(losses),
+                flat_count=flats,
+                win_rate=Decimal(len(wins)) / Decimal(len(values)),
+                profit_factor=(gross_profit / gross_loss if gross_loss else None),
+                max_drawdown=_max_drawdown(values),
+            )
+        )
+    return tuple(summaries)
 
 
 def aggregate_realized_pnl(
@@ -64,3 +117,14 @@ def aggregate_realized_pnl(
             key=lambda group: (group[0].value, group[1], group[2]),
         )
     )
+
+
+def _max_drawdown(values: tuple[Decimal, ...]) -> Decimal:
+    cumulative = Decimal("0")
+    peak = Decimal("0")
+    maximum = Decimal("0")
+    for value in values:
+        cumulative += value
+        peak = max(peak, cumulative)
+        maximum = max(maximum, peak - cumulative)
+    return maximum

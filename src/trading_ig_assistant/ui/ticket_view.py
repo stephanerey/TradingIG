@@ -44,10 +44,13 @@ class PaperTicketWidget(QtWidgets.QScrollArea):
         parent: QtWidgets.QWidget | None = None,
         *,
         now_provider: Callable[[], datetime] | None = None,
+        allow_execution: bool = True,
     ) -> None:
         super().__init__(parent)
         self._now_provider = now_provider or (lambda: datetime.now(UTC))
+        self._allow_execution = allow_execution
         self._product: TradableProduct | None = None
+        self._verified_underlying_id: str | None = None
         self._chart_source: TradableProduct | None = None
         self._quote: Quote | None = None
         self._quote_received_at_utc: datetime | None = None
@@ -72,12 +75,13 @@ class PaperTicketWidget(QtWidgets.QScrollArea):
         layout.setSizeConstraint(QtWidgets.QLayout.SetNoConstraint)
 
         self.mode_banner = QtWidgets.QLabel(
-            "MODE PAPER — proposition locale, aucune transmission à IG"
+            "MODE SIMULATION — proposition locale, aucune transmission à IG"
         )
         self.mode_banner.setWordWrap(True)
         self.mode_banner.setAlignment(QtCore.Qt.AlignCenter)
         self.mode_banner.setStyleSheet(
-            "QLabel { background: #e9f3ff; color: #153a5b; padding: 6px; font-weight: 700; }"
+            "QLabel { background: #13233b; color: #eaf1fb; border: 1px solid #284563; "
+            "padding: 6px; font-weight: 700; }"
         )
         layout.addWidget(self.mode_banner)
 
@@ -98,7 +102,7 @@ class PaperTicketWidget(QtWidgets.QScrollArea):
         self.direction.addItem("Achat", OrderDirection.BUY)
         self.direction.addItem("Vente", OrderDirection.SELL)
         self.direction.setToolTip(
-            "Sens de l'opération Paper, indépendant de l'exposition du produit. "
+            "Sens de l'opération simulée, indépendant de l'exposition du produit. "
             "Achat est proposé par défaut lors du changement de produit."
         )
 
@@ -123,7 +127,7 @@ class PaperTicketWidget(QtWidgets.QScrollArea):
         self.maximum_ko_loss = _money_spin(decimals=2, maximum=1_000_000_000)
         self.maximum_ko_loss.setValue(DEFAULT_MAXIMUM_KO_LOSS)
         self.maximum_ko_loss.setToolTip(
-            "Hypothèse initiale Paper à confirmer; ce n'est pas une perte certifiée par IG."
+            "Hypothèse initiale de simulation à confirmer; ce n'est pas une perte certifiée par IG."
         )
         self.fee_per_unit = _money_spin(decimals=4, maximum=1_000_000)
         self.slippage_points = _money_spin(decimals=6, maximum=1_000_000)
@@ -173,15 +177,16 @@ class PaperTicketWidget(QtWidgets.QScrollArea):
         form.addRow(self.level_help)
         self._update_level_mode_ui()
 
-        self.evaluate_button = QtWidgets.QPushButton("Évaluer la proposition Paper")
+        self.evaluate_button = QtWidgets.QPushButton("Évaluer la proposition simulée")
         self.evaluate_button.setEnabled(False)
         self.evaluate_button.clicked.connect(self.evaluate_proposal)
         layout.addWidget(self.evaluate_button)
 
-        self.execute_button = QtWidgets.QPushButton("Ouvrir la position Paper locale")
+        self.execute_button = QtWidgets.QPushButton("Ouvrir la position simulée locale")
         self.execute_button.setEnabled(False)
         self.execute_button.setToolTip("Simulation locale uniquement : aucune transmission à IG.")
         self.execute_button.clicked.connect(self.request_paper_execution)
+        self.execute_button.setVisible(allow_execution)
         layout.addWidget(self.execute_button)
 
         self.summary = QtWidgets.QTextEdit()
@@ -230,6 +235,7 @@ class PaperTicketWidget(QtWidgets.QScrollArea):
         if product_changed:
             self._quote = None
             self._quote_received_at_utc = None
+            self._verified_underlying_id = None
         self._product = product
         metadata_currency = (product.currency or "").strip().upper()
         self.product_currency.blockSignals(True)
@@ -253,6 +259,13 @@ class PaperTicketWidget(QtWidgets.QScrollArea):
         if product.ko_level is not None and product.ko_level > 0:
             self.knockout.setValue(product.ko_level)
         self._refresh_product_status()
+
+    def set_verified_underlying_id(self, underlying_id: str | None) -> None:
+        """Attach an exact, externally verified product-to-underlying binding."""
+
+        value = (underlying_id or "").strip()
+        self._verified_underlying_id = value or None
+        self._invalidate_evaluation()
 
     def set_open_exposures(self, exposures: tuple[ExposureState, ...]) -> None:
         if exposures == self._open_exposures:
@@ -278,7 +291,7 @@ class PaperTicketWidget(QtWidgets.QScrollArea):
             if had_quote_or_evaluation:
                 self.summary.setPlainText(
                     "Cotation précédente invalidée. Attendez une nouvelle cotation "
-                    "et réévaluez la proposition Paper."
+                    "et réévaluez la proposition simulée."
                 )
             self._refresh_product_status()
             return
@@ -289,7 +302,7 @@ class PaperTicketWidget(QtWidgets.QScrollArea):
         if quote.delayed is True:
             self._invalidate_evaluation()
             self.summary.setPlainText(
-                "Cotation différée : proposition Paper indisponible jusqu'à réception "
+                "Cotation différée : proposition simulée indisponible jusqu'à réception "
                 "d'un prix utilisable."
             )
         self._refresh_product_status()
@@ -311,11 +324,11 @@ class PaperTicketWidget(QtWidgets.QScrollArea):
         self.last_ticket = ticket
         self.last_submission = submission
         self.last_decision = decision
-        rejection_codes = [reason.value for reason in decision.reasons]
-        rejection_codes.extend(extra_rejections)
+        rejection_codes = [_simulation_label(reason.value) for reason in decision.reasons]
+        rejection_codes.extend(_simulation_label(reason) for reason in extra_rejections)
         self.last_outcome_approved = decision.approved and not extra_rejections
-        self.execute_button.setEnabled(self.last_outcome_approved)
-        status = "APPROUVÉ POUR PAPER UNIQUEMENT" if self.last_outcome_approved else "REFUSÉ"
+        self.execute_button.setEnabled(self._allow_execution and self.last_outcome_approved)
+        status = "APPROUVÉ POUR SIMULATION UNIQUEMENT" if self.last_outcome_approved else "REFUSÉ"
         estimated_gain = (
             _format_decimal(ticket.estimated_gain)
             if ticket.estimated_gain is not None
@@ -336,10 +349,13 @@ class PaperTicketWidget(QtWidgets.QScrollArea):
             if decision.estimated_loss_reference is not None
             else "inconnu"
         )
-        warnings = [*ticket.warnings, *ui_warnings]
+        warnings = [
+            *(_simulation_label(warning) for warning in ticket.warnings),
+            *(_simulation_label(warning) for warning in ui_warnings),
+        ]
         lines = [
             status,
-            "Nature: PAPER_SIMULATION_ONLY",
+            "Nature : SIMULATION LOCALE UNIQUEMENT",
             f"Produit: {ticket.intent.product_id}",
             f"Sens: {ticket.intent.direction.value}",
             (
@@ -370,11 +386,13 @@ class PaperTicketWidget(QtWidgets.QScrollArea):
     def request_paper_execution(self) -> None:
         """Re-evaluate current inputs, then emit one immutable Paper-only request."""
 
+        if not self._allow_execution:
+            return
         self.evaluate_proposal()
         if not self.last_outcome_approved or self.last_submission is None:
             return
         self.execute_button.setEnabled(False)
-        self.summary.append("\nSoumission à la session Paper locale…")
+        self.summary.append("\nSoumission à la session de simulation locale…")
         self.paper_execution_requested.emit(self.last_submission)
 
     def show_execution_result(self, record: PaperOrderRecord) -> None:
@@ -382,14 +400,24 @@ class PaperTicketWidget(QtWidgets.QScrollArea):
         if result.status is ExecutionStatus.CONFIRMED:
             detail = result.broker_reference or record.submission.ticket.intent.intent_id
             self.summary.append(
-                "\nPOSITION PAPER OUVERTE — "
-                f"{detail}\nSimulation locale uniquement; aucune transmission à IG."
+                "\nPOSITION SIMULÉE OUVERTE — "
+                f"{_simulation_label(detail)}"
+                "\nSimulation locale uniquement; aucune transmission à IG."
             )
             return
         self.summary.append(
-            "\nOUVERTURE PAPER REFUSÉE — "
-            f"{result.message or result.status.value}\nAucune transmission à IG."
+            "\nOUVERTURE SIMULÉE REFUSÉE — "
+            f"{_simulation_label(result.message or result.status.value)}"
+            "\nAucune transmission à IG."
         )
+
+    def show_execution_cancelled(self) -> None:
+        """Return an approved draft to an actionable state after operator cancellation."""
+
+        self.summary.append(
+            "\nOuverture simulée annulée par l’opérateur. Aucune exécution tentée."
+        )
+        self.execute_button.setEnabled(self._allow_execution and self.last_outcome_approved)
 
     def _build_and_evaluate(
         self,
@@ -453,7 +481,7 @@ class PaperTicketWidget(QtWidgets.QScrollArea):
             intent_id=f"paper-ui-{uuid4().hex}",
             account=LOCAL_PAPER_ACCOUNT,
             quote=paper_quote,
-            underlying_id=product.epic,
+            underlying_id=self._verified_underlying_id or product.epic,
             direction=direction,
             quantity=_decimal(self.quantity.value()),
             stop=stop,
@@ -505,8 +533,11 @@ class PaperTicketWidget(QtWidgets.QScrollArea):
                 if self._open_exposures
                 else "LOCAL_VOLATILE_PAPER_PORTFOLIO"
             ),
-            "UNDERLYING_MAPPING_UNVERIFIED_PRODUCT_EPIC_USED",
         ]
+        if self._verified_underlying_id is None:
+            ui_warnings.append("UNDERLYING_MAPPING_UNVERIFIED_PRODUCT_EPIC_USED")
+        else:
+            ui_warnings.append("EXACT_PRODUCT_BINDING_VERIFIED")
         if not metadata_currency:
             ui_warnings.append(f"PRODUCT_CURRENCY_USER_CONFIRMED:{currency}")
         if product.product_type is ProductType.BARRIER:
@@ -707,3 +738,13 @@ def _format_decimal(value: Decimal) -> str:
 
 def _format_optional_decimal(value: Decimal | None) -> str:
     return _format_decimal(value) if value is not None else "aucun"
+
+
+def _simulation_label(value: str) -> str:
+    """Hide the legacy internal PAPER vocabulary at the presentation boundary."""
+
+    return (
+        value.replace("PAPER_", "SIMULATION_")
+        .replace("PAPER-", "SIMULATION-")
+        .replace("Paper", "simulation")
+    )

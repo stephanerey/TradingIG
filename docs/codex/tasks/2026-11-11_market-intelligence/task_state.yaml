@@ -1,0 +1,76 @@
+objective: >-
+  Ajouter le socle de veille economique et geopolitique Tavily/GDELT, son quota
+  persistant, la normalisation/deduplication et son raccordement consultatif sans
+  modifier l'execution IG.
+status: complete
+method: SR Development Method 4.1
+allowed_scope:
+  - src/trading_ig_assistant/domain/market_intelligence.py
+  - src/trading_ig_assistant/adapters/tavily_news.py
+  - src/trading_ig_assistant/adapters/gdelt_news.py
+  - src/trading_ig_assistant/services/market_intelligence_service.py
+  - src/trading_ig_assistant/services/research_quota_service.py
+  - src/trading_ig_assistant/services/market_intelligence_scheduler.py
+  - src/trading_ig_assistant/persistence/research_quota_store.py
+  - raccordement additif aux projections et pages Macro/IA existantes
+  - tests unitaires et documentation SR associee
+  - enrichissement Tavily Extract Basic et preuve IA bornee
+  - migration SQLite append-only pour faits et references, sans extraits
+forbidden_scope:
+  - ordre IG reel ou automatique
+  - activation LIVE/AUTO
+  - abonnement ou paiement automatique
+  - appel reseau reel pendant les tests
+  - conservation du texte integral des articles
+decisions:
+  - Tavily utilise seulement topic=news car le contrat officiel actuel n'accepte que general/news.
+  - Tavily Basic coute un credit; plafond applicatif mensuel 900 et budget planifie 704.
+  - GDELT reste une source de decouverte non confirmee et sa tonalite ne produit aucun signal.
+  - Les credits sont reserves avant l'appel et conserves en cas d'issue inconnue.
+  - Tavily Search reste prioritaire; Extract Basic est limite a cinq URL et n'est lance qu'apres consentement OpenAI explicite.
+  - La selection IA est limitee a cinq articles dedupliques, classes par pertinence, qualite et diversite.
+  - Les extraits complets restent en memoire; seuls faits structures et references de sources sont persistants.
+  - Les fenetres par categorie sont configurables et valent par defaut 6h, 24h, 72h et 168h.
+  - GDELT utilise Retry-After et un circuit breaker; sa panne ne bloque ni Tavily ni les sources officielles.
+evidence:
+  - C:/Users/srey/.codex/attachments/28a26e49-420f-41c8-8ebf-a0839bf690d2/Texte colle.txt
+  - https://docs.tavily.com/documentation/api-reference/endpoint/search
+  - https://docs.tavily.com/documentation/api-credits
+  - https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/
+lots:
+  - id: TIG-INTEL-001
+    label: contrats et tracabilite
+    status: complete
+  - id: TIG-INTEL-002
+    label: adaptateurs Tavily et GDELT
+    status: complete
+  - id: TIG-INTEL-003
+    label: quota, deduplication et scheduler
+    status: complete
+  - id: TIG-INTEL-004
+    label: orchestration analyse et sources officielles
+    status: complete
+  - id: TIG-INTEL-005
+    label: projection et dashboard Market Intelligence
+    status: complete
+  - id: TIG-INTEL-006
+    label: corrections affichage et indicateurs techniques promises
+    status: complete
+  - id: TIG-INTEL-007
+    label: enrichissement borne des articles et faits persistants
+    status: complete
+  - id: TIG-INTEL-008
+    label: collecte manuelle multi-fenetres sans surcout de recherche
+    status: complete
+  - id: TIG-INTEL-009
+    label: correction de la semantique temporelle Tavily Search
+    status: complete
+verification:
+  targeted: 20 passed sur affichage Macro/IA, indicateurs et resolution 1366x768
+  lint: ruff cible passed; ruff check src/trading_ig_assistant tests passed au lot 007
+  full_suite: 752 passed
+  global_lint: 484 pre-existing findings in scripts/codex outside this lot
+next_action: >-
+  Valider visuellement la table des cinq sources et les controles d'indicateurs;
+  ouvrir ensuite un lot separe pour la fusion explicable technique/macro/IA avant
+  toute preparation ou transmission d'ordre.

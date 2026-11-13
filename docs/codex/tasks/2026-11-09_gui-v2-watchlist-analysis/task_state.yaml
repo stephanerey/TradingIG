@@ -1,0 +1,71 @@
+schema_version: 1
+task_id: TIG-GUI2-R09-06-WATCHLIST-ANALYSIS
+status: complete
+objective: >-
+  Replace Watchlist placeholders with explainable session-only technical signals, an honest
+  product-AI availability state and bounded session history without changing strategy engines.
+decisions:
+  - ScannerSignalVM projects existing StrategySignal evidence; widgets perform no calculation.
+  - Exact product EPIC, strategy, market side, data state, entry zone, invalidation, target and
+    validity are retained; signal reasons remain available as tooltips.
+  - Technical scores are identified as rankings, never probabilities.
+  - Product AI remains UNKNOWN until a specific attested analysis exists; the only action opens
+    Macro / IA, where the existing manual consent gate remains mandatory.
+  - Market history is session-only and reports exact observed M1 count and first/last UTM.
+  - The chart discloses data environment, source EPIC, basis, timeframe and last UTM so DEMO and
+    LIVE screenshots cannot be mistaken for the same source.
+  - Strategy evidence now exposes projected feature values and provenance without recalculating
+    indicators inside the UI.
+  - LONG, SHORT and NO_TRADE cards are derived independently from existing READY signals and
+    blockers; market direction is never converted into an IG order side.
+  - Synthetic percentage-based Stop/Limit/KO chart lines were removed. The chart only renders
+    exact entry, invalidation and target levels from the selected signal, each user-toggleable.
+  - A KO overlay remains absent unless a future typed projection provides an attested KO value.
+  - Quote-driven scanner rebuilds preserve analysis and strategy signals within the same runtime
+    generation; a new broker tick can no longer erase the table after candle close.
+  - Warm-up reports closed continuous candles actually usable by strategies. The default profile
+    requires 24, derived from EMA/slope, breakout and RSI/ATR lookbacks rather than a fixed 21.
+  - A discontinuity that drops usable history below the derived threshold clears older signals
+    instead of presenting stale analysis as current.
+  - All five configured reference EPICs receive runtime-only self bindings for advisory analysis;
+    these bindings are not persisted and are not exposed to Paper or broker execution paths.
+  - Intraminute ticks no longer republish ANALYSIS_PENDING after the same closed-candle count has
+    already been evaluated.
+  - Calculated levels retain exact Decimal values in projections while the UI limits their display
+    to four decimal places for readable tables.
+  - The chart exposes snapshot-only technical evidence from the selected strategy: support and
+    resistance, fast/slow EMA, plus ATR/RSI summary values. These are never presented as a
+    historical indicator curve because only the latest attested feature values are projected.
+  - Entry, invalidation, target, EMA and structure overlays are independently toggleable and
+    enabled only when their exact values exist on the selected signal.
+  - Strategy/product selection is retained across minute-by-minute signal regeneration and
+    language refreshes, preventing overlays from jumping back to the first table row.
+  - The chart now exposes a direct strategy selector and a two-row readable overlay control area;
+    users no longer need to infer that the first technical-table row drives the graph.
+  - Market direction now summarizes every READY non-FLAT strategy. A BUY plus FLAT strategies is
+    BULLISH, a SELL plus FLAT strategies is BEARISH, and genuinely opposed BUY/SELL evidence stays
+    NEUTRAL; table order can no longer decide the heading.
+  - Technical-table headers and chart annotations use compact labels. Overlay captions are placed
+    at distinct horizontal positions so nearby entry, EMA, support and risk levels remain legible.
+safety:
+  - No IG order, LIVE activation, AUTO activation or automatic OpenAI call was added.
+  - No historical IG request, persisted candle reload or invented signal was added.
+verification:
+  lint: passed
+  scanner_projection_tests: "5 passed"
+  watchlist_targeted_tests: "3 passed offscreen"
+  chart_provenance_tests: "2 passed native"
+  gui_v2_native: "64 passed; Windows/COM teardown diagnostics emitted while the live app remained open"
+  full_suite_offscreen: "686 passed; one known offscreen-only 1366px size-hint failure"
+  responsive_native: "1 passed; Windows/COM teardown diagnostics emitted while the live app remained open"
+  scanner_stream_regression: "97 passed"
+  latest_full_suite_offscreen: "687 passed; same known offscreen-only 1366px size-hint failure"
+  latest_scanner_watchlist_regression: "98 passed"
+  latest_indicator_overlay_regression: "109 passed including 1366x768 responsive smoke"
+  latest_readability_and_consensus_regression: "18 passed; ruff passed"
+  latest_full_suite_after_readability_fix: >-
+    689 passed; same known offscreen-only 1366px size-hint failure; failing test passed
+    immediately under native Windows Qt
+next_action: >-
+  Group manual Windows validation after restarting the installed GUI. Persisted historical
+  indicator series and RSI/MACD/ATR subpanels remain outside this session-only data scope.

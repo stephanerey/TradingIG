@@ -1,0 +1,19 @@
+task: technical-research-journal
+status: implemented_pending_grouped_validation
+method: SR-4.1
+scope:
+  - Persist every technical signal evaluation and explicit failure append-only.
+  - Pseudonymize the IG account reference.
+  - Preserve closed-candle, readiness, provenance, indicator and scanner semantics.
+  - Keep the path analysis-only; never create or transmit an order.
+out_of_scope:
+  - Strategy threshold changes.
+  - Automatic or real IG execution.
+  - Post-trade MFE/MAE computation.
+skills:
+  - codex-tradingig-analysis-scanner
+  - codex-tradingig-storage-audit
+validation:
+  human: pending_grouped_validation
+  automated: passed_776_tests
+

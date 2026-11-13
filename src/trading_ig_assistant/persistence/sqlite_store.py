@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 class StoreNotInitializedError(RuntimeError):
@@ -106,6 +106,63 @@ _SCHEMA_V2_STATEMENTS = (
     """,
 )
 
+_SCHEMA_V3_STATEMENTS = (
+    """
+    CREATE TABLE market_ai_analyses (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        analysis_id TEXT NOT NULL UNIQUE,
+        generated_at_utc TEXT NOT NULL,
+        valid_until_utc TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        prompt_version TEXT NOT NULL,
+        market_scope TEXT NOT NULL,
+        analysis_json TEXT NOT NULL,
+        source_refs_json TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE market_facts (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        fact_id TEXT NOT NULL UNIQUE,
+        analysis_id TEXT NOT NULL,
+        observed_at_utc TEXT NOT NULL,
+        valid_until_utc TEXT NOT NULL,
+        category TEXT NOT NULL,
+        statement TEXT NOT NULL,
+        source_refs_json TEXT NOT NULL,
+        FOREIGN KEY(analysis_id) REFERENCES market_ai_analyses(analysis_id)
+    )
+    """,
+    """
+    CREATE TRIGGER market_ai_analyses_no_update
+    BEFORE UPDATE ON market_ai_analyses
+    BEGIN
+        SELECT RAISE(ABORT, 'market_ai_analyses is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER market_ai_analyses_no_delete
+    BEFORE DELETE ON market_ai_analyses
+    BEGIN
+        SELECT RAISE(ABORT, 'market_ai_analyses is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER market_facts_no_update
+    BEFORE UPDATE ON market_facts
+    BEGIN
+        SELECT RAISE(ABORT, 'market_facts is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER market_facts_no_delete
+    BEFORE DELETE ON market_facts
+    BEGIN
+        SELECT RAISE(ABORT, 'market_facts is append-only');
+    END
+    """,
+)
+
 
 class SQLiteStore:
     """Local store that performs no I/O until ``initialize`` or ``connection``."""
@@ -152,6 +209,8 @@ class SQLiteStore:
                 self._apply_schema_v1(connection)
             if previous_version <= 1:
                 self._apply_schema_v2(connection)
+            if previous_version <= 2:
+                self._apply_schema_v3(connection)
             connection.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
             connection.commit()
         except Exception as exc:
@@ -226,6 +285,14 @@ class SQLiteStore:
             (2, _utc_now_text()),
         )
 
+    def _apply_schema_v3(self, connection: sqlite3.Connection) -> None:
+        for statement in _SCHEMA_V3_STATEMENTS:
+            connection.execute(statement)
+        connection.execute(
+            "INSERT INTO schema_migrations(version, applied_at_utc) VALUES (?, ?)",
+            (3, _utc_now_text()),
+        )
+
     def _create_backup(self) -> Path:
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         backup_path = self.path.with_name(f"{self.path.name}.backup-{timestamp}")
@@ -272,12 +339,18 @@ class SQLiteStore:
             "schema_migrations",
             "journal_events",
             "paper_session_snapshots",
+            "market_ai_analyses",
+            "market_facts",
         }
         required_triggers = {
             "journal_events_no_update",
             "journal_events_no_delete",
             "paper_session_snapshots_no_update",
             "paper_session_snapshots_no_delete",
+            "market_ai_analyses_no_update",
+            "market_ai_analyses_no_delete",
+            "market_facts_no_update",
+            "market_facts_no_delete",
         }
         if not required_tables.issubset(tables) or not required_triggers.issubset(triggers):
             raise MigrationError("SQLite schema objects are incomplete.", None)

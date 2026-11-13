@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from PyQt5 import QtCore
 
-from trading_ig_assistant.domain.market_data import ChartCandleUpdate, Quote
+from trading_ig_assistant.domain.market_data import AccountMetricsUpdate, ChartCandleUpdate, Quote
 
 
 class StreamingEventBridge(QtCore.QObject):
     quote_received = QtCore.pyqtSignal(int, object)
     chart_received = QtCore.pyqtSignal(int, object)
+    account_metrics_received = QtCore.pyqtSignal(int, object)
     status_changed = QtCore.pyqtSignal(int, str)
     error_received = QtCore.pyqtSignal(int, str)
 
@@ -25,6 +26,9 @@ class StreamingEventBridge(QtCore.QObject):
 
     def on_chart(self, chart_update: ChartCandleUpdate) -> None:
         self.chart_received.emit(self._generation, chart_update)
+
+    def on_account_metrics(self, update: AccountMetricsUpdate) -> None:
+        self.account_metrics_received.emit(self._generation, update)
 
     def on_stream_error(self, message: str) -> None:
         self.error_received.emit(self._generation, message)

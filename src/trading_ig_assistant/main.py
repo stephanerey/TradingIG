@@ -17,7 +17,12 @@ from trading_ig_assistant.adapters.ig_rest import (
     load_prices_with_adaptive_fallback,
 )
 from trading_ig_assistant.adapters.ig_streaming import IGStreamingAdapter
-from trading_ig_assistant.app.config import AppConfig, IGEnvironment, load_config
+from trading_ig_assistant.app.config import (
+    AppConfig,
+    IGEnvironment,
+    default_paper_database_path,
+    load_config,
+)
 from trading_ig_assistant.domain.streaming import (
     CHART_CANDLE_SPEC,
     GENERIC_QUOTE_FIELDS,
@@ -29,11 +34,16 @@ from trading_ig_assistant.domain.streaming import (
     StreamState,
     StreamSubscriptionSpec,
 )
+from trading_ig_assistant.persistence.sqlite_store import SQLiteStore
 from trading_ig_assistant.services.product_discovery_service import (
     DEFAULT_WATCHLIST_SEARCH_TERMS,
     ProductDiscoveryResult,
     ProductDiscoveryService,
     write_discovery_report,
+)
+from trading_ig_assistant.services.technical_validation_export import (
+    TechnicalValidationExporter,
+    TechnicalValidationExportError,
 )
 from trading_ig_assistant.utils.logging_config import configure_logging
 from trading_ig_assistant.utils.redaction import mask_identifier, redact_mapping, redact_text
@@ -161,8 +171,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     history_smoke_parser.set_defaults(func=history_smoke)
 
-    gui = subparsers.add_parser("gui", help="Launch the minimal GUI shell.")
+    gui = subparsers.add_parser("gui", help="Launch the desktop GUI.")
+    gui.add_argument(
+        "--ui",
+        choices=("legacy", "v2"),
+        default="legacy",
+        help="Select the GUI shell. V2 remains opt-in during incremental migration.",
+    )
     gui.set_defaults(func=launch_gui)
+
+    validation_export = subparsers.add_parser(
+        "export-technical-validation",
+        help="Export an anonymized technical-analysis bundle for collaborative review.",
+    )
+    validation_export.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="New destination directory; an existing directory is never overwritten.",
+    )
+    validation_export.add_argument(
+        "--database",
+        type=Path,
+        help="Optional journal database path (defaults to the local application database).",
+    )
+    validation_export.set_defaults(func=export_technical_validation)
 
     return parser
 
@@ -174,6 +207,24 @@ def add_credential_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--username-env", default="TRADING_IG_USERNAME")
     parser.add_argument("--password-env", default="TRADING_IG_PASSWORD")
     parser.add_argument("--api-key-env", default="TRADING_IG_API_KEY")
+
+
+def export_technical_validation(args: argparse.Namespace) -> int:
+    database_path = args.database or default_paper_database_path()
+    exporter = TechnicalValidationExporter(SQLiteStore(database_path))
+    try:
+        report = exporter.export_bundle(args.output)
+    except TechnicalValidationExportError as exc:
+        print(f"Technical validation export failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"Validation bundle: {report.bundle_directory}")
+    print(
+        "Events: "
+        f"{report.event_count} "
+        f"(signals={report.signal_count}, failures={report.failure_count})"
+    )
+    print("Privacy: no account identifier, P&L, ticket, order, position or secret exported.")
+    return 0
 
 
 def check_ig_connectivity(args: argparse.Namespace) -> int:
@@ -502,10 +553,18 @@ def history_smoke(args: argparse.Namespace) -> int:
             pass
 
 
-def launch_gui(_args: argparse.Namespace) -> int:
-    LOGGER.debug("CLI launch GUI")
+def launch_gui(args: argparse.Namespace) -> int:
+    ui_variant = str(getattr(args, "ui", "legacy"))
+    LOGGER.debug("CLI launch GUI variant=%s", ui_variant)
     try:
-        from trading_ig_assistant.ui.main_window import run_gui
+        if ui_variant == "v2":
+            from trading_ig_assistant.ui.shell.main_window_v2 import run_gui_v2
+
+            runner = run_gui_v2
+        else:
+            from trading_ig_assistant.ui.main_window import run_gui
+
+            runner = run_gui
     except ImportError as exc:
         print(
             "GUI dependencies are missing. Install them with: "
@@ -514,7 +573,7 @@ def launch_gui(_args: argparse.Namespace) -> int:
         )
         print(str(exc), file=sys.stderr)
         return 2
-    return run_gui()
+    return runner()
 
 
 def load_read_only_runtime(args: argparse.Namespace) -> tuple[IGEnvironment, IGCredentials] | None:

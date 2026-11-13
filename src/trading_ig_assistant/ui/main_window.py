@@ -42,7 +42,18 @@ from trading_ig_assistant.app.config import (
     load_config,
     save_config,
 )
+from trading_ig_assistant.app.projections.account_projection import (
+    build_account_header_projection,
+    build_runtime_health_projection,
+)
+from trading_ig_assistant.app.projections.dashboard_projection import (
+    build_paper_dashboard_projection,
+    merge_account_metrics_into_dashboard,
+)
+from trading_ig_assistant.app.runtime.ig_session_runtime import ActiveIGConnection
+from trading_ig_assistant.app.runtime.trading_runtime import TradingRuntime
 from trading_ig_assistant.app.streaming_bridge import StreamingEventBridge
+from trading_ig_assistant.app.ui_facade import RuntimeUIFacade
 from trading_ig_assistant.domain.ai_context import (
     AIAnalysisStatus,
     MarketContextSnapshot,
@@ -207,14 +218,6 @@ def _chart_source_overrides_from_config(config: AppConfig) -> dict[str, str]:
     return overrides
 
 
-@dataclass
-class ActiveIGConnection:
-    environment: IGEnvironment
-    current_account_id: str | None
-    accounts: list[Account]
-    adapter: IGRestAdapter
-
-
 @dataclass(frozen=True)
 class OpenAIContextSession:
     model: str
@@ -298,39 +301,25 @@ class ConnectionWorker(QtCore.QObject):
     failed = QtCore.pyqtSignal(str)
     finished = QtCore.pyqtSignal()
 
-    def __init__(self, request: IGConnectionRequest) -> None:
+    def __init__(
+        self,
+        request: IGConnectionRequest,
+        runtime: TradingRuntime | None = None,
+    ) -> None:
         super().__init__()
         self._request = request
+        self._runtime = runtime or TradingRuntime(
+            ig_adapter_factory=lambda environment: IGRestAdapter(
+                environment=environment,
+                read_only=True,
+            )
+        )
 
     @QtCore.pyqtSlot()
     def run(self) -> None:
         LOGGER.debug("Connection worker start environment=%s", self._request.environment.value)
-        adapter = IGRestAdapter(environment=self._request.environment, read_only=True)
         try:
-            credentials = _credentials_from_request(self._request)
-            session = adapter.login(credentials)
-            accounts = adapter.get_accounts()
-            if (
-                self._request.selected_account_id
-                and self._request.selected_account_id != session.current_account_id
-                and _account_id_exists(
-                    accounts,
-                    self._request.selected_account_id,
-                )
-            ):
-                requested_account_id = self._request.selected_account_id
-                switched_session = adapter.switch_account(requested_account_id)
-                if switched_session.current_account_id != requested_account_id:
-                    raise AccountSwitchNotConfirmedError(
-                        "IG did not confirm the requested account context."
-                    )
-                session = switched_session
-            result = ActiveIGConnection(
-                environment=self._request.environment,
-                current_account_id=session.current_account_id,
-                accounts=accounts,
-                adapter=adapter,
-            )
+            result = self._runtime.connect_ig_read_only(self._request)
             LOGGER.debug(
                 "Connection worker success environment=%s accounts=%s",
                 result.environment.value,
@@ -338,10 +327,6 @@ class ConnectionWorker(QtCore.QObject):
             )
             self.succeeded.emit(result)
         except Exception as exc:
-            try:
-                adapter.logout()
-            except IGAPIError:
-                pass
             LOGGER.debug(
                 "Connection worker failed environment=%s error=%s",
                 self._request.environment.value,
@@ -487,14 +472,23 @@ class MainWindow(QtWidgets.QMainWindow):
         calendar_context_runner: CalendarRuntimeRunner = refresh_trading_economics_calendar,
         calendar_key_reader=None,
         calendar_refresh_interval_ms: int = CALENDAR_REFRESH_INTERVAL_MS,
+        projection_runtime: TradingRuntime | None = None,
     ) -> None:
         super().__init__()
         LOGGER.debug("MainWindow initialization start")
-        self.setWindowTitle("Trading IG Assistant - analyse et Paper local")
+        self.setWindowTitle("Trading IG Assistant - analyse et simulation locale")
         self.resize(1280, 820)
         self._config_path = default_config_path()
         self._paper_database_path = paper_database_path or default_paper_database_path()
         self._config = load_config(self._config_path)
+        self._projection_runtime = projection_runtime or TradingRuntime(
+            ig_adapter_factory=lambda environment: IGRestAdapter(
+                environment=environment,
+                read_only=True,
+            )
+        )
+        self.ui_facade = RuntimeUIFacade(self._projection_runtime)
+        self._stream_projection_status = "disconnected"
         self._workspace_persistence = workspace_persistence
         self._credential_store = self._build_credential_store()
         if official_news_refresh_interval_ms <= 0:
@@ -535,7 +529,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._calendar_refresh_timer = QtCore.QTimer(self)
         self._calendar_refresh_timer.setInterval(calendar_refresh_interval_ms)
         self._calendar_refresh_timer.timeout.connect(self._refresh_calendar_context)
-        self._active_connection: ActiveIGConnection | None = None
         self._connection_thread: QtCore.QThread | None = None
         self._connection_worker: ConnectionWorker | None = None
         self._discovery_thread: QtCore.QThread | None = None
@@ -595,6 +588,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._paper_freshness_timer.timeout.connect(self._refresh_paper_freshness)
         self._build_menu()
         self._build_layout()
+        self._publish_runtime_projections()
         if self._workspace_persistence:
             self._restore_workspace_state()
         self._load_cached_discovery_results()
@@ -602,6 +596,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self._official_news_refresh_timer.start()
             QtCore.QTimer.singleShot(0, self._refresh_official_news)
         LOGGER.debug("MainWindow initialization complete")
+
+    @property
+    def _active_connection(self) -> ActiveIGConnection | None:
+        return self._projection_runtime.active_ig_connection
+
+    @_active_connection.setter
+    def _active_connection(self, connection: ActiveIGConnection | None) -> None:
+        self._projection_runtime.replace_ig_connection_for_legacy_migration(connection)
 
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
@@ -702,7 +704,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.paper_portfolio.close_requested.connect(self._close_paper_position)
         self.paper_portfolio.save_requested.connect(self._save_paper_session)
         self.paper_portfolio.restore_requested.connect(self._restore_paper_session)
-        self.right_tabs.addTab(self.paper_portfolio, "Portefeuille Paper")
+        self.right_tabs.addTab(self.paper_portfolio, "Portefeuille simulé")
         self.right_tabs.currentChanged.connect(self._on_right_tab_changed)
         self.right_tabs.setMinimumSize(0, 0)
         self.right_tabs.setSizePolicy(
@@ -716,6 +718,68 @@ class MainWindow(QtWidgets.QMainWindow):
         root_layout.addWidget(self.body_splitter, stretch=1)
         self.setCentralWidget(root)
         self._refresh_paper_session_views()
+
+    def _publish_runtime_projections(self) -> None:
+        """Mirror observed legacy state into the read-only GUI V2 boundary."""
+
+        generated_at = datetime.now(UTC)
+        connection = self._active_connection
+        account = self._current_runtime_account()
+        rest_status = "connected" if connection is not None else "disconnected"
+        if self._latest_ai_context_snapshot is not None:
+            ai_status = "available"
+        elif self._openai_context_session is not None:
+            ai_status = "configured"
+        else:
+            ai_status = "not_configured"
+        open_positions_count = sum(
+            snapshot.position.status.value == "open"
+            for snapshot in self._paper_session.position_snapshots()
+        )
+        generation_id = self._projection_runtime.generation_id
+        header = build_account_header_projection(
+            generation_id=generation_id,
+            account=account,
+            environment=connection.environment.value if connection is not None else None,
+            execution_mode="PAPER",
+            open_positions_count=open_positions_count,
+            rest_status=rest_status,
+            stream_status=self._stream_projection_status,
+            ai_status=ai_status,
+            generated_at_utc=generated_at,
+        )
+        health = build_runtime_health_projection(
+            generation_id=generation_id,
+            rest_status=rest_status,
+            stream_status=self._stream_projection_status,
+            ai_status=ai_status,
+            observed_at_utc=generated_at,
+        )
+        dashboard = merge_account_metrics_into_dashboard(
+            build_paper_dashboard_projection(
+                generation_id=generation_id,
+                positions=self._paper_session.position_snapshots(),
+                events=self._paper_session.events(),
+                generated_at_utc=generated_at,
+            ),
+            header,
+        )
+        self._projection_runtime.publish_account_header(header)
+        self._projection_runtime.publish_dashboard(dashboard)
+        self._projection_runtime.publish_health(health, generation_id=generation_id)
+
+    def _current_runtime_account(self) -> Account | None:
+        connection = self._active_connection
+        if connection is None or connection.current_account_id is None:
+            return None
+        return next(
+            (
+                account
+                for account in connection.accounts
+                if account.account_id == connection.current_account_id
+            ),
+            None,
+        )
 
     @QtCore.pyqtSlot(int)
     def _on_right_tab_changed(self, _index: int) -> None:
@@ -740,7 +804,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._chart_candle_series is None or len(self._chart_candle_series.candles) < 2:
             self.scanner_preview.show_unavailable(
                 "WARMING_UP : aucune bougie clôturée reçue pendant cette session. L'analyse "
-                "technique se débloquera progressivement; le contexte et le Paper restent "
+                "technique se débloquera progressivement; le contexte et la simulation restent "
                 "disponibles séparément."
             )
             return
@@ -827,7 +891,7 @@ class MainWindow(QtWidgets.QMainWindow):
         except MarketNavigationCatalogError:
             self.scanner_preview.show_unavailable(
                 "Scanner indisponible : ce produit ne possède pas de binding exact validé. "
-                "Il reste disponible pour le Paper manuel."
+                "Il reste disponible pour la simulation manuelle."
             )
             return
 
@@ -1204,6 +1268,7 @@ class MainWindow(QtWidgets.QMainWindow):
         ai_reason_codes = tuple(code for code in result.reason_codes if code.startswith("AI_"))
         self._latest_ai_context_snapshot = result
         self._refresh_ai_presentation()
+        self._publish_runtime_projections()
         LOGGER.info(
             "OpenAI consultative context completed status=%s model=%s reasons=%s",
             result.ai_analysis.status.value,
@@ -1248,6 +1313,7 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(str)
     def _on_openai_context_failure(self, message: str) -> None:
         self.statusBar().showMessage(message, 12000)
+        self._publish_runtime_projections()
 
     @QtCore.pyqtSlot()
     def _clear_openai_context_worker(self) -> None:
@@ -1381,6 +1447,8 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot()
     def _clear_connection_market_state(self) -> None:
         """Invalidate the visible, actionable state from a previous IG connection."""
+        self._stream_projection_status = "disconnected"
+        self._projection_runtime.begin_generation()
         results = self.product_selector.results()
         retained = [r for r in results if not r.search_term.startswith("targeted-search:")]
         if len(retained) != len(results):
@@ -1413,6 +1481,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.product_selector.set_selected_product(None)
         self.chart_view.set_stream_status("DISCONNECTED")
         self.chart_view.set_live_quote(None)
+        self._publish_runtime_projections()
         self.statusBar().showMessage("Disconnected from IG.", 5000)
 
     @QtCore.pyqtSlot(object)
@@ -1430,7 +1499,7 @@ class MainWindow(QtWidgets.QMainWindow):
             0,
         )
         self._connection_thread = QtCore.QThread(self)
-        self._connection_worker = ConnectionWorker(request)
+        self._connection_worker = ConnectionWorker(request, self._projection_runtime)
         self._connection_worker.moveToThread(self._connection_thread)
         self._connection_thread.started.connect(self._connection_worker.run)
         self._connection_worker.succeeded.connect(self._on_connection_success)
@@ -1497,6 +1566,7 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.chart_view.set_stream_status("STREAM READY")
             self._restart_streaming()
+        self._publish_runtime_projections()
         message = (
             f"Connected to IG {result.environment.value}. Accounts fetched: {len(result.accounts)}."
         )
@@ -1508,11 +1578,14 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(str)
     def _on_connection_failure(self, message: str) -> None:
         LOGGER.debug("Connection failure message=%s", message)
+        self._stream_projection_status = "disconnected"
+        self._projection_runtime.begin_generation()
         if "too-many-failed-attempts" in message:
             self._auth_locked_out = True
             self.account_status.set_auth_locked(
                 "IG authentication locked: too many failed attempts. Wait before trying again."
             )
+        self._publish_runtime_projections()
         self.statusBar().showMessage(f"Connection failed: {humanize_ig_error(message)}", 12000)
 
     @QtCore.pyqtSlot()
@@ -1678,6 +1751,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._logout_active_connection()
                 self.account_status.set_disconnected()
                 self.chart_view.set_stream_status("DISCONNECTED")
+                self._publish_runtime_projections()
                 return
             self._restart_streaming()
         self._set_profile_account(self._config.environment, selected_account_id)
@@ -1688,19 +1762,15 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._active_connection.current_account_id == account_id:
             return True
         try:
-            session = self._active_connection.adapter.switch_account(account_id)
-            if session.current_account_id != account_id:
-                raise AccountSwitchNotConfirmedError(
-                    "IG did not confirm the requested account context."
-                )
+            connection = self._projection_runtime.switch_ig_account(account_id)
             self._stop_streaming()
             self._clear_connection_market_state()
-            self._active_connection.current_account_id = session.current_account_id
             self._history_allowance_state = _load_history_allowance_state(
-                environment=self._active_connection.environment,
-                account_id=session.current_account_id,
+                environment=connection.environment,
+                account_id=connection.current_account_id,
             )
             LOGGER.debug("Active IG account switched account=%s", mask_identifier(account_id))
+            self._publish_runtime_projections()
             return True
         except (IGAPIError, AccountSwitchNotConfirmedError) as exc:
             self._stop_streaming()
@@ -1739,10 +1809,9 @@ class MainWindow(QtWidgets.QMainWindow):
             mask_identifier(self._active_connection.current_account_id),
         )
         try:
-            self._active_connection.adapter.logout()
+            self._projection_runtime.disconnect_ig()
         except IGAPIError as exc:
             LOGGER.debug("Active IG logout failed ignored error=%s", exc)
-        self._active_connection = None
         LOGGER.debug("Active IG logout complete")
 
     @QtCore.pyqtSlot(object)
@@ -1804,10 +1873,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 except ValueError as exc:
                     LOGGER.warning("Paper quote update rejected: %s", exc)
                     self.statusBar().showMessage(
-                        f"Mise à jour Paper refusée : {exc}",
+                        f"Mise à jour de la simulation refusée : {exc}",
                         10000,
                     )
                 self._refresh_paper_session_views()
+                self._publish_runtime_projections()
             chart_product = self._chart_product or self._selected_product
             if chart_product is not None and quote.epic == chart_product.epic:
                 self.chart_view.set_live_quote(quote)
@@ -1851,16 +1921,17 @@ class MainWindow(QtWidgets.QMainWindow):
         except ValueError as exc:
             LOGGER.warning("Paper submission rejected: %s", exc)
             self.product_selector.paper_ticket.summary.append(
-                f"\nOUVERTURE PAPER REFUSÉE — {exc}\nAucune transmission à IG."
+                f"\nOUVERTURE SIMULÉE REFUSÉE — {exc}\nAucune transmission à IG."
             )
-            self.statusBar().showMessage(f"Ouverture Paper refusée : {exc}", 10000)
+            self.statusBar().showMessage(f"Ouverture simulée refusée : {exc}", 10000)
             return
         self.product_selector.paper_ticket.show_execution_result(record)
         self._refresh_paper_session_views()
+        self._publish_runtime_projections()
         self.right_tabs.setCurrentWidget(self.paper_portfolio)
         result = record.outcome.execution_result
         self.statusBar().showMessage(
-            f"Session Paper : {result.status.value} — {result.message or '-'}",
+            f"Session de simulation : {result.status.value} — {result.message or '-'}",
             10000,
         )
 
@@ -1878,9 +1949,10 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         result = self._paper_session.move_stop(position_id, stop)
         self._refresh_paper_session_views()
+        self._publish_runtime_projections()
         self.paper_portfolio.show_action_result(result)
         self.statusBar().showMessage(
-            f"Stop Paper local : {result.status.value} — {result.message or '-'}",
+            f"Stop simulé local : {result.status.value} — {result.message or '-'}",
             10000,
         )
 
@@ -1888,9 +1960,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def _close_paper_position(self, position_id: str) -> None:
         result = self._paper_session.close_position(position_id)
         self._refresh_paper_session_views()
+        self._publish_runtime_projections()
         self.paper_portfolio.show_action_result(result)
         self.statusBar().showMessage(
-            f"Clôture Paper locale : {result.status.value} — {result.message or '-'}",
+            f"Clôture simulée locale : {result.status.value} — {result.message or '-'}",
             10000,
         )
 
@@ -1898,7 +1971,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _save_paper_session(self) -> None:
         if not self._paper_session.has_state():
             self.paper_portfolio.show_persistence_result(
-                "Aucun état Paper à sauvegarder; aucun fichier n'a été créé.",
+                "Aucun état de simulation à sauvegarder; aucun fichier n'a été créé.",
                 error=True,
             )
             return
@@ -1924,11 +1997,11 @@ class MainWindow(QtWidgets.QMainWindow):
         ) as exc:
             LOGGER.error("Explicit Paper save failed: %s", exc)
             self.paper_portfolio.show_persistence_result(
-                f"Sauvegarde Paper refusée : {exc}",
+                f"Sauvegarde de la simulation refusée : {exc}",
                 error=True,
             )
             return
-        message = f"Session Paper sauvegardée explicitement à {saved_at:%H:%M:%S} UTC."
+        message = f"Session de simulation sauvegardée explicitement à {saved_at:%H:%M:%S} UTC."
         self.paper_portfolio.show_persistence_result(message)
         self.statusBar().showMessage(message, 10000)
 
@@ -1936,15 +2009,15 @@ class MainWindow(QtWidgets.QMainWindow):
     def _restore_paper_session(self) -> None:
         if not self._paper_database_path.exists():
             self.paper_portfolio.show_persistence_result(
-                "Aucune base Paper locale à restaurer.",
+                "Aucune base de simulation locale à restaurer.",
                 error=True,
             )
             return
         if self._paper_session.has_state():
             answer = QtWidgets.QMessageBox.question(
                 self,
-                "Restaurer la session Paper",
-                "Remplacer la session Paper locale courante par la dernière sauvegarde ?",
+                "Restaurer la session de simulation",
+                "Remplacer la session de simulation locale courante par la dernière sauvegarde ?",
                 QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
                 QtWidgets.QMessageBox.No,
             )
@@ -1956,7 +2029,7 @@ class MainWindow(QtWidgets.QMainWindow):
             snapshot = PaperSessionSnapshotRepository(store).latest()
             if snapshot is None:
                 self.paper_portfolio.show_persistence_result(
-                    "La base locale ne contient aucune sauvegarde Paper.",
+                    "La base locale ne contient aucune sauvegarde de simulation.",
                     error=True,
                 )
                 return
@@ -1975,13 +2048,16 @@ class MainWindow(QtWidgets.QMainWindow):
         ) as exc:
             LOGGER.error("Explicit Paper restore failed: %s", exc)
             self.paper_portfolio.show_persistence_result(
-                f"Restauration Paper refusée : {exc}",
+                f"Restauration de la simulation refusée : {exc}",
                 error=True,
             )
             return
         self._paper_session = restored
         self._refresh_paper_session_views()
-        message = "Dernière session Paper restaurée explicitement; aucune transmission à IG."
+        self._publish_runtime_projections()
+        message = (
+            "Dernière session de simulation restaurée explicitement; aucune transmission à IG."
+        )
         self.paper_portfolio.show_persistence_result(message)
         self.statusBar().showMessage(message, 10000)
 
@@ -2038,12 +2114,26 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(str)
     def _on_stream_status(self, status: str) -> None:
+        normalized = status.strip().lower()
+        if normalized.startswith("connected"):
+            self._stream_projection_status = "connected"
+        elif normalized.startswith("subscribed"):
+            self._stream_projection_status = "subscribed"
+        elif normalized.startswith("live"):
+            self._stream_projection_status = "live"
+        elif normalized.startswith("reconnecting"):
+            self._stream_projection_status = "connecting"
+        elif normalized.startswith("disconnected"):
+            self._stream_projection_status = "disconnected"
         self.chart_view.set_stream_status(status)
+        self._publish_runtime_projections()
         LOGGER.debug("Streaming status update status=%s", status)
 
     @QtCore.pyqtSlot(str)
     def _on_stream_error(self, message: str) -> None:
         LOGGER.debug("Streaming error message=%s", message)
+        self._stream_projection_status = "error"
+        self._publish_runtime_projections()
         if (
             self._streaming_adapter is not None
             and "INSUFFICIENT PERMISSIONS" in message.upper()
@@ -2165,6 +2255,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if stream_product is None:
             return
         try:
+            self._stream_projection_status = "connecting"
+            self._publish_runtime_projections()
             requested_scale = "1MINUTE"
             self._live_chart_scale_requested = requested_scale
             self._live_chart_scale_actual = requested_scale
@@ -2783,6 +2875,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _stop_streaming(self) -> None:
         self._stream_generation += 1
         self._streaming_bridge = None
+        self._stream_projection_status = "disconnected"
+        self._publish_runtime_projections()
         if self._streaming_adapter is None:
             return
         try:
@@ -2938,16 +3032,6 @@ def run_gui() -> int:
         logging.getLogger("trading_ig_assistant.session").info("=" * 86)
 
 
-def _credentials_from_request(request: IGConnectionRequest):
-    from trading_ig_assistant.adapters.credentials import IGCredentials
-
-    return IGCredentials(
-        username=request.username,
-        password=request.password,
-        api_key=request.api_key,
-    )
-
-
 def humanize_ig_error(message: str) -> str:
     if "exceeded-api-key-allowance" in message:
         return (
@@ -3076,10 +3160,6 @@ def _results_contain_invalid_security_token(results: list[ProductDiscoveryResult
     )
     has_products = any(result.products for result in results)
     return has_token_error and not has_products
-
-
-def _account_id_exists(accounts: list[Account], account_id: str) -> bool:
-    return any(account.account_id == account_id for account in accounts)
 
 
 def _first_discovered_product(results: list[ProductDiscoveryResult]) -> TradableProduct | None:

@@ -1,14 +1,34 @@
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 
+from trading_ig_assistant.domain.ai_context import (
+    AIAnalysisStatus,
+    MarketAIAnalysis,
+    MarketAIFact,
+    MarketContextSnapshot,
+)
+from trading_ig_assistant.domain.context_sources import ContextCategory
 from trading_ig_assistant.domain.journal import JournalEvent, PnlStatus
+from trading_ig_assistant.domain.macro_context import (
+    ContextSeverity,
+    ContextSignal,
+    DirectionalBias,
+    EventRisk,
+)
+from trading_ig_assistant.domain.market_intelligence import (
+    ArticleContentOrigin,
+    ArticleEvidence,
+    ArticleEvidenceBundle,
+    VerificationStatus,
+)
 from trading_ig_assistant.persistence.repositories import (
     CorruptPaperSnapshotError,
     DuplicateJournalEventError,
     JournalEventRepository,
+    MarketAIAnalysisRepository,
     PaperSessionSnapshotRepository,
     UnsafeJournalPayloadError,
 )
@@ -18,6 +38,7 @@ from trading_ig_assistant.persistence.sqlite_store import (
     SQLiteStore,
     UnsupportedSchemaError,
 )
+from trading_ig_assistant.services.macro_context_service import MacroContextService
 
 
 def _event(event_id: str = "EVENT-1") -> JournalEvent:
@@ -84,6 +105,24 @@ def test_journal_repository_round_trip_is_append_only_and_deduplicated(tmp_path)
     assert repository.list_events() == (event,)
 
 
+def test_journal_repository_appends_batch_atomically_and_reports_existing_ids(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "trading.sqlite")
+    store.initialize()
+    repository = JournalEventRepository(store)
+    first = _event("EVENT-BATCH-1")
+    second = _event("EVENT-BATCH-2")
+
+    repository.append_many((first, second))
+
+    assert repository.existing_event_ids(
+        ("EVENT-BATCH-2", "EVENT-MISSING", "EVENT-BATCH-1")
+    ) == frozenset({"EVENT-BATCH-1", "EVENT-BATCH-2"})
+    assert repository.list_events() == (first, second)
+    with pytest.raises(DuplicateJournalEventError):
+        repository.append_many((first, _event("EVENT-BATCH-3")))
+    assert repository.list_events() == (first, second)
+
+
 def test_journal_repository_rejects_nested_secret_fields(tmp_path) -> None:
     store = SQLiteStore(tmp_path / "trading.sqlite")
     store.initialize()
@@ -101,6 +140,97 @@ def test_journal_repository_rejects_nested_secret_fields(tmp_path) -> None:
         repository.append(unsafe)
 
     assert repository.list_events() == ()
+
+
+def test_ai_repository_persists_facts_and_source_refs_but_never_excerpts(tmp_path) -> None:
+    now = datetime(2026, 11, 11, 10, 0, tzinfo=UTC)
+    valid_until = now + timedelta(hours=6)
+    signal = ContextSignal(
+        signal_id="article:one",
+        label="Central bank statement",
+        severity=ContextSeverity.GRAY,
+        score=None,
+        summary="Transient full excerpt that must never reach SQLite.",
+        source="official.example",
+        source_url="https://official.example/statement",
+        observed_at_utc=now,
+        valid_until_utc=valid_until,
+        confidence=None,
+        tags=("ai_evidence", "article_excerpt"),
+    )
+    macro_state = MacroContextService().build_state((signal,), now)
+    fact = MarketAIFact(
+        statement="The central bank kept its policy rate unchanged.",
+        category="monetary_policy",
+        source_signal_ids=(signal.signal_id,),
+        observed_at_utc=now,
+        valid_until_utc=valid_until,
+    )
+    analysis = MarketAIAnalysis(
+        status=AIAnalysisStatus.AVAILABLE,
+        model_id="openai-responses:gpt-6-luna",
+        prompt_version="test-v1",
+        market_scope="GLOBAL-MARKET-CONTEXT",
+        directional_bias=DirectionalBias.UNKNOWN,
+        event_risk=EventRisk.UNKNOWN,
+        confidence=Decimal("0.5"),
+        summary="Evidence remains insufficient for a directional conclusion.",
+        risk_flags=("WAIT_INSUFFICIENT_EVIDENCE",),
+        source_signal_ids=(signal.signal_id,),
+        generated_at_utc=now,
+        valid_until_utc=valid_until,
+        facts=(fact,),
+    )
+    snapshot = MarketContextSnapshot(
+        schema_version=1,
+        snapshot_id="AI-SNAPSHOT-1",
+        instrument_id="GLOBAL-MARKET-CONTEXT",
+        macro_state=macro_state,
+        ai_analysis=analysis,
+        generated_at_utc=now,
+        valid_until_utc=valid_until,
+        reason_codes=(),
+        provenance=("test",),
+    )
+    evidence = ArticleEvidenceBundle(
+        articles=(
+            ArticleEvidence(
+                signal_id=signal.signal_id,
+                headline=signal.label,
+                source=signal.source,
+                source_url=signal.source_url or "",
+                provider_id="tavily-news",
+                category=ContextCategory.CENTRAL_BANK,
+                verification_status=VerificationStatus.SINGLE_SOURCE,
+                published_at_utc=now,
+                observed_at_utc=now,
+                valid_until_utc=valid_until,
+                excerpt=signal.summary,
+                content_origin=ArticleContentOrigin.TAVILY_EXTRACT_BASIC,
+            ),
+        ),
+        generated_at_utc=now,
+        estimated_input_tokens=100,
+        estimated_output_tokens=200,
+        estimated_openai_cost_usd=0.001,
+        tavily_extract_credits=1,
+    )
+    store = SQLiteStore(tmp_path / "trading.sqlite")
+    MarketAIAnalysisRepository(store).save(snapshot, evidence)
+
+    with store.connection() as connection:
+        analysis_row = connection.execute(
+            "SELECT analysis_json, source_refs_json FROM market_ai_analyses"
+        ).fetchone()
+        fact_row = connection.execute(
+            "SELECT statement, source_refs_json FROM market_facts"
+        ).fetchone()
+
+    persisted = f"{analysis_row['analysis_json']} {analysis_row['source_refs_json']} " \
+        f"{fact_row['statement']} {fact_row['source_refs_json']}"
+    assert "kept its policy rate unchanged" in persisted
+    assert "https://official.example/statement" in persisted
+    assert "Transient full excerpt" not in persisted
 
 
 def test_failed_migration_restores_existing_database_backup(tmp_path, monkeypatch) -> None:
@@ -223,11 +353,11 @@ def test_version_one_database_is_backed_up_and_migrated_without_losing_journal(
     assert report.backup_path is not None and report.backup_path.exists()
     migrated = sqlite3.connect(database_path)
     try:
-        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 3
         assert migrated.execute("SELECT event_id FROM journal_events").fetchone()[0] == "PRESERVED"
         assert migrated.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,)]
+        ).fetchall() == [(1,), (2,), (3,)]
     finally:
         migrated.close()
 

@@ -147,12 +147,12 @@ def test_paper_ticket_widget_builds_approved_preview_without_execution() -> None
     assert widget.last_ticket is not None
     assert widget.last_ticket.intent.account.broker_id == "paper"
     assert widget.last_ticket.intent.account.environment == "paper"
-    assert "APPROUVÉ POUR PAPER UNIQUEMENT" in widget.summary.toPlainText()
+    assert "APPROUVÉ POUR SIMULATION UNIQUEMENT" in widget.summary.toPlainText()
     assert "Aucune exécution n'a été tentée" in widget.summary.toPlainText()
     assert "Évaluer" in widget.evaluate_button.text()
     assert "Trade" not in widget.evaluate_button.text()
     assert widget.execute_button.isEnabled()
-    assert "Paper locale" in widget.execute_button.text()
+    assert "simulée locale" in widget.execute_button.text()
 
 
 def test_paper_ticket_revalidates_before_emitting_local_execution() -> None:
@@ -543,7 +543,7 @@ def test_product_selector_propagates_product_and_quote_to_paper_ticket() -> None
     widget.details_tabs.setCurrentIndex(1)
 
     assert widget.paper_ticket.evaluate_button.isEnabled()
-    assert "Ticket Paper" == widget.details_tabs.tabText(1)
+    assert "Simulation" == widget.details_tabs.tabText(1)
     assert widget.product_tabs.isHidden()
     assert widget.main_layout.stretch(widget.main_layout.indexOf(widget.details_tabs)) == 2
     assert "IGRestAdapter" not in inspect.getsource(ticket_view)

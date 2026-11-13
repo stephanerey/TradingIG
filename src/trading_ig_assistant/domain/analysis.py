@@ -119,6 +119,76 @@ class IndicatorValue:
 
 
 @dataclass(frozen=True)
+class IndicatorSeriesPoint:
+    """One timestamped, deterministic indicator value."""
+
+    timestamp_utc: datetime
+    value: Decimal
+
+    def __post_init__(self) -> None:
+        if self.timestamp_utc.tzinfo is None or self.timestamp_utc.utcoffset() != UTC.utcoffset(
+            self.timestamp_utc
+        ):
+            raise ValueError("indicator-series timestamps must be UTC")
+
+
+@dataclass(frozen=True)
+class IndicatorSeriesValue:
+    """A complete indicator curve, or an explicit non-ready state without points."""
+
+    name: str
+    state: DataState
+    points: tuple[IndicatorSeriesPoint, ...]
+    required_points: int
+    observed_points: int
+    reason_codes: tuple[str, ...]
+    provenance: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.name.strip():
+            raise ValueError("indicator-series name is required")
+        if self.required_points <= 0 or self.observed_points < 0:
+            raise ValueError("indicator-series point counts are invalid")
+        if self.state is DataState.READY and not self.points:
+            raise ValueError("ready indicator-series points cannot be empty")
+        if self.state is not DataState.READY and self.points:
+            raise ValueError("non-ready indicator-series points must be empty")
+        if any(
+            current.timestamp_utc <= previous.timestamp_utc
+            for previous, current in zip(self.points, self.points[1:], strict=False)
+        ):
+            raise ValueError("indicator-series timestamps must be strictly increasing")
+
+
+@dataclass(frozen=True)
+class IndicatorSeriesSetValue:
+    """Several synchronized indicator curves sharing one readiness contract."""
+
+    name: str
+    state: DataState
+    series: tuple[IndicatorSeriesValue, ...]
+    required_points: int
+    observed_points: int
+    reason_codes: tuple[str, ...]
+    provenance: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.name.strip():
+            raise ValueError("indicator-series-set name is required")
+        if self.required_points <= 0 or self.observed_points < 0:
+            raise ValueError("indicator-series-set point counts are invalid")
+        series_names = tuple(item.name for item in self.series)
+        if len(set(series_names)) != len(series_names):
+            raise ValueError("indicator-series-set names must be unique")
+        if self.state is DataState.READY and not self.series:
+            raise ValueError("ready indicator-series-set cannot be empty")
+        if self.state is not DataState.READY and self.series:
+            raise ValueError("non-ready indicator-series-set must be empty")
+        if any(item.state is not DataState.READY for item in self.series):
+            raise ValueError("indicator-series-set curves must be ready")
+
+
+@dataclass(frozen=True)
 class IndicatorSetValue:
     name: str
     state: DataState

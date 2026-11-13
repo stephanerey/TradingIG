@@ -1,0 +1,25 @@
+schema_version: 1
+task_id: TIG-GUI2-R09-10-WATCHLIST-FREEZE
+status: complete
+objective: >-
+  Prevent the GUI V2 Watchlist chart from freezing the Qt event loop under live quote
+  and chart traffic.
+evidence:
+  user_report: "2026-11-09: application Not Responding after opening the chart tab"
+root_cause: >-
+  Every scanner quote snapshot rebuilt the QListWidget, reselected the market, cleared the
+  chart and replayed all cached updates. Direct PyQtGraph rendering also ran once per tick.
+fixes:
+  - Update stable watchlist rows in place without clearing the list or changing selection.
+  - Refresh live quote labels without rebuilding chart history.
+  - Bulk-render cached chart updates once when selecting or showing a market.
+  - Coalesce selected-market chart ticks to at most one PyQtGraph render per 250 ms.
+  - Skip hidden-page rendering while keeping a bounded 500-update cache per reference.
+verification:
+  regression: "100 stable snapshots caused 0 history rebuilds; 100 ticks caused 1 render"
+  stress: "4000 runtime/chart events processed in 0.145 s offscreen"
+  targeted_tests: "8 passed"
+  lint: passed
+  full_tests: "658 passed in 55.44s"
+safety:
+  - No IG command, LIVE/AUTO capability or subscription scope changed.

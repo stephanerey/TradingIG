@@ -650,7 +650,7 @@ def test_main_window_routes_approved_ticket_to_local_paper_views() -> None:
     assert window.paper_portfolio.orders_table.rowCount() == 1
     assert window.paper_portfolio.journal_table.rowCount() == 2
     assert window.right_tabs.currentWidget() is window.paper_portfolio
-    assert "POSITION PAPER OUVERTE" in ticket.summary.toPlainText()
+    assert "POSITION SIMULÉE OUVERTE" in ticket.summary.toPlainText()
     window.close()
     app.processEvents()
 
@@ -751,7 +751,7 @@ def test_empty_paper_save_does_not_create_database(tmp_path) -> None:
     app.processEvents()
 
     assert database_path.exists() is False
-    assert "Aucun état Paper" in window.paper_portfolio.persistence_result.text()
+    assert "Aucun état de simulation" in window.paper_portfolio.persistence_result.text()
     window.close()
     app.processEvents()
 
@@ -1105,6 +1105,77 @@ def test_chart_view_accepts_live_quote_update() -> None:
     assert view._live_price_label is not None
 
 
+def test_chart_view_discloses_exact_demo_source_and_last_tick() -> None:
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.domain.market_data import ChartCandleUpdate
+    from trading_ig_assistant.ui.chart_view import ChartView
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    view = ChartView()
+    view.resolution_combo.setCurrentIndex(view.resolution_combo.findData(60))
+    view.set_data_context("demo", "IX.D.CAC.IMF.IP")
+
+    assert "Source IG DEMO" in view.data_context_label.text()
+    assert "IX.D.CAC.IMF.IP" in view.data_context_label.text()
+    assert "MID / 1 min" in view.data_context_label.text()
+    assert "plateforme IG DEMO" in view.data_context_label.text()
+    assert "aucun tick" in view.data_context_label.text()
+
+    view.apply_chart_update(
+        ChartCandleUpdate(
+            epic="IX.D.CAC.IMF.IP",
+            interval="1MINUTE",
+            timestamp_ms=1_783_718_400_000,
+            open=8282.0,
+            high=8284.0,
+            low=8281.5,
+            close=8283.0,
+        )
+    )
+
+    assert "aucun tick" not in view.data_context_label.text()
+    view.close()
+
+
+def test_chart_view_m1_update_does_not_regress_newer_quote_timestamp() -> None:
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.domain.market_data import ChartCandleUpdate, Quote
+    from trading_ig_assistant.ui.chart_view import ChartView
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    view = ChartView()
+    minute_timestamp_ms = 1_783_718_400_000
+    quote_timestamp_ms = minute_timestamp_ms + 13_000
+    view.set_data_context("live", "IX.D.DAX.OPTCALL.IP")
+    view.set_live_quote(
+        Quote(
+            epic="IX.D.DAX.OPTCALL.IP",
+            bid=26390.0,
+            offer=26393.0,
+            timestamp_ms=quote_timestamp_ms,
+        )
+    )
+
+    view.apply_chart_update(
+        ChartCandleUpdate(
+            epic="IX.D.DAX.OPTCALL.IP",
+            interval="1MINUTE",
+            timestamp_ms=minute_timestamp_ms,
+            open=26391.0,
+            high=26392.0,
+            low=26390.0,
+            close=26391.5,
+        )
+    )
+
+    assert view._last_data_timestamp_ms == quote_timestamp_ms
+    view.close()
+
+
 def test_chart_view_live_line_uses_selected_price_basis() -> None:
     from PyQt5 import QtWidgets
 
@@ -1139,6 +1210,84 @@ def test_chart_view_live_line_uses_selected_price_basis() -> None:
     view.price_basis_combo.setCurrentIndex(view.price_basis_combo.findData(ChartPriceBasis.MID))
     view.set_live_quote(quote)
     assert view._live_price_line.value() == 100.5
+
+
+def test_chart_overlay_series_maps_timestamps_without_guessing() -> None:
+    from trading_ig_assistant.ui.chart_view import (
+        ChartOverlaySeries,
+        OhlcBar,
+        TimeAxisMode,
+        _map_bars_for_display,
+        _map_overlay_series_points,
+    )
+
+    bars = [
+        OhlcBar(1_000, 1.0, 2.0, 0.0, 1.0),
+        OhlcBar(2_000, 2.0, 3.0, 1.0, 2.0),
+        OhlcBar(3_000, 3.0, 4.0, 2.0, 3.0),
+    ]
+    series = ChartOverlaySeries(
+        label="EMA",
+        points=((1_000, 1.1), (3_000, 2.9), (4_000, 4.1)),
+        color="#20b8cd",
+    )
+
+    compressed = _map_bars_for_display(bars, TimeAxisMode.COMPRESSED)
+    real = _map_bars_for_display(bars, TimeAxisMode.REAL)
+
+    assert _map_overlay_series_points(
+        series, compressed, TimeAxisMode.COMPRESSED
+    ) == ((0.0, 1.1), (2.0, 2.9))
+    assert _map_overlay_series_points(series, real, TimeAxisMode.REAL) == (
+        (1.0, 1.1),
+        (3.0, 2.9),
+        (4.0, 4.1),
+    )
+
+
+def test_chart_indicator_panel_is_bounded_and_clears_explicitly() -> None:
+    from PyQt5 import QtWidgets
+
+    from trading_ig_assistant.ui.chart_view import (
+        ChartIndicatorPanel,
+        ChartOverlaySeries,
+        ChartView,
+        OhlcBar,
+    )
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    view = ChartView()
+    view.set_bars(
+        [
+            OhlcBar(1_000, 1.0, 2.0, 0.0, 1.0),
+            OhlcBar(2_000, 2.0, 3.0, 1.0, 2.0),
+        ]
+    )
+    view.set_indicator_panel(
+        ChartIndicatorPanel(
+            label="RSI 14",
+            series=(
+                ChartOverlaySeries(
+                    label="RSI 14",
+                    points=((1_000, 45.0), (2_000, 55.0)),
+                    color="#d7a93b",
+                ),
+            ),
+            minimum=0.0,
+            maximum=100.0,
+            reference_levels=((30.0, "Oversold", "#2ca56c"),),
+        )
+    )
+
+    assert len(view._indicator_curve_items) == 1
+    assert view._indicator_plot.isHidden() is False
+    assert view._indicator_plot.viewRange()[1] == [0.0, 100.0]
+
+    view.set_indicator_panel(None)
+
+    assert view._indicator_curve_items == ()
+    assert view._indicator_plot.isHidden() is True
 
 
 def test_price_basis_change_reloads_selected_product_history_once(monkeypatch, tmp_path) -> None:
@@ -1257,9 +1406,11 @@ def test_price_basis_change_without_selected_product_does_not_reload(monkeypatch
 
 
 def test_compressed_axis_maps_candles_without_time_gaps() -> None:
+    from dataclasses import replace
+
     from PyQt5 import QtWidgets
 
-    from trading_ig_assistant.ui.chart_view import ChartView, OhlcBar
+    from trading_ig_assistant.ui.chart_view import ChartView, OhlcBar, _hover_label_html
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     assert app is not None
@@ -1277,7 +1428,16 @@ def test_compressed_axis_maps_candles_without_time_gaps() -> None:
 
     assert view._display_bars[0].display_x == 0.0
     assert view._display_bars[1].display_x == 1.0
+    assert view._display_bars[1].previous_close == first.close
     assert view._timestamp_ms_for_x(1.0) == second.timestamp_ms
+    assert view._bar_width_units() == 0.94
+    assert "Gap vs clôture précédente: +0" not in _hover_label_html(
+        view._display_bars[1]
+    )
+
+    gapped = replace(second, open=104.0)
+    view.set_bars([first, gapped])
+    assert "Gap vs clôture précédente: +3" in _hover_label_html(view._display_bars[1])
 
 
 def test_quote_from_chart_update_uses_day_change_fields() -> None:

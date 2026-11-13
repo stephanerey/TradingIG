@@ -1,0 +1,26 @@
+schema_version: 1
+task_id: TIG-GUI2-R09-07-09-PAPER-HISTORY
+status: complete
+objective: >-
+  Expose explicit local Paper persistence, an append-only redacted journal, deterministic
+  realized-trade statistics and SQLite health in GUI V2 without any broker command.
+decisions:
+  - Never restore Paper state automatically at startup.
+  - Require an in-app confirmation before replacing a non-empty local session.
+  - Reuse the versioned SQLite snapshot repository and strict checkpoint codec.
+  - Keep journal payloads out of the GUI projection and filter only display-safe fields.
+  - Compute win rate, profit factor and drawdown only from attested PAPER_POSITION_CLOSED
+    events, independently per currency; mixed-currency dashboard statistics remain N/A.
+  - Preserve Paper/SQLite health when IG REST or streaming health snapshots update.
+  - Forward only already-subscribed, observed quotes to products tracked by the local Paper
+    session; coalesce read-model rendering while processing every quote chronologically.
+  - Keep stop tightening and close actions explicit; close requires an in-app confirmation
+    and both actions reuse PaperSessionService safeguards.
+safety:
+  - No IG adapter execution method is exposed by the Paper controller or pages.
+  - No automatic save, restore, LIVE/AUTO activation, strategy mutation or AI call.
+verification:
+  targeted_tests: "Paper persistence, quote routing, stop and close intents covered offline"
+  lint: passed
+  full_tests: "667 passed in 54.45s"
+  diff_check: passed

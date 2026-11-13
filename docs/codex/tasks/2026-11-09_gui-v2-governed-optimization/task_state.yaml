@@ -1,0 +1,20 @@
+schema_version: 1
+task_id: TIG-GUI2-R09-09-GOVERNED-OPTIMIZATION
+status: complete
+objective: >-
+  Add a typed, local and non-executable optimization-readiness review that keeps
+  observed performance separate from qualified optimization evidence.
+decisions:
+  - Count only attested realized PAPER_POSITION_CLOSED journal events.
+  - Keep currencies separate and expose the evidence scope and assessment time.
+  - Return INSUFFICIENT_EVIDENCE while dataset, strategy/parameter versions and
+    chronological out-of-sample replay evidence are unavailable.
+  - Emit no proposal and expose no apply command in this state.
+  - Keep external AI transfer unauthorized by construction.
+verification:
+  targeted_tests: "GUI V2 optimization and related page tests passed"
+  responsive_smoke: "8 pages, 50 FR/EN cycles, shell remained 1366x768"
+  lint: passed
+safety:
+  - No external AI call, strategy/risk mutation, broker order or LIVE/AUTO capability.
+  - Optimization projection contains no executable command path.

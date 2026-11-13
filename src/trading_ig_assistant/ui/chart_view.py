@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
+from math import isclose
 
 import pyqtgraph as pg
 from PyQt5 import QtCore, QtGui, QtWidgets
@@ -35,6 +36,36 @@ class OhlcBar:
     close: float
     volume: float | None = None
     display_x: float | None = None
+    previous_close: float | None = None
+
+
+@dataclass(frozen=True)
+class ChartOverlayLevel:
+    label: str
+    value: float
+    color: str
+    label_position: float = 0.92
+
+
+@dataclass(frozen=True)
+class ChartOverlaySeries:
+    """A timestamped analysis curve whose points come from attested market data."""
+
+    label: str
+    points: tuple[tuple[int, float], ...]
+    color: str
+    width: float = 1.8
+
+
+@dataclass(frozen=True)
+class ChartIndicatorPanel:
+    """One bounded oscillator panel synchronized with the price time axis."""
+
+    label: str
+    series: tuple[ChartOverlaySeries, ...]
+    minimum: float
+    maximum: float
+    reference_levels: tuple[tuple[float, str, str], ...] = ()
 
 
 class TimeAxisMode(StrEnum):
@@ -104,6 +135,7 @@ class ChartAxisItem(pg.AxisItem):
     def tickStrings(self, values, scale, spacing):  # noqa: N802
         del scale, spacing
         labels: list[str] = []
+        previous_label: str | None = None
         interval_seconds = self._interval_getter()
         for value in values:
             timestamp_ms = self._timestamp_lookup(float(value))
@@ -111,7 +143,9 @@ class ChartAxisItem(pg.AxisItem):
                 labels.append("")
                 continue
             timestamp = datetime.fromtimestamp(timestamp_ms / 1000.0).astimezone()
-            labels.append(_format_axis_timestamp(timestamp, interval_seconds))
+            label = _format_axis_timestamp(timestamp, interval_seconds)
+            labels.append("" if label == previous_label else label)
+            previous_label = label
         return labels
 
 
@@ -124,8 +158,23 @@ class CandlestickItem(pg.GraphicsObject):
     def _generate_picture(self, bars: list[OhlcBar], bar_width: float) -> None:
         painter = QtGui.QPainter(self._picture)
         candle_width = max(bar_width, 0.72)
+        previous_bar: OhlcBar | None = None
         for bar in bars:
             x_value = _bar_x_value(bar)
+            if previous_bar is not None and not isclose(
+                previous_bar.close,
+                bar.open,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            ):
+                gap_x = (_bar_x_value(previous_bar) + x_value) / 2
+                painter.setPen(
+                    pg.mkPen("#d7a93b", width=1, style=QtCore.Qt.DashLine)
+                )
+                painter.drawLine(
+                    QtCore.QPointF(gap_x, previous_bar.close),
+                    QtCore.QPointF(gap_x, bar.open),
+                )
             color = QtGui.QColor("#0f7b45" if bar.close >= bar.open else "#a61b1b")
             painter.setPen(pg.mkPen(color))
             painter.setBrush(pg.mkBrush(color))
@@ -143,6 +192,7 @@ class CandlestickItem(pg.GraphicsObject):
                     max(top - bottom, 0.01),
                 )
             )
+            previous_bar = bar
         painter.end()
 
     def paint(self, painter: QtGui.QPainter, *_args: object) -> None:
@@ -241,6 +291,15 @@ class ChartView(QtWidgets.QWidget):
         self._current_range_key = "1M"
         self._current_price_basis = ChartPriceBasis.MID
         self._time_axis_mode = TimeAxisMode.COMPRESSED
+        self._data_environment = "INCONNU"
+        self._data_source_epic = ""
+        self._last_data_timestamp_ms: int | None = None
+        self._analysis_levels: tuple[ChartOverlayLevel, ...] = ()
+        self._analysis_series: tuple[ChartOverlaySeries, ...] = ()
+        self._analysis_curve_items: tuple[pg.PlotDataItem, ...] = ()
+        self._analysis_source_label = ""
+        self._indicator_panel: ChartIndicatorPanel | None = None
+        self._indicator_curve_items: tuple[pg.PlotDataItem, ...] = ()
 
         layout = QtWidgets.QVBoxLayout(self)
         header = QtWidgets.QGridLayout()
@@ -250,6 +309,20 @@ class ChartView(QtWidgets.QWidget):
 
         self.product_label = QtWidgets.QLabel("No product selected")
         self.product_label.setStyleSheet("font-weight: 700; font-size: 14px;")
+        self.product_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Ignored,
+            QtWidgets.QSizePolicy.Preferred,
+        )
+        self.data_context_label = QtWidgets.QLabel()
+        self.data_context_label.setWordWrap(True)
+        self.data_context_label.setMinimumWidth(0)
+        self.data_context_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Ignored,
+            QtWidgets.QSizePolicy.Preferred,
+        )
+        self.data_context_label.setStyleSheet(
+            "color: #D7A93B; font-size: 11px; font-weight: 600;"
+        )
         self.stream_status_label = _chip_label("Stream", "DISCONNECTED")
         self.bid_label = _chip_label("Vente", "-")
         self.offer_label = _chip_label("Achat", "-")
@@ -263,7 +336,7 @@ class ChartView(QtWidgets.QWidget):
         if default_resolution_index >= 0:
             self.resolution_combo.setCurrentIndex(default_resolution_index)
         self.resolution_combo.currentIndexChanged.connect(self._on_resolution_changed)
-        self.resolution_combo.setMinimumWidth(110)
+        self.resolution_combo.setMinimumWidth(70)
 
         self.range_combo = QtWidgets.QComboBox()
         for label in HISTORY_RANGE_KEYS:
@@ -272,7 +345,7 @@ class ChartView(QtWidgets.QWidget):
         if default_range_index >= 0:
             self.range_combo.setCurrentIndex(default_range_index)
         self.range_combo.currentIndexChanged.connect(self._on_range_changed)
-        self.range_combo.setMinimumWidth(80)
+        self.range_combo.setMinimumWidth(60)
 
         self.price_basis_combo = QtWidgets.QComboBox()
         self.price_basis_combo.addItem("Bid", ChartPriceBasis.BID)
@@ -282,29 +355,43 @@ class ChartView(QtWidgets.QWidget):
         if default_basis_index >= 0:
             self.price_basis_combo.setCurrentIndex(default_basis_index)
         self.price_basis_combo.currentIndexChanged.connect(self._on_price_basis_changed)
-        self.price_basis_combo.setMinimumWidth(90)
+        self.price_basis_combo.setMinimumWidth(70)
 
         self.axis_mode_combo = QtWidgets.QComboBox()
         self.axis_mode_combo.addItem("Compressed", TimeAxisMode.COMPRESSED)
         self.axis_mode_combo.addItem("Real", TimeAxisMode.REAL)
         self.axis_mode_combo.currentIndexChanged.connect(self._on_axis_mode_changed)
-        self.axis_mode_combo.setMinimumWidth(110)
+        self.axis_mode_combo.setMinimumWidth(90)
+
+        for combo in (
+            self.resolution_combo,
+            self.range_combo,
+            self.price_basis_combo,
+            self.axis_mode_combo,
+        ):
+            combo.setSizePolicy(
+                QtWidgets.QSizePolicy.Expanding,
+                QtWidgets.QSizePolicy.Fixed,
+            )
 
         self._current_interval_seconds = int(self.resolution_combo.currentData() or 300)
         self._current_range_key = str(self.range_combo.currentData() or "1M")
         self._current_price_basis = self.price_basis_combo.currentData() or ChartPriceBasis.MID
         self._time_axis_mode = self.axis_mode_combo.currentData() or TimeAxisMode.COMPRESSED
 
-        header.addWidget(self.product_label, 0, 0, 1, 2)
-        header.addWidget(self.stream_status_label, 0, 2, 1, 1)
-        header.addWidget(self.resolution_combo, 0, 3, 1, 1)
-        header.addWidget(self.range_combo, 0, 4, 1, 1)
-        header.addWidget(self.price_basis_combo, 0, 5, 1, 1)
-        header.addWidget(self.axis_mode_combo, 0, 6, 1, 1)
-        header.addWidget(self.bid_label, 1, 0, 1, 2)
-        header.addWidget(self.offer_label, 1, 2, 1, 2)
-        header.addWidget(self.change_label, 1, 4, 1, 1)
-        header.addWidget(self.percent_change_label, 1, 5, 1, 2)
+        header.addWidget(self.product_label, 0, 0, 1, 5)
+        header.addWidget(self.data_context_label, 1, 0, 1, 5)
+        header.addWidget(self.stream_status_label, 2, 0)
+        header.addWidget(self.resolution_combo, 2, 1)
+        header.addWidget(self.range_combo, 2, 2)
+        header.addWidget(self.price_basis_combo, 2, 3)
+        header.addWidget(self.axis_mode_combo, 2, 4)
+        header.addWidget(self.bid_label, 3, 0)
+        header.addWidget(self.offer_label, 3, 1)
+        header.addWidget(self.change_label, 3, 2)
+        header.addWidget(self.percent_change_label, 3, 3, 1, 2)
+        for column in range(5):
+            header.setColumnStretch(column, 1)
 
         axis_item = ChartAxisItem(
             timestamp_lookup=self._timestamp_ms_for_x,
@@ -312,7 +399,7 @@ class ChartView(QtWidgets.QWidget):
             interval_getter=self.current_interval_seconds,
         )
         self._plot = ChartPlotWidget(axisItems={"bottom": axis_item})
-        self._plot.setBackground("#fbfaf7")
+        self._plot.setBackground("#0C1627")
         self._plot.showGrid(x=True, y=True, alpha=0.25)
         self._plot.setLabel("left", "Price")
         self._plot.setLabel("bottom", "Time")
@@ -321,12 +408,43 @@ class ChartView(QtWidgets.QWidget):
         self._plot.hideButtons()
         self._plot.setMenuEnabled(False)
         self._plot.getAxis("left").setWidth(112)
+        for axis_name in ("left", "bottom"):
+            axis = self._plot.getAxis(axis_name)
+            axis.setPen(pg.mkPen("#526784"))
+            axis.setTextPen(pg.mkPen("#D7E5F8"))
         self._plot.zoom_requested.connect(self._on_zoom_requested)
         self._plot.pan_requested.connect(self._on_pan_requested)
         self._plot.scene().sigMouseMoved.connect(self._on_mouse_moved)
 
+        indicator_axis = ChartAxisItem(
+            timestamp_lookup=self._timestamp_ms_for_x,
+            mode_getter=self.current_time_axis_mode,
+            interval_getter=self.current_interval_seconds,
+        )
+        self._indicator_plot = pg.PlotWidget(axisItems={"bottom": indicator_axis})
+        self._indicator_plot.setBackground("#0C1627")
+        self._indicator_plot.showGrid(x=True, y=True, alpha=0.2)
+        self._indicator_plot.setLabel("bottom", "Time")
+        self._indicator_plot.setMinimumHeight(120)
+        self._indicator_plot.setMaximumHeight(180)
+        self._indicator_plot.setMouseEnabled(x=False, y=False)
+        self._indicator_plot.hideButtons()
+        self._indicator_plot.setMenuEnabled(False)
+        self._indicator_plot.getAxis("left").setWidth(112)
+        self._indicator_legend = self._indicator_plot.addLegend(offset=(10, 10))
+        self._indicator_legend.setBrush(pg.mkBrush("#101E33E6"))
+        self._indicator_legend.setPen(pg.mkPen("#526784"))
+        self._indicator_legend.hide()
+        for axis_name in ("left", "bottom"):
+            axis = self._indicator_plot.getAxis(axis_name)
+            axis.setPen(pg.mkPen("#526784"))
+            axis.setTextPen(pg.mkPen("#D7E5F8"))
+        self._indicator_plot.hide()
+
         layout.addLayout(header)
-        layout.addWidget(self._plot)
+        layout.addWidget(self._plot, stretch=1)
+        layout.addWidget(self._indicator_plot)
+        self._refresh_data_context_label()
 
     def current_interval_seconds(self) -> int:
         return self._current_interval_seconds
@@ -360,6 +478,73 @@ class ChartView(QtWidgets.QWidget):
             self._manual_zoom = False
         self._render_display_bars(self._source_model.bars)
 
+    def set_chart_updates(
+        self, updates: tuple[ChartCandleUpdate, ...] | list[ChartCandleUpdate]
+    ) -> None:
+        """Replace the chart from streamed updates with a single bounded render."""
+        bars_by_timestamp: dict[int, OhlcBar] = {}
+        for update in updates:
+            if update.timestamp_ms is not None:
+                self._last_data_timestamp_ms = max(
+                    self._last_data_timestamp_ms or update.timestamp_ms,
+                    update.timestamp_ms,
+                )
+            bar = _bar_from_chart_update(
+                update,
+                interval_seconds=self._current_interval_seconds,
+                price_basis=self._current_price_basis,
+            )
+            if bar is not None:
+                bars_by_timestamp[bar.timestamp_ms] = bar
+        self.set_bars([bars_by_timestamp[key] for key in sorted(bars_by_timestamp)])
+        self._refresh_data_context_label()
+
+    def set_data_context(self, environment: str, source_epic: str) -> None:
+        """Expose the exact broker environment and chart source beside the plot."""
+
+        self._data_environment = environment.strip().upper() or "INCONNU"
+        self._data_source_epic = source_epic.strip()
+        self._last_data_timestamp_ms = None
+        self._refresh_data_context_label()
+
+    def set_analysis_levels(
+        self,
+        levels: tuple[ChartOverlayLevel, ...],
+        *,
+        source_label: str = "",
+    ) -> None:
+        """Render only explicitly projected strategy levels, never synthetic defaults."""
+
+        self._analysis_levels = levels
+        self._analysis_source_label = source_label.strip()
+        if self._source_model.bars:
+            self._render_display_bars(self._source_model.bars)
+        self._refresh_data_context_label()
+
+    def set_analysis_series(
+        self,
+        series: tuple[ChartOverlaySeries, ...],
+        *,
+        source_label: str = "",
+    ) -> None:
+        """Render timestamped curves without manufacturing unavailable history."""
+
+        self._analysis_series = series
+        if source_label.strip():
+            self._analysis_source_label = source_label.strip()
+        if self._source_model.bars:
+            self._render_display_bars(self._source_model.bars)
+        self._refresh_data_context_label()
+
+    def set_indicator_panel(self, panel: ChartIndicatorPanel | None) -> None:
+        """Show a bounded indicator below price, using only timestamped series."""
+
+        self._indicator_panel = panel
+        if self._source_model.bars:
+            self._render_display_bars(self._source_model.bars)
+        else:
+            self._render_indicator_panel()
+
     def set_selected_product(self, product: object) -> None:
         self._option_change_unverified = (
             getattr(product, "product_type", None) is ProductType.OPTION
@@ -379,6 +564,8 @@ class ChartView(QtWidgets.QWidget):
         label_parts = [name]
         if epic:
             label_parts.append(f"({epic})")
+            if not self._data_source_epic:
+                self._data_source_epic = str(epic)
         if product_type or direction:
             label_parts.append(f"{product_type} {direction}".strip())
         self.product_label.setText(" ".join(part for part in label_parts if part))
@@ -394,6 +581,19 @@ class ChartView(QtWidgets.QWidget):
             self._hover_hline = None
             self._hover_label = None
 
+    def clear_selected_product(self, label: str = "No product selected") -> None:
+        self._option_change_unverified = False
+        self._selected_anchor_price = None
+        self._data_source_epic = ""
+        self._last_data_timestamp_ms = None
+        self.product_label.setText(label)
+        self.set_live_quote(None)
+        self.set_analysis_levels(())
+        self.set_analysis_series(())
+        self.set_indicator_panel(None)
+        self.set_bars([])
+        self._refresh_data_context_label()
+
     def set_stream_status(self, status: str) -> None:
         self.stream_status_label.setText(f"Stream: {status}")
 
@@ -405,6 +605,9 @@ class ChartView(QtWidgets.QWidget):
             self.change_label.setText("Variation: -")
             self.percent_change_label.setText("% Variation: -")
             return
+        if quote.timestamp_ms is not None:
+            self._last_data_timestamp_ms = quote.timestamp_ms
+            self._refresh_data_context_label()
         self.bid_label.setText(f"Vente: {_format_number(quote.bid)}")
         self.offer_label.setText(f"Achat: {_format_number(quote.offer)}")
         change = "-" if self._option_change_unverified else _format_signed_number(quote.net_change)
@@ -440,6 +643,15 @@ class ChartView(QtWidgets.QWidget):
         )
         if bar is None:
             return
+        if chart_update.timestamp_ms is not None:
+            # A locally aggregated M1 candle is stamped at the start of its minute.  Do not
+            # let that bucket timestamp briefly replace a newer direct quote timestamp (and
+            # visually flash ``:00`` between two ticks).
+            self._last_data_timestamp_ms = max(
+                self._last_data_timestamp_ms or chart_update.timestamp_ms,
+                chart_update.timestamp_ms,
+            )
+            self._refresh_data_context_label()
         if not self._source_model.bars:
             self._source_model = ChartDataModel([bar], is_placeholder=False)
         else:
@@ -471,6 +683,7 @@ class ChartView(QtWidgets.QWidget):
 
     def _on_resolution_changed(self, _index: int) -> None:
         self._current_interval_seconds = int(self.resolution_combo.currentData() or 300)
+        self._refresh_data_context_label()
         self._apply_resolution()
         self.resolution_changed.emit(self._current_interval_seconds)
 
@@ -483,6 +696,7 @@ class ChartView(QtWidgets.QWidget):
         if price_basis == self._current_price_basis:
             return
         self._current_price_basis = price_basis
+        self._refresh_data_context_label()
         if self._last_price_series is not None:
             self._source_model = ChartDataModel.from_price_series(
                 self._last_price_series,
@@ -493,6 +707,33 @@ class ChartView(QtWidgets.QWidget):
         if self._last_quote is not None:
             self.set_live_quote(self._last_quote)
         self.price_basis_changed.emit(self._current_price_basis)
+
+    def _refresh_data_context_label(self) -> None:
+        environment = self._data_environment
+        epic = self._data_source_epic or "EPIC non défini"
+        basis = self._current_price_basis.value.upper()
+        interval = _format_interval(self._current_interval_seconds)
+        timestamp = "aucun tick"
+        if self._last_data_timestamp_ms is not None:
+            observed = datetime.fromtimestamp(
+                self._last_data_timestamp_ms / 1000.0,
+                tz=UTC,
+            ).astimezone()
+            timestamp = observed.strftime("%H:%M:%S %Z")
+        comparison = (
+            "Comparer uniquement à la plateforme IG DEMO"
+            if environment == "DEMO"
+            else "Comparer uniquement au même compte/environnement IG"
+        )
+        analysis = (
+            f" · niveaux attestés {self._analysis_source_label}"
+            if (self._analysis_levels or self._analysis_series) and self._analysis_source_label
+            else " · aucune superposition d’analyse"
+        )
+        self.data_context_label.setText(
+            f"Source IG {environment} · {epic} · {basis} / {interval} · "
+            f"dernier UTM {timestamp}{analysis} — {comparison}"
+        )
 
     def _on_axis_mode_changed(self, _index: int) -> None:
         self._time_axis_mode = self.axis_mode_combo.currentData() or TimeAxisMode.COMPRESSED
@@ -548,7 +789,16 @@ class ChartView(QtWidgets.QWidget):
         color: str,
         *,
         dashed: bool = True,
+        label_position: float = 0.92,
     ) -> pg.InfiniteLine:
+        label_options = (
+            {
+                "label": label,
+                "labelOpts": {"position": label_position, "color": color},
+            }
+            if label is not None
+            else {}
+        )
         line = pg.InfiniteLine(
             pos=value,
             angle=0,
@@ -557,10 +807,8 @@ class ChartView(QtWidgets.QWidget):
                 width=1.5,
                 style=QtCore.Qt.DashLine if dashed else QtCore.Qt.SolidLine,
             ),
+            **label_options,
         )
-        if label is not None:
-            line.label = label
-            line.labelOpts = {"position": 0.92, "color": color}
         self._plot.addItem(line)
         return line
 
@@ -572,6 +820,8 @@ class ChartView(QtWidgets.QWidget):
             bar.timestamp_ms: index for index, bar in enumerate(self._display_bars)
         }
         self._plot.clear()
+        self._analysis_curve_items = ()
+        self._render_indicator_panel()
         self._live_price_line = None
         self._detach_live_price_label()
         self._hover_vline = None
@@ -581,11 +831,35 @@ class ChartView(QtWidgets.QWidget):
             return
 
         self._plot.addItem(CandlestickItem(self._display_bars, self._bar_width_units()))
+        curve_items: list[pg.PlotDataItem] = []
+        for series in self._analysis_series:
+            mapped_points = _map_overlay_series_points(
+                series,
+                self._display_bars,
+                self._time_axis_mode,
+            )
+            if not mapped_points:
+                continue
+            item = pg.PlotDataItem(
+                [point[0] for point in mapped_points],
+                [point[1] for point in mapped_points],
+                pen=pg.mkPen(series.color, width=series.width),
+                connect="finite",
+                name=series.label,
+            )
+            item.setZValue(100)
+            self._plot.addItem(item)
+            curve_items.append(item)
+        self._analysis_curve_items = tuple(curve_items)
         last_close = self._display_bars[-1].close
         self._add_level(None, last_close, "#254f8f")
-        self._add_level("Stop", last_close * 0.98, "#a61b1b")
-        self._add_level("Limit", last_close * 1.03, "#0f7b45")
-        self._add_level("KO", last_close * 0.95, "#6f42c1")
+        for level in self._analysis_levels:
+            self._add_level(
+                level.label,
+                level.value,
+                level.color,
+                label_position=level.label_position,
+            )
         self._live_price_line = self._add_level(None, last_close, "#0b6bcb", dashed=False)
         self._live_price_label = _build_live_price_label(
             _format_number(last_close),
@@ -617,6 +891,52 @@ class ChartView(QtWidgets.QWidget):
         self._position_live_price_label()
         self._restore_hover_state()
 
+    def _render_indicator_panel(self) -> None:
+        self._indicator_plot.clear()
+        self._indicator_legend.hide()
+        self._indicator_curve_items = ()
+        panel = self._indicator_panel
+        if panel is None or not self._display_bars:
+            self._indicator_plot.hide()
+            return
+        curve_items: list[pg.PlotDataItem] = []
+        for series in panel.series:
+            mapped_points = _map_overlay_series_points(
+                series,
+                self._display_bars,
+                self._time_axis_mode,
+            )
+            if not mapped_points:
+                continue
+            item = pg.PlotDataItem(
+                [point[0] for point in mapped_points],
+                [point[1] for point in mapped_points],
+                pen=pg.mkPen(series.color, width=series.width),
+                connect="finite",
+                name=series.label,
+            )
+            self._indicator_plot.addItem(item)
+            curve_items.append(item)
+        if not curve_items:
+            self._indicator_plot.hide()
+            return
+        for value, label, color in panel.reference_levels:
+            self._indicator_plot.addItem(
+                pg.InfiniteLine(
+                    pos=value,
+                    angle=0,
+                    pen=pg.mkPen(color, width=1, style=QtCore.Qt.DashLine),
+                    label=label,
+                    labelOpts={"position": 0.96, "color": color},
+                )
+            )
+        self._indicator_curve_items = tuple(curve_items)
+        if len(curve_items) > 1:
+            self._indicator_legend.show()
+        self._indicator_plot.setLabel("left", panel.label)
+        self._indicator_plot.setYRange(panel.minimum, panel.maximum, padding=0)
+        self._indicator_plot.show()
+
     def _apply_view_range(self) -> None:
         if not self._display_bars:
             return
@@ -634,8 +954,22 @@ class ChartView(QtWidgets.QWidget):
             self._view_center_x - half_span - left_padding,
             self._view_center_x + half_span + right_padding,
         )
+        if self._indicator_panel is not None and self._indicator_plot.isVisible():
+            self._indicator_plot.setXRange(
+                self._view_center_x - half_span - left_padding,
+                self._view_center_x + half_span + right_padding,
+            )
         lows = [bar.low for bar in self._display_bars]
         highs = [bar.high for bar in self._display_bars]
+        lows.extend(level.value for level in self._analysis_levels)
+        highs.extend(level.value for level in self._analysis_levels)
+        series_values = [
+            value
+            for series in self._analysis_series
+            for _timestamp_ms, value in series.points
+        ]
+        lows.extend(series_values)
+        highs.extend(series_values)
         low = min(lows)
         high = max(highs)
         y_padding = max((high - low) * 0.12, 1.0)
@@ -802,7 +1136,7 @@ class ChartView(QtWidgets.QWidget):
 
     def _bar_width_units(self) -> float:
         if self._time_axis_mode == TimeAxisMode.COMPRESSED:
-            return 0.82
+            return 0.94
         return max(self._current_interval_seconds * 0.8, 36.0)
 
     def _detach_live_price_label(self) -> None:
@@ -833,13 +1167,17 @@ def _format_signed_number(value: float | None) -> str:
 def _chip_label(label: str, value: str) -> QtWidgets.QLabel:
     chip = QtWidgets.QLabel(f"{label}: {value}")
     if label == "Stream":
-        chip.setMinimumWidth(210)
         chip.setAlignment(QtCore.Qt.AlignCenter)
+    chip.setMinimumWidth(0)
+    chip.setSizePolicy(
+        QtWidgets.QSizePolicy.Ignored,
+        QtWidgets.QSizePolicy.Preferred,
+    )
     chip.setStyleSheet(
         "QLabel {"
-        "color: #203040;"
-        "background: #e9f0f7;"
-        "border: 1px solid #c6d3df;"
+        "color: #D7E5F8;"
+        "background: #13233A;"
+        "border: 1px solid #29415F;"
         "border-radius: 9px;"
         "padding: 4px 9px;"
         "font-weight: 600;"
@@ -923,7 +1261,7 @@ def _build_live_price_label(
     label.setStyleSheet(
         "QLabel {"
         f"color: {color};"
-        "background: #f4f8fc;"
+        "background: #0C1627;"
         f"border: 1px solid {color};"
         "padding: 1px 4px;"
         "border-radius: 2px;"
@@ -938,8 +1276,8 @@ def _build_hover_label() -> pg.TextItem:
     label = pg.TextItem(
         text="",
         anchor=(0, 0),
-        fill=QtGui.QColor("#f4f8fc"),
-        border=pg.mkPen("#607080", width=1),
+        fill=QtGui.QColor("#0C1627"),
+        border=pg.mkPen("#526784", width=1),
     )
     label.setZValue(10_000)
     label.hide()
@@ -948,13 +1286,24 @@ def _build_hover_label() -> pg.TextItem:
 
 def _hover_label_html(bar: OhlcBar) -> str:
     timestamp = datetime.fromtimestamp(bar.timestamp_ms / 1000.0).astimezone()
+    gap_html = ""
+    if bar.previous_close is not None and not isclose(
+        bar.previous_close,
+        bar.open,
+        rel_tol=0.0,
+        abs_tol=1e-9,
+    ):
+        gap_html = (
+            "<br><span style='color:#d7a93b'>"
+            f"Gap vs clôture précédente: {bar.open - bar.previous_close:+g}</span>"
+        )
     return (
-        "<div style='font-size: 10pt; line-height: 1.2; color: #1d2a36;'>"
+        "<div style='font-size: 10pt; line-height: 1.2; color: #D7E5F8;'>"
         f"<b>{timestamp:%Y-%m-%d %H:%M}</b><br>"
         f"O: {bar.open:g}<br>"
         f"H: {bar.high:g}<br>"
         f"L: {bar.low:g}<br>"
-        f"C: {bar.close:g}"
+        f"C: {bar.close:g}{gap_html}"
         "</div>"
     )
 
@@ -1100,9 +1449,35 @@ def _resample_bars(bars: list[OhlcBar], interval_seconds: int) -> list[OhlcBar]:
 
 
 def _map_bars_for_display(bars: list[OhlcBar], mode: TimeAxisMode) -> list[OhlcBar]:
+    mapped: list[OhlcBar] = []
+    previous_close: float | None = None
+    for index, bar in enumerate(bars):
+        display_x = bar.timestamp_ms / 1000.0 if mode == TimeAxisMode.REAL else float(index)
+        mapped.append(replace(bar, display_x=display_x, previous_close=previous_close))
+        previous_close = bar.close
+    return mapped
+
+
+def _map_overlay_series_points(
+    series: ChartOverlaySeries,
+    display_bars: list[OhlcBar],
+    mode: TimeAxisMode,
+) -> tuple[tuple[float, float], ...]:
+    """Map attested timestamps onto the chart axis without positional guessing."""
+
     if mode == TimeAxisMode.REAL:
-        return [replace(bar, display_x=bar.timestamp_ms / 1000.0) for bar in bars]
-    return [replace(bar, display_x=float(index)) for index, bar in enumerate(bars)]
+        return tuple(
+            (timestamp_ms / 1000.0, value)
+            for timestamp_ms, value in series.points
+        )
+    index_by_timestamp = {
+        bar.timestamp_ms: float(index) for index, bar in enumerate(display_bars)
+    }
+    return tuple(
+        (index_by_timestamp[timestamp_ms], value)
+        for timestamp_ms, value in series.points
+        if timestamp_ms in index_by_timestamp
+    )
 
 
 def _bar_x_value(bar: OhlcBar) -> float:
@@ -1127,6 +1502,16 @@ def _format_axis_timestamp(timestamp: datetime, interval_seconds: int) -> str:
     if timestamp.hour == 0 and timestamp.minute == 0:
         return timestamp.strftime("%d %b")
     return timestamp.strftime("%H:%M")
+
+
+def _format_interval(interval_seconds: int) -> str:
+    if interval_seconds % 86_400 == 0:
+        return f"{interval_seconds // 86_400} j"
+    if interval_seconds % 3_600 == 0:
+        return f"{interval_seconds // 3_600} h"
+    if interval_seconds % 60 == 0:
+        return f"{interval_seconds // 60} min"
+    return f"{interval_seconds} s"
 
 
 CHART_RESOLUTIONS: list[tuple[str, int]] = [

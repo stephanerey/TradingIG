@@ -27,7 +27,31 @@ def test_main_help_still_prints_usage(capsys) -> None:
     assert "check-ig-connectivity" in captured.out
     assert "discover-products" in captured.out
     assert "stream-market" in captured.out
+    assert "export-technical-validation" in captured.out
     assert "gui" in captured.out
+
+
+def test_gui_parser_keeps_legacy_default_and_accepts_v2() -> None:
+    parser = main_module.build_parser()
+
+    assert parser.parse_args(["gui"]).ui == "legacy"
+    assert parser.parse_args(["gui", "--ui", "v2"]).ui == "v2"
+
+
+def test_technical_validation_export_parser_requires_new_output_directory(tmp_path) -> None:
+    args = main_module.build_parser().parse_args(
+        [
+            "export-technical-validation",
+            "--database",
+            str(tmp_path / "journal.sqlite"),
+            "--output",
+            str(tmp_path / "rooms-bundle"),
+        ]
+    )
+
+    assert args.database == tmp_path / "journal.sqlite"
+    assert args.output == tmp_path / "rooms-bundle"
+    assert args.func is main_module.export_technical_validation
 
 
 def test_stream_market_redacts_account_and_secrets(monkeypatch, capsys) -> None:

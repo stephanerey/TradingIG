@@ -4,14 +4,18 @@ from decimal import Decimal
 from trading_ig_assistant.domain.analysis import AnalysisCandle, DataState, IndicatorInput
 from trading_ig_assistant.services.indicator_service import (
     atr,
+    atr_series,
     bollinger_bands,
     ema,
+    ema_series,
     macd,
+    macd_series,
     momentum,
     rate_of_change,
     realized_volatility,
     recent_levels,
     rsi,
+    rsi_series,
     sma,
     volume_ratio,
 )
@@ -59,6 +63,31 @@ def test_numeric_indicator_fixtures_are_deterministic() -> None:
     assert ema(indicator_input, 3).value == Decimal("4")
     assert rsi(indicator_input, 3).value == Decimal("100")
     assert atr(indicator_input, 3).value == Decimal("2")
+
+
+def test_ema_series_is_seeded_and_timestamp_aligned() -> None:
+    indicator_input = _input((1, 2, 3, 4, 5))
+
+    result = ema_series(indicator_input, 3)
+
+    assert result.state is DataState.READY
+    assert tuple(point.value for point in result.points) == (
+        Decimal("2"),
+        Decimal("3"),
+        Decimal("4"),
+    )
+    assert tuple(point.timestamp_utc for point in result.points) == tuple(
+        candle.timestamp_utc for candle in indicator_input.candles[2:]
+    )
+    assert result.provenance[-2:] == ("indicator:ema", "period:3")
+
+
+def test_ema_series_has_no_points_until_history_is_ready() -> None:
+    result = ema_series(_input((1, 2)), 3)
+
+    assert result.state is DataState.WARMING_UP
+    assert result.points == ()
+    assert result.reason_codes == ("INSUFFICIENT_HISTORY",)
 
 
 def test_insufficient_history_is_warming_up_without_value() -> None:
@@ -110,6 +139,48 @@ def test_rsi_reports_period_and_required_history_separately() -> None:
     assert "period:3" in result.provenance
 
 
+def test_rsi_series_is_wilder_smoothed_and_timestamp_aligned() -> None:
+    indicator_input = _input((1, 2, 3, 2, 4, 3))
+
+    result = rsi_series(indicator_input, 3)
+
+    assert result.state is DataState.READY
+    assert len(result.points) == 3
+    assert result.points[0].timestamp_utc == indicator_input.candles[3].timestamp_utc
+    assert result.points[-1].timestamp_utc == indicator_input.candles[-1].timestamp_utc
+    assert result.points[-1].value == rsi(indicator_input, 3).value
+    assert all(Decimal("0") <= point.value <= Decimal("100") for point in result.points)
+
+
+def test_rsi_series_has_no_partial_curve_during_warmup() -> None:
+    result = rsi_series(_input((1, 2, 3)), 3)
+
+    assert result.state is DataState.WARMING_UP
+    assert result.required_points == 4
+    assert result.points == ()
+
+
+def test_atr_series_is_wilder_smoothed_and_timestamp_aligned() -> None:
+    indicator_input = _input((1, 3, 2, 5, 4))
+
+    result = atr_series(indicator_input, 3)
+
+    assert result.state is DataState.READY
+    assert len(result.points) == 3
+    assert result.points[0].timestamp_utc == indicator_input.candles[2].timestamp_utc
+    assert result.points[-1].timestamp_utc == indicator_input.candles[-1].timestamp_utc
+    assert result.points[-1].value == atr(indicator_input, 3).value
+    assert all(point.value >= 0 for point in result.points)
+
+
+def test_atr_series_has_no_partial_curve_during_warmup() -> None:
+    result = atr_series(_input((1, 2)), 3)
+
+    assert result.state is DataState.WARMING_UP
+    assert result.required_points == 3
+    assert result.points == ()
+
+
 def test_macd_fixture_returns_line_signal_and_histogram() -> None:
     result = macd(_input((1, 2, 3, 4, 5, 6)), fast_period=2, slow_period=3, signal_period=2)
 
@@ -120,6 +191,42 @@ def test_macd_fixture_returns_line_signal_and_histogram() -> None:
         "histogram": Decimal("0.0"),
     }
     assert result.required_points == 4
+
+
+def test_macd_series_aligns_line_signal_and_histogram() -> None:
+    indicator_input = _input((1, 2, 3, 4, 5, 6))
+    result = macd_series(
+        indicator_input,
+        fast_period=2,
+        slow_period=3,
+        signal_period=2,
+    )
+
+    assert result.state is DataState.READY
+    assert result.required_points == 4
+    curves = {curve.name: curve for curve in result.series}
+    assert tuple(curves) == ("line", "signal", "histogram")
+    assert len(curves["line"].points) == 4
+    assert len(curves["signal"].points) == 3
+    assert len(curves["histogram"].points) == 3
+    assert curves["line"].points[0].timestamp_utc == indicator_input.candles[2].timestamp_utc
+    assert curves["signal"].points[0].timestamp_utc == indicator_input.candles[3].timestamp_utc
+    assert curves["line"].points[-1].value == Decimal("0.5")
+    assert curves["signal"].points[-1].value == Decimal("0.5")
+    assert curves["histogram"].points[-1].value == Decimal("0.0")
+
+
+def test_macd_series_has_no_partial_curves_during_warmup() -> None:
+    result = macd_series(
+        _input((1, 2, 3)),
+        fast_period=2,
+        slow_period=3,
+        signal_period=2,
+    )
+
+    assert result.state is DataState.WARMING_UP
+    assert result.required_points == 4
+    assert result.series == ()
 
 
 def test_bollinger_fixture_uses_population_standard_deviation() -> None:

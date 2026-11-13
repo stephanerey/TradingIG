@@ -1,0 +1,39 @@
+schema_version: 1
+task_id: TIG-GUI2-R09-05B
+status: complete
+superseded_by: TIG-GUI2-R09-05C
+objective: >-
+  Add a bounded, explicit GUI V2 live quote feed for one catalogue product while
+  preserving the read-only DEMO/PAPER safety boundary and stable Qt selection.
+authority:
+  user_feedback: "2026-11-09: scanner snapshot is not real-time; fix controls and continue"
+skills:
+  - aurora-lot-runner
+  - aurora-architecture-check
+  - aurora-ui-visual-qa
+  - codex-tradingig-analysis-scanner
+scope:
+  forbidden:
+    - automatic bulk subscriptions or implicit subscription on navigation/search
+    - LIVE/AUTO activation, ticket preparation or broker orders
+    - technical/IA score invention without attested closed candles and exact bindings
+decisions:
+  - The user must select one catalogue row and explicitly start the feed.
+  - The controller reuses IGStreamingAdapter and owns at most one PRICE subscription.
+  - Search, account switch, disconnect and window close stop the feed first.
+  - Quotes merge only into an EPIC already exposed by the current REST catalogue.
+  - Runtime generation rejection prevents stale callbacks from mutating a new account context.
+  - Same-EPIC model updates emit dataChanged instead of modelReset, preserving selection.
+verification:
+  targeted_tests: "21 passed after selected-stream implementation"
+  full_tests: "641 passed in 53.50s"
+  lint: "ruff check --no-cache src tests: passed"
+  format_changed_files: passed
+  visual:
+    status: passed_with_limit
+    capture: .codex_artifacts/gui_v2/selected-stream-fr_FR-1366x768.png
+    minimum_size_hint: "406x60"
+    limit: offscreen Qt capture omits text glyphs and does not replace native Windows acceptance
+next_action: >-
+  Continue with an attested selected-market candle projection and Watchlist analysis;
+  keep scanner scores unavailable until enough closed session candles exist.

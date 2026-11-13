@@ -1,0 +1,31 @@
+schema_version: 1
+task_id: TIG-GUI2-LIVE-CHART-ENTITLEMENTS
+status: complete
+objective: >-
+  Keep GUI V2 LIVE market data usable when IG rejects the grouped five-market CHART subscription,
+  without changing read-only execution boundaries.
+evidence:
+  - >-
+    The local runtime log shows a successful LIVE REST session, Lightstreamer connection and
+    ACCOUNT update followed by CHART:5-markets:1MINUTE -1 Insufficient permissions.
+decisions:
+  - A grouped CHART permission rejection is retried once as one subscription per reference market.
+  - An individual CHART entitlement rejection degrades only that market and does not fail ACCOUNT
+    or the other permitted CHART subscriptions.
+  - PRICE errors remain fail-closed; no MARKET probe or synthetic reference quote is introduced.
+  - No broker order, LIVE execution or automatic trading capability is added or enabled.
+verification:
+  lint: "targeted Ruff check passed"
+  targeted_tests: "29 passed"
+  full_suite: >-
+    698 passed in 29.20s after retaining reference quotes across unrelated catalogue projection
+    rebuilds and covering the regression offline.
+  human_live_validation: >-
+    US Tech 100 and Germany 40 update continuously. IG rejects France 40, Spot Gold and US Crude
+    individual M1 CHART subscriptions with Insufficient permissions while ACCOUNT and permitted
+    PRICE streams remain live.
+next_action: >-
+  Human-check that LIVE US Tech 100 and Germany 40 now show Bid/Offer and variation, and that a
+  DEMO-to-LIVE or LIVE-account switch clears prior chart candles. Keep the three rejected references
+  explicitly unavailable; do not synthesize them from a different product without exact binding,
+  visible provenance and separate validation.

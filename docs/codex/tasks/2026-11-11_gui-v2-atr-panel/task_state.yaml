@@ -1,0 +1,23 @@
+schema_version: 1
+status: user_testing
+objective: "Ajouter un panneau ATR attesté et améliorer le choix du sous-graphe technique."
+scope:
+  - indicator_service_atr_series
+  - watchlist_indicator_panel_selector
+  - i18n_and_readability
+  - targeted_tests
+skills:
+  - codex-tradingig-analysis-scanner
+constraints:
+  - no_ig_orders
+  - no_auto
+  - no_network_backfill
+  - no_invented_history
+decisions:
+  - "Un seul sous-graphe est affiché à la fois car RSI et ATR ont des échelles incompatibles."
+  - "Le choix explicite Aucun/RSI/ATR/MACD remplace la case RSI ; seules les séries attestées sont proposées."
+verification:
+  - "38 tests ciblés réussis."
+  - "Suite complète : 768 tests réussis."
+  - "Ruff ciblé réussi."
+next_action: "Valider visuellement le sélecteur Aucun/RSI/ATR/MACD après redémarrage."

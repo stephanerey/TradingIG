@@ -6,6 +6,7 @@ import pytest
 
 from trading_ig_assistant.adapters.credentials import SecretValue
 from trading_ig_assistant.app.config import (
+    ApiProviderConfig,
     AppConfig,
     IGConnectionProfileConfig,
     IGEnvironment,
@@ -62,6 +63,27 @@ def test_saved_config_excludes_password_and_api_key(tmp_path: Path) -> None:
     assert "fake-api-key" not in saved_text
     assert "ig_password" not in saved_text
     assert "ig_api_key" not in saved_text
+
+
+def test_provider_preferences_persist_without_any_secret(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    config = AppConfig(
+        api_providers={
+            "tavily": ApiProviderConfig(
+                enabled=True,
+                last_success_at_utc="2026-11-11T09:00:00+00:00",
+            )
+        }
+    )
+
+    save_config(config, path)
+    saved_text = path.read_text(encoding="utf-8")
+    loaded = load_config(path)
+
+    assert loaded.api_providers["tavily"].enabled is True
+    assert "2026-11-11T09:00:00+00:00" in saved_text
+    assert "api_key" not in saved_text.lower()
+    assert "private" not in saved_text.lower()
 
 
 def test_config_file_cannot_enable_live_trading_without_explicit_flag(tmp_path: Path) -> None:
@@ -126,6 +148,55 @@ def test_config_persists_last_selected_product_epic(tmp_path: Path) -> None:
     assert loaded.last_selected_product_epic == "IX.D.NASDAQ.IFD.IP"
 
 
+def test_config_persists_followed_products_per_environment_and_account(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.json"
+    config = AppConfig()
+
+    assert config.followed_epics_for(IGEnvironment.DEMO, "DEMO-A") == ()
+    config.set_followed_epics(
+        IGEnvironment.DEMO,
+        "DEMO-A",
+        ("IX.D.CAC.OPTCALL2.IP", "IX.D.CAC.OPTCALL2.IP"),
+    )
+    config.set_followed_epics(
+        IGEnvironment.LIVE,
+        "LIVE-A",
+        ("IX.D.CAC.OPTPUT2.IP",),
+    )
+
+    save_config(config, config_path)
+    loaded = load_config(config_path)
+
+    assert loaded.followed_epics_for(IGEnvironment.DEMO, "DEMO-A") == (
+        "IX.D.CAC.OPTCALL2.IP",
+    )
+    assert loaded.followed_epics_for(IGEnvironment.LIVE, "LIVE-A") == (
+        "IX.D.CAC.OPTPUT2.IP",
+    )
+    assert loaded.followed_epics_for(IGEnvironment.LIVE, "DEMO-A") == ()
+
+
+def test_config_ignores_invalid_followed_product_scopes() -> None:
+    config = AppConfig.from_mapping(
+        {
+            "followed_product_epics": {
+                "demo:DEMO-A": [" EPIC.A ", "", "EPIC.A", "EPIC.B"],
+                "unknown:ACCOUNT": ["EPIC.C"],
+                "missing-account:": ["EPIC.D"],
+                "invalid": ["EPIC.E"],
+                "live:LIVE-A": "not-a-list",
+            }
+        }
+    )
+
+    assert config.followed_product_epics == {
+        "demo:DEMO-A": ("EPIC.A", "EPIC.B")
+    }
+    assert config.set_followed_epics(IGEnvironment.DEMO, None, ("EPIC",)) == ()
+
+
 def test_config_persists_chart_source_overrides(tmp_path: Path) -> None:
     config_path = tmp_path / "config.json"
     config = AppConfig(
@@ -184,6 +255,14 @@ def test_default_product_bindings_include_verified_products() -> None:
         ),
         "CC.D.CL.OPTCALL2.IP": (CanonicalUnderlyingId.US_CRUDE, "CC.D.CL.UEF.IP"),
         "CC.D.CL.OPTPUT2.IP": (CanonicalUnderlyingId.US_CRUDE, "CC.D.CL.UEF.IP"),
+        "CS.D.CFDGOLD.OPTCALL2.IP": (
+            CanonicalUnderlyingId.SPOT_GOLD,
+            "CS.D.CFEGOLD.CEF.IP",
+        ),
+        "CS.D.CFDGOLD.OPTPUT2.IP": (
+            CanonicalUnderlyingId.SPOT_GOLD,
+            "CS.D.CFEGOLD.CEF.IP",
+        ),
     }
 
     assert set(by_product) == set(expected)
@@ -192,7 +271,6 @@ def test_default_product_bindings_include_verified_products() -> None:
         assert binding.canonical_underlying_id is canonical
         assert binding.reference_epic == reference_epic
         assert binding.provenance
-    assert not any("CFDGOLD" in product_epic for product_epic in by_product)
 
 
 def test_config_rejects_unsupported_product_market_binding(tmp_path: Path) -> None:
@@ -215,6 +293,13 @@ def test_config_persists_validated_workspace_state(tmp_path: Path) -> None:
             window_width=960,
             window_height=600,
             splitter_sizes=(600, 360),
+            layout_version=2,
+            window_geometry="safe-geometry-token",
+            active_page="scanner",
+            active_subtabs=(("scanner", 2), ("watchlist", 1)),
+            sidebar_collapsed=True,
+            theme="dark",
+            locale="en_US",
         )
     )
 
@@ -222,6 +307,55 @@ def test_config_persists_validated_workspace_state(tmp_path: Path) -> None:
     loaded = load_config(config_path)
 
     assert loaded.workspace == config.workspace
+
+
+def test_legacy_workspace_config_migrates_to_safe_v2_defaults(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        '{"workspace": {"window_width": 800, "window_height": 600, "splitter_sizes": [500, 300]}}',
+        encoding="utf-8",
+    )
+
+    workspace = load_config(config_path).workspace
+
+    assert workspace.window_width == 800
+    assert workspace.window_height == 600
+    assert workspace.splitter_sizes == (500, 300)
+    assert workspace.layout_version == 1
+    assert workspace.active_page == "dashboard"
+    assert workspace.active_subtabs == ()
+    assert workspace.sidebar_collapsed is False
+    assert workspace.theme == "dark"
+    assert workspace.locale == "fr_FR"
+
+
+@pytest.mark.parametrize(
+    "workspace",
+    (
+        {"layout_version": 0},
+        {"active_page": ""},
+        {"active_subtabs": {"scanner": -1}},
+        {"theme": "light"},
+        {"locale": "de_DE"},
+    ),
+)
+def test_invalid_v2_workspace_fields_fall_back_without_affecting_trading_config(
+    tmp_path: Path,
+    workspace: dict[str, object],
+) -> None:
+    import json
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"environment": "live", "workspace": workspace}),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.environment is IGEnvironment.LIVE
+    assert config.read_only is True
+    assert config.workspace == WorkspaceState()
 
 
 def test_scanner_execution_costs_are_unknown_by_default() -> None:

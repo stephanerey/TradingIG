@@ -1,0 +1,21 @@
+schema_version: 1
+task_id: TIG-GUI2-R09-04-DASHBOARD-PERFORMANCE
+status: complete
+objective: >-
+  Render attested local Paper performance in GUI V2 without inventing historical equity,
+  opening capital, currency conversion or broker performance.
+decisions:
+  - Populate win rate, profit factor and realized drawdown only from confirmed Paper closures.
+  - Plot realized PnL buckets by selected period and currency with no implicit conversion.
+  - Keep percentage mode N/A until timestamped opening capital exists.
+  - Keep the equity curve absent until auditable historical account snapshots exist.
+verification:
+  targeted_tests: "18 dashboard/foundation tests passed"
+  responsive_smoke: "8 pages, 50 FR/EN cycles, shell remained 1366x768"
+  visual_artifact: .codex_artifacts/gui_v2/dashboard-performance-r09-10-fr_FR-1366x768.png
+  visual_limit: offscreen Qt omits text glyphs and does not replace native Windows review
+  lint: passed
+  full_tests: "667 passed in 54.45s"
+  diff_check: passed
+safety:
+  - No network, external AI, strategy mutation, broker order or LIVE/AUTO capability.

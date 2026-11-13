@@ -9,11 +9,20 @@ from decimal import Decimal
 from trading_ig_assistant.domain.analysis import (
     AnalysisCandle,
     IndicatorInput,
+    IndicatorSetValue,
+    IndicatorValue,
     StrategyConsensus,
     StrategyId,
     StrategySignal,
 )
 from trading_ig_assistant.domain.market_data import ChartCandleSeries
+from trading_ig_assistant.services.indicator_service import (
+    atr,
+    ema,
+    recent_levels,
+    rsi,
+    volume_ratio,
+)
 from trading_ig_assistant.services.setup_scoring_service import StrategyRegistry, build_consensus
 from trading_ig_assistant.services.technical_strategy_service import (
     BreakoutConfig,
@@ -38,6 +47,7 @@ class ScannerPreview:
     signals: tuple[StrategySignal, ...]
     consensus: StrategyConsensus
     limitations: tuple[str, ...]
+    indicators: tuple[IndicatorValue | IndicatorSetValue, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -74,6 +84,7 @@ def build_scanner_preview(
     profile = strategy_profile or default_scanner_strategy_profile()
     registry = _preview_registry(profile)
     signals = registry.evaluate(indicator_input)
+    indicators = _profile_indicators(indicator_input, profile)
     return ScannerPreview(
         instrument_id=indicator_input.instrument_id,
         timeframe=indicator_input.timeframe,
@@ -92,6 +103,7 @@ def build_scanner_preview(
             f"STRATEGY_PROFILE:{profile.profile_id}",
             *(("DATA_GAP_EARLIER_CANDLES_EXCLUDED",) if excluded_pre_gap_candles else ()),
         ),
+        indicators=indicators,
     )
 
 
@@ -206,6 +218,84 @@ def default_scanner_strategy_profile() -> ScannerStrategyProfile:
             valid_for=timedelta(minutes=5),
         ),
     )
+
+
+def required_closed_candles(profile: ScannerStrategyProfile) -> int:
+    """Return the closed, continuous history required by enabled strategies."""
+
+    requirements: list[int] = []
+    if StrategyId.TREND_FOLLOW in profile.enabled_strategies:
+        config = profile.trend_follow
+        requirements.append(
+            max(config.slow_ema_period + config.slope_lookback, config.atr_period)
+        )
+    if StrategyId.BREAKOUT in profile.enabled_strategies:
+        config = profile.breakout
+        requirements.append(
+            max(config.level_lookback + 1, config.atr_period, config.volume_period or 0)
+        )
+    if StrategyId.PULLBACK in profile.enabled_strategies:
+        config = profile.pullback
+        requirements.append(
+            max(config.slow_ema_period, config.rsi_period + 1, config.atr_period, 2)
+        )
+    if not requirements:
+        raise ValueError("scanner profile has no supported technical strategy")
+    return max(requirements)
+
+
+def _profile_indicators(
+    indicator_input: IndicatorInput,
+    profile: ScannerStrategyProfile,
+) -> tuple[IndicatorValue | IndicatorSetValue, ...]:
+    """Expose the exact deterministic indicators consumed by the active profile."""
+
+    requested: list[tuple[str, int]] = []
+    if StrategyId.TREND_FOLLOW in profile.enabled_strategies:
+        config = profile.trend_follow
+        requested.extend(
+            (
+                ("ema", config.fast_ema_period),
+                ("ema", config.slow_ema_period),
+                ("atr", config.atr_period),
+            )
+        )
+    if StrategyId.BREAKOUT in profile.enabled_strategies:
+        config = profile.breakout
+        requested.extend(
+            (
+                ("recent_levels", config.level_lookback),
+                ("atr", config.atr_period),
+            )
+        )
+        if config.volume_period is not None:
+            requested.append(("volume_ratio", config.volume_period))
+    if StrategyId.PULLBACK in profile.enabled_strategies:
+        config = profile.pullback
+        requested.extend(
+            (
+                ("ema", config.fast_ema_period),
+                ("ema", config.slow_ema_period),
+                ("rsi", config.rsi_period),
+                ("atr", config.atr_period),
+            )
+        )
+
+    results: list[IndicatorValue | IndicatorSetValue] = []
+    for name, period in dict.fromkeys(requested):
+        if name == "ema":
+            results.append(ema(indicator_input, period))
+        elif name == "atr":
+            results.append(atr(indicator_input, period))
+        elif name == "rsi":
+            results.append(rsi(indicator_input, period))
+        elif name == "recent_levels":
+            results.append(recent_levels(indicator_input, period))
+        elif name == "volume_ratio":
+            results.append(volume_ratio(indicator_input, period))
+        else:  # pragma: no cover - guarded by the explicit profile mapping above.
+            raise ValueError(f"unsupported scanner indicator: {name}")
+    return tuple(results)
 
 
 def _preview_registry(profile: ScannerStrategyProfile) -> StrategyRegistry:

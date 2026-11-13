@@ -1,0 +1,39 @@
+objective: >-
+  Exposer dans la watchlist GUI V2 les indicateurs techniques deterministes
+  effectivement utilises par les strategies, avec etat, parametres, historique
+  requis et provenance, sans recalcul dans le widget.
+status: complete
+method: SR Development Method 4.1
+allowed_scope:
+  - service de preview scanner et projection GUI V2
+  - panneau Analyse technique de la watchlist
+  - traductions FR EN, tests et documentation SR
+forbidden_scope:
+  - ordre IG reel ou automatique
+  - activation LIVE ou AUTO
+  - indicateur invente ou calcul duplique dans le GUI
+decisions:
+  - Le service central d'indicateurs reste l'unique source des calculs.
+  - Seuls les indicateurs consommes par le profil actif sont exposes.
+  - READY, WARMING_UP et INVALID restent visibles et explicites.
+  - La provenance complete reste disponible en infobulle.
+lots:
+  - id: GUI-V2-INDICATORS-001
+    label: contrat de preview des indicateurs actifs
+    status: complete
+  - id: GUI-V2-INDICATORS-002
+    label: projection immutable scanner et watchlist
+    status: complete
+  - id: GUI-V2-INDICATORS-003
+    label: tableau lisible et bilingue dans Analyse technique
+    status: complete
+  - id: GUI-V2-INDICATORS-004
+    label: tests de calcul, chauffe et rendu
+    status: complete
+verification:
+  targeted: passed (37 tests)
+  lint: passed
+  full_suite: passed (756 tests)
+next_action: >-
+  Valider visuellement le tableau puis poursuivre les overlays historiques
+  seulement lorsque les series correspondantes sont attestees.

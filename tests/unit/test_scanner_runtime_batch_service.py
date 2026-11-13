@@ -1,7 +1,17 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 from trading_ig_assistant.app.config import AppConfig, IGEnvironment
+from trading_ig_assistant.app.projections.catalogue import CatalogueVM
+from trading_ig_assistant.app.projections.common import Availability
+from trading_ig_assistant.app.projections.scanner_projection import (
+    _consensus_signal_direction,
+    build_scanner_projection,
+    empty_scanner_projection,
+    merge_scanner_analysis,
+)
+from trading_ig_assistant.domain.analysis import DataState, SignalSide
 from trading_ig_assistant.domain.macro_context import (
     ContextSeverity,
     ContextSignal,
@@ -27,14 +37,42 @@ from trading_ig_assistant.services.market_navigation_catalog_service import (
 from trading_ig_assistant.services.multi_market_session_candle_service import (
     MultiMarketSessionCandleService,
 )
+from trading_ig_assistant.services.scanner_preview_service import (
+    default_scanner_strategy_profile,
+    required_closed_candles,
+)
 from trading_ig_assistant.services.scanner_runtime_batch_service import (
     ScannerRuntimeBatchService,
 )
 
 NOW = datetime(2026, 11, 6, 10, 30, tzinfo=UTC)
+
+
+def test_consensus_direction_uses_all_ready_actionable_strategies() -> None:
+    scored = SimpleNamespace()
+
+    def choice(side: SignalSide, state: DataState = DataState.READY):
+        return scored, SimpleNamespace(side=side, data_state=state)
+
+    assert _consensus_signal_direction([choice(SignalSide.FLAT), choice(SignalSide.BUY)]) == (
+        "bullish"
+    )
+    assert _consensus_signal_direction([choice(SignalSide.FLAT), choice(SignalSide.SELL)]) == (
+        "bearish"
+    )
+    assert _consensus_signal_direction([choice(SignalSide.BUY), choice(SignalSide.SELL)]) == (
+        "neutral"
+    )
+    assert _consensus_signal_direction(
+        [choice(SignalSide.BUY, DataState.WARMING_UP), choice(SignalSide.FLAT)]
+    ) == "neutral"
 REFERENCE_EPIC = "IX.D.NASDAQ.IFD.IP"
 BUY_EPIC = "IX.D.NASDAQ.OPTCALL2.IP"
 SELL_EPIC = "IX.D.NASDAQ.OPTPUT2.IP"
+
+
+def test_default_scanner_profile_requires_24_closed_continuous_candles() -> None:
+    assert required_closed_candles(default_scanner_strategy_profile()) == 24
 
 
 def _binding(product_epic: str) -> IGProductMarketBinding:
@@ -162,6 +200,57 @@ def test_runtime_batch_scans_only_exact_bound_products_and_preserves_context() -
     assert result.batch.failures == ()
     assert all(len(item.results) == 3 for item in result.batch.items)
     assert "UNBOUND.PRODUCT" not in result.configured_product_epics
+
+    projection = merge_scanner_analysis(
+        empty_scanner_projection(0, NOW),
+        result=result,
+        binding_registry=registry,
+        generated_at_utc=NOW,
+    )
+    row = projection.rows[0]
+    assert row.context_level in {"aligned", "unfavorable"}
+    assert row.context_components
+    assert row.context_reason_codes
+    assert "test:macro" in row.context_provenance
+    assert len(row.strategy_signals) == 6
+    assert {signal.product_epic for signal in row.strategy_signals} == {
+        BUY_EPIC,
+        SELL_EPIC,
+    }
+    assert {signal.strategy_id for signal in row.strategy_signals} == {
+        "trend_follow",
+        "breakout",
+        "pullback",
+    }
+    assert {indicator.name for indicator in row.indicators} == {
+        "atr",
+        "ema",
+        "recent_levels",
+        "rsi",
+    }
+    assert all(indicator.state == "ready" for indicator in row.indicators)
+    assert all(
+        indicator.observed_points >= indicator.required_points
+        for indicator in row.indicators
+    )
+
+    quote_refresh = build_scanner_projection(
+        generation_id=projection.generation_id,
+        catalogue=CatalogueVM(
+            generation_id=projection.generation_id,
+            query=None,
+            rows=(),
+            availability=Availability.UNAVAILABLE,
+            generated_at_utc=NOW,
+            kind="test-refresh",
+        ),
+        generated_at_utc=NOW,
+        previous=projection,
+    )
+    refreshed_row = quote_refresh.rows[0]
+    assert quote_refresh.availability is Availability.READY
+    assert refreshed_row.strategy_signals == row.strategy_signals
+    assert refreshed_row.indicators == row.indicators
 
 
 def test_runtime_batch_isolates_missing_configured_product_and_warmup() -> None:

@@ -1,0 +1,24 @@
+schema_version: 1
+status: user_testing
+objective: "Rendre le signal projeté sur le graphique explicite, utile par défaut et stable par marché."
+scope:
+  - watchlist_signal_selector
+  - technical_table_synchronization
+  - per_market_selection_memory
+  - i18n_and_tests
+constraints:
+  - no_strategy_change
+  - no_ig_orders
+  - no_auto
+decisions:
+  - "Le premier affichage privilégie un signal READY BUY/SELL au lieu d'un premier signal FLAT arbitraire."
+  - "Le choix ne modifie aucune décision et ne déclenche aucune action ; il ne change que la projection graphique."
+  - "Le choix est mémorisé par marché et stratégie pendant la session, même si le signal reçoit un nouvel identifiant à la bougie suivante."
+  - "Le sélecteur et la ligne Analyse technique restent synchronisés dans les deux sens."
+  - "Le sous-graphe choisi est lui aussi mémorisé par produit et stratégie entre deux évaluations."
+verification:
+  - "16 tests Watchlist réussis."
+  - "37 tests indicateurs et Watchlist réussis."
+  - "Suite complète : 768 tests réussis."
+  - "Ruff ciblé réussi."
+next_action: "Valider demain le signal initial et la conservation du choix en naviguant entre deux marchés."

@@ -1,0 +1,20 @@
+schema_version: 1
+status: user_testing
+objective: "Rendre lisibles les sources enrichies et le résultat IA sans modifier le moteur ni le consentement."
+scope:
+  - macro_ai_vertical_splitter
+  - evidence_table_resizing
+  - result_panel_resizing
+  - responsive_tests
+constraints:
+  - no_ig_data_in_ai_payload
+  - explicit_ai_consent_preserved
+  - no_provider_call_from_tests
+  - no_trading_action
+decisions:
+  - "Les extraits et le résultat occupent deux zones verticales redimensionnables."
+  - "La table conserve ses quatre colonnes et son ouverture explicite de la source."
+verification:
+  - "36 tests ciblés réussis, dont fondation responsive et catalogue Watchlist."
+  - "Ruff ciblé réussi."
+next_action: "Valider demain le confort de lecture des extraits et du résultat à la résolution habituelle."

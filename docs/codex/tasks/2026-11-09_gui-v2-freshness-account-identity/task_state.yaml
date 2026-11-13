@@ -1,0 +1,26 @@
+schema_version: 1
+task_id: TIG-GUI2-R09-05E
+status: complete
+objective: >-
+  Make live quote freshness and account identity immediately visible in GUI V2.
+authority:
+  user_feedback: >-
+    2026-11-09: add a compact grey/green update indicator, widen the quote name,
+    and label accounts with DEMO/LIVE plus CFD or barriers/options.
+decisions:
+  - A 30 px leading indicator column is green only for a READY ig-lightstreamer row.
+  - CACHE, REST and STALE rows remain grey; tooltips explain the state.
+  - The market-name column defaults to 320 px and remains user-resizable.
+  - Account labels use environment, normalized family and masked identifier consistently.
+  - Account family prefers typed account metadata and falls back to account-name evidence.
+  - The safety line derives DEMO/LIVE from the observed projection and remains read-only/PAPER.
+verification:
+  targeted_tests: passed
+  visual:
+    capture: .codex_artifacts/gui_v2/catalogue-freshness-indicator-fr_FR-1366x768.png
+    observed: "30 px indicator; first row green; remaining rows grey; 320 px market name"
+  lint: passed
+  full_tests: "644 passed in 73.32s"
+next_action: >-
+  Continue the canonical-underlying scanner scheduler and expose quote age alongside
+  the binary freshness indicator.

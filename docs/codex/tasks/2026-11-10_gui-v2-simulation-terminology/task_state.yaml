@@ -1,0 +1,23 @@
+schema_version: 1
+task_id: TIG-GUI2-SIMULATION-TERMINOLOGY
+status: complete
+objective: >-
+  Replace every user-visible Paper/PAPER label with clear Simulation terminology without changing
+  the established internal contracts, persistence schema, event identifiers or execution safety.
+decisions:
+  - French UI uses Simulation, mode simulation, position simulée and session de simulation.
+  - English UI uses Simulation, simulation mode and simulated position.
+  - The persistent header maps the internal execution_mode value PAPER to the localized visible
+    label SIMULATION; the internal value remains unchanged for compatibility.
+  - Internal PAPER-prefixed event and result codes are translated only at presentation boundaries.
+  - No IG order path, LIVE execution capability or AUTO capability is added or enabled.
+verification:
+  lint: "ruff check src tests: passed"
+  targeted_tests: "87 passed offscreen"
+  full_suite: "693 passed offscreen after updating terminology assertions"
+  responsive_layout: >-
+    The dashboard scope label wraps and may compress horizontally; the 1366x768 minimum-size
+    contract remains covered by the GUI V2 foundation tests.
+  evidence:
+    - .codex_artifacts/simulation_terminology_1366.png
+next_action: Human-check the Simulation wording in the running authenticated GUI.

@@ -1,0 +1,14 @@
+schema_version: 1
+status: user_testing
+objective: "Tracer des courbes EMA attestées et synchronisées avec les bougies Watchlist."
+scope:
+  - domain_indicator_series
+  - indicator_service
+  - watchlist_chart_overlays
+  - targeted_tests
+constraints:
+  - no_ig_orders
+  - no_auto
+  - no_network_backfill
+  - no_invented_history
+next_action: "Valider visuellement les deux courbes EMA avec au moins 22 bougies clôturées continues."

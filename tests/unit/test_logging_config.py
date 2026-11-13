@@ -40,7 +40,7 @@ def test_emit_session_banner_writes_separator() -> None:
     assert "session_id=" in text
 
 
-def test_windows_locked_rollover_is_deferred_without_dropping_record(
+def test_windows_failed_rollover_is_deferred_without_dropping_record(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -54,12 +54,12 @@ def test_windows_locked_rollover_is_deferred_without_dropping_record(
     handler.setFormatter(logging.Formatter("%(message)s"))
     handler.rolloverAt = 0
 
-    def locked_rollover(active_handler) -> None:
+    def failed_rollover(active_handler) -> None:
         active_handler.stream.close()
         active_handler.stream = None
-        raise PermissionError("simulated Windows sharing violation")
+        raise OSError("simulated Windows rollover failure")
 
-    monkeypatch.setattr(TimedRotatingFileHandler, "doRollover", locked_rollover)
+    monkeypatch.setattr(TimedRotatingFileHandler, "doRollover", failed_rollover)
     try:
         handler.emit(
             logging.LogRecord(
